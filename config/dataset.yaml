@@ -1,0 +1,42 @@
+# ============================================================
+# DATASET
+# ============================================================
+
+dataset:
+  tasks: ["conversation"]
+  runs: [1, 2, 3, 4, 5, 6, 7, 8]
+
+  # ---------------------------------------
+  # Explicit exclusions
+  # ---------------------------------------
+  exclude:
+
+    # A) Entire subject (all runs)
+    subjects:
+      - subject_id: "sub-003"
+        reason: "bad electrode placement"
+      - subject_id: "sub-032"
+        reason: "no signal (flat)"
+
+    # B) Specific run of a specific subject
+    subject_runs:
+      - subject_id: "sub-004"
+        run: 1
+        reason: "no audio"
+      - subject_id: "sub-004"
+        run: 2
+        reason: "no audio"
+      - subject_id: "sub-015"
+        run: 3
+        reason: "???"
+
+    # C) Entire dyad (all runs)
+    dyads:
+      - dyad_id: "dyad-001"
+        reason: "32 electrodes"
+
+    # D) Specific run of a dyad (both participants)
+    dyad_runs:
+      - dyad_id: "dyad-014"
+        run: 8
+        reason: "no EEG data"

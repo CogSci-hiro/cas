@@ -1,0 +1,14 @@
+# ============================================================
+# EVENTS (Canonical Event Table)
+# ============================================================
+
+events:
+  ipu_min_duration_s: 0.30
+  ipu_min_syllables: 3
+
+  time_within_run:
+    normalize: true
+    method: "minmax_0_1"   # implemented as t_onset / T_run
+
+  matching:
+    absdiff_window_s: 1.0

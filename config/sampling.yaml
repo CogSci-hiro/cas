@@ -1,0 +1,20 @@
+sampling:
+
+  # -------------------------------------------------
+  # Temporal grid definition
+  # -------------------------------------------------
+  bin_width_ms: 200
+  anchor: "left"      # left | center | right
+
+  # -------------------------------------------------
+  # Run boundaries
+  # -------------------------------------------------
+  drop_partial_bins: true
+
+  # -------------------------------------------------
+  # Smoothing (optional, but global)
+  # -------------------------------------------------
+  smoothing:
+    enabled: false
+    method: "gaussian"
+    sigma_bins: 1
