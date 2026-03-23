@@ -1,20 +1,35 @@
+# TRF analysis config.
+# Keep each analysis isolated by `analysis_id` so Snakemake outputs remain
+# stable and unrelated analyses do not invalidate one another.
 trf:
   analysis_id: "env_self_other"
 
+  # Predictors are listed explicitly so new features can be added later
+  # without changing the overall config structure.
   predictors:
     - name: "self_envelope"
+      kind: "continuous"
       path: "derivatives/features/envelope/{subject}/run-{run}/self.npy"
+
     - name: "other_envelope"
+      kind: "continuous"
       path: "derivatives/features/envelope/{subject}/run-{run}/other.npy"
 
+  # Target stays singular for now, but the block is structured so it can be
+  # generalized later if the pipeline needs multiple targets.
   target:
+    name: "eeg"
+    kind: "continuous"
     path: "derivatives/eeg/evoked/{subject}/run-{run}.npy"
 
+  # Centralize temporal parameters here so all downstream TRF rules read from
+  # one source of truth.
   timing:
     target_sfreq_hz: 100
     tmin_s: -0.2
     tmax_s: 0.6
 
+  # Nested leave-one-run-out CV for the current 8-run dataset.
   cv:
     outer: "leave_one_run_out"
     inner: "leave_one_run_out"
@@ -23,9 +38,18 @@ trf:
   model:
     backend: "spyeeg"
     estimator: "ridge"
-    alphas: [0.1, 1, 10, 100, 1000]
+    alphas: [0.1, 1.0, 10.0, 100.0, 1000.0]
+    fit_intercept: false
+    standardize_X: true
+    standardize_Y: false
 
+  scoring:
+    metric: "corr"
+
+  # All outputs must live under the analysis-specific root so Snakemake can
+  # cache per-analysis artifacts independently.
   output:
-    root: "derivatives/trf/{analysis_id}/{subject}"
+    root: "derivatives/trf/{analysis_id}"
     save_betas: true
     save_scores: true
+    save_predictions: false

@@ -1,12 +1,7 @@
-project:
-  name: CAS
-  version: 0.1.0
-
-paths:
-  out_dir: "/Volumes/work-4T/speech-rate-testing"
-  bids_dir: "/Users/hiro/Datasets/hyperscanning-bids"
-  eeg_dir: "/Volumes/work-4T/hyperscanning-testing/derived/eeg/filtered"
-  annotations_dir: "/Users/hiro/PycharmProjects/hyperscanning-working/data/annotations"
-
-environment:
-  random_seed: 42
+# Top-level config entrypoint.
+# This repo is using plain YAML composition rather than Hydra, so each key
+# points to the concrete config file that should be loaded manually.
+paths: "config/paths.yaml"
+dataset: "config/dataset.yaml"
+sampling: "config/sampling.yaml"
+trf: "config/trf.yaml"

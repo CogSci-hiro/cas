@@ -1,0 +1,6 @@
+project_root: "."
+data_root: "data"
+derivatives_root: "derivatives"
+features_root: "derivatives/features"
+trf_root: "derivatives/trf"
+reports_root: "reports"
