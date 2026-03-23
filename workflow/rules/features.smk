@@ -1,13 +1,17 @@
-rule extract_all_envelopes:
+rule extract_envelope:
     input:
-        expand(
-            AUDIO_PATTERN,
-            zip,
-            subject=AUDIO_RECORD_SUBJECTS,
-            task=AUDIO_RECORD_TASKS,
-            run=AUDIO_RECORD_RUNS,
-        )
+        AUDIO_PATTERN
     output:
-        "/Volumes/work-4T/speech-rate-testing/features/envelope/.extract_all_complete"
-    script:
-        "../scripts/extract_all_envelopes.py"
+        ENVELOPE_OUTPUT_PATTERN
+    params:
+        src_dir=SRC_DIR,
+        lowpass_hz=ENVELOPE_LOWPASS_HZ,
+        filter_order=ENVELOPE_FILTER_ORDER
+    shell:
+        """
+        PYTHONPATH="{params.src_dir}" python -m cas.cli.main envelope \
+            --input "{input}" \
+            --output "{output}" \
+            --lowpass-hz {params.lowpass_hz} \
+            --filter-order {params.filter_order}
+        """

@@ -1,40 +1,45 @@
-# TRF analysis config.
-# Keep each analysis isolated by `analysis_id` so Snakemake outputs remain
-# stable and unrelated analyses do not invalidate one another.
 trf:
+  # Analysis identifier used to isolate all TRF outputs under
+  # derivatives/trf/{analysis_id}/...
   analysis_id: "env_self_other"
 
-  # Predictors are listed explicitly so new features can be added later
-  # without changing the overall config structure.
+  # Predictors are defined by canonical feature family plus dyadic role.
+  # The TRF prep code resolves "self" to the target subject and "other"
+  # to the partner listed in config/dyads.csv.
   predictors:
     - name: "self_envelope"
+      base_feature: "envelope"
+      role: "self"
       kind: "continuous"
-      path: "derivatives/features/envelope/{subject}/run-{run}/self.npy"
 
     - name: "other_envelope"
+      base_feature: "envelope"
+      role: "other"
       kind: "continuous"
-      path: "derivatives/features/envelope/{subject}/run-{run}/other.npy"
 
-  # Target stays singular for now, but the block is structured so it can be
-  # generalized later if the pipeline needs multiple targets.
+  # Continuous EEG target for the current smoke test.
   target:
     name: "eeg"
     kind: "continuous"
     path: "derivatives/eeg/evoked/{subject}/run-{run}.npy"
 
-  # Centralize temporal parameters here so all downstream TRF rules read from
-  # one source of truth.
+  # Dyad table used to resolve partner identity for role="other" predictors.
+  pairing:
+    dyads_csv: "config/dyads.csv"
+
+  # Central timing parameters for TRF design construction.
   timing:
     target_sfreq_hz: 100
     tmin_s: -0.2
     tmax_s: 0.6
 
-  # Nested leave-one-run-out CV for the current 8-run dataset.
+  # Nested leave-one-run-out CV over the eight runs in the dataset.
   cv:
     outer: "leave_one_run_out"
     inner: "leave_one_run_out"
     n_runs: 8
 
+  # Model hyperparameters for the current ridge-based smoke test.
   model:
     backend: "spyeeg"
     estimator: "ridge"
@@ -43,11 +48,12 @@ trf:
     standardize_X: true
     standardize_Y: false
 
+  # Primary evaluation metric saved with fold-wise scores.
   scoring:
     metric: "corr"
 
-  # All outputs must live under the analysis-specific root so Snakemake can
-  # cache per-analysis artifacts independently.
+  # Analysis-scoped outputs prevent unrelated TRF analyses from invalidating
+  # each other's Snakemake cache paths.
   output:
     root: "derivatives/trf/{analysis_id}"
     save_betas: true

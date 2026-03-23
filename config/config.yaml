@@ -1,6 +1,7 @@
 # Top-level config entrypoint.
 # This repo is using plain YAML composition rather than Hydra, so each key
 # points to the concrete config file that should be loaded manually.
+# Load these files explicitly in code and merge them into one runtime config.
 paths: "config/paths.yaml"
 dataset: "config/dataset.yaml"
 sampling: "config/sampling.yaml"

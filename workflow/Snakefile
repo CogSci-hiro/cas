@@ -2,37 +2,28 @@
 #                              CAS ROOT SNAKEFILE
 ###############################################################################
 
-from pathlib import Path
-
-import yaml
-
 # -----------------------------------------------------------------------------
 # Global config (rarely changes)
 # -----------------------------------------------------------------------------
-configfile: "config/config.yaml"
+PROJECT_ROOT = "/Users/hiro/Projects/active/cas"
+WORKFLOW_DIR = f"{PROJECT_ROOT}/workflow"
+SRC_DIR = f"{PROJECT_ROOT}/src"
 
-OUT_DIR = config["paths"]["out_dir"]
-BIDS_DIR = config["paths"]["bids_dir"]
-SRC_DIR = str(Path(workflow.basedir) / "src")
+BIDS_DIR = "/Users/hiro/Datasets/hyperscanning-bids"
+OUT_DIR = "/Users/hiro/Datasets/working/cas/derivatives"
 
-with open("config/dataset.yaml", encoding="utf-8") as f:
-    DATASET_CONFIG = yaml.safe_load(f) or {}
+TASKS = ["conversation"]
+RUNS = ["1", "2", "3", "4", "5", "6", "7", "8"]
 
-DATASET = DATASET_CONFIG.get("dataset", {})
-TASKS = set(DATASET.get("tasks", []))
-RUNS = {str(run) for run in DATASET.get("runs", [])}
+EXCLUDED_SUBJECTS = ["sub-003", "sub-032"]
+EXCLUDED_SUBJECT_RUNS = [
+    ("sub-004", "1"),
+    ("sub-004", "2"),
+    ("sub-015", "3"),
+]
 
-EXCLUDED_SUBJECTS = {
-    entry["subject_id"] for entry in DATASET.get("exclude", {}).get("subjects", [])
-}
-EXCLUDED_SUBJECT_RUNS = {
-    (entry["subject_id"], str(entry["run"]))
-    for entry in DATASET.get("exclude", {}).get("subject_runs", [])
-}
-
-ENVELOPE_CONFIG = config.get("features", {}).get("envelope", {})
-ENVELOPE_LOWPASS_HZ = float(ENVELOPE_CONFIG.get("lowpass_hz", 10.0))
-ENVELOPE_FILTER_ORDER = int(ENVELOPE_CONFIG.get("filter_order", 4))
+ENVELOPE_LOWPASS_HZ = 10.0
+ENVELOPE_FILTER_ORDER = 4
 
 AUDIO_PATTERN = (
     f"{BIDS_DIR}/sub-{{subject}}/audio/sub-{{subject}}_task-{{task}}_run-{{run}}.wav"

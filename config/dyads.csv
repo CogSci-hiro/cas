@@ -1,0 +1,5 @@
+dyad_id,subject_id,partner_id
+dyad-001,sub-001,sub-002
+dyad-001,sub-002,sub-001
+dyad-002,sub-003,sub-004
+dyad-002,sub-004,sub-003
