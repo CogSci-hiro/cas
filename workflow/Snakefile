@@ -2,24 +2,107 @@
 #                              CAS ROOT SNAKEFILE
 ###############################################################################
 
+from pathlib import Path
+
+import yaml
+
 # -----------------------------------------------------------------------------
 # Global config (rarely changes)
 # -----------------------------------------------------------------------------
 configfile: "config/config.yaml"
 
 OUT_DIR = config["paths"]["out_dir"]
+BIDS_DIR = config["paths"]["bids_dir"]
+SRC_DIR = str(Path(workflow.basedir) / "src")
+
+with open("config/dataset.yaml", encoding="utf-8") as f:
+    DATASET_CONFIG = yaml.safe_load(f) or {}
+
+DATASET = DATASET_CONFIG.get("dataset", {})
+TASKS = set(DATASET.get("tasks", []))
+RUNS = {str(run) for run in DATASET.get("runs", [])}
+
+EXCLUDED_SUBJECTS = {
+    entry["subject_id"] for entry in DATASET.get("exclude", {}).get("subjects", [])
+}
+EXCLUDED_SUBJECT_RUNS = {
+    (entry["subject_id"], str(entry["run"]))
+    for entry in DATASET.get("exclude", {}).get("subject_runs", [])
+}
+
+ENVELOPE_CONFIG = config.get("features", {}).get("envelope", {})
+ENVELOPE_LOWPASS_HZ = float(ENVELOPE_CONFIG.get("lowpass_hz", 10.0))
+ENVELOPE_FILTER_ORDER = int(ENVELOPE_CONFIG.get("filter_order", 4))
+
+AUDIO_PATTERN = (
+    f"{BIDS_DIR}/sub-{{subject}}/audio/sub-{{subject}}_task-{{task}}_run-{{run}}.wav"
+)
+ENVELOPE_OUTPUT_PATTERN = (
+    f"{OUT_DIR}/features/envelope/sub-{{subject}}/"
+    f"sub-{{subject}}_task-{{task}}_run-{{run}}_envelope.npy"
+)
+ENVELOPE_COMPLETE_FLAG = f"{OUT_DIR}/features/envelope/.extract_all_complete"
+
+
+def _discover_audio_records() -> list[dict[str, str]]:
+    wildcard_values = glob_wildcards(AUDIO_PATTERN)
+    records: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    for subject, task, run in zip(
+        wildcard_values.subject, wildcard_values.task, wildcard_values.run
+    ):
+        subject_id = f"sub-{subject}"
+        record_key = (subject, task, run)
+        if record_key in seen:
+            continue
+        if TASKS and task not in TASKS:
+            continue
+        if RUNS and run not in RUNS:
+            continue
+        if subject_id in EXCLUDED_SUBJECTS:
+            continue
+        if (subject_id, run) in EXCLUDED_SUBJECT_RUNS:
+            continue
+        records.append({"subject": subject, "task": task, "run": run})
+        seen.add(record_key)
+
+    return records
+
+
+AUDIO_RECORDS = _discover_audio_records()
+AUDIO_RECORD_SUBJECTS = [record["subject"] for record in AUDIO_RECORDS]
+AUDIO_RECORD_TASKS = [record["task"] for record in AUDIO_RECORDS]
+AUDIO_RECORD_RUNS = [record["run"] for record in AUDIO_RECORDS]
+
+AUDIO_INPUTS = expand(
+    AUDIO_PATTERN,
+    zip,
+    subject=AUDIO_RECORD_SUBJECTS,
+    task=AUDIO_RECORD_TASKS,
+    run=AUDIO_RECORD_RUNS,
+)
+ENVELOPE_OUTPUTS = expand(
+    ENVELOPE_OUTPUT_PATTERN,
+    zip,
+    subject=AUDIO_RECORD_SUBJECTS,
+    task=AUDIO_RECORD_TASKS,
+    run=AUDIO_RECORD_RUNS,
+)
 
 
 # -----------------------------------------------------------------------------
 # Include rule modules
 # -----------------------------------------------------------------------------
 include: "rules/dataset.smk"
-include: "rules/events.smk"
 include: "rules/features.smk"
-include: "rules/neural.smk"
-include: "rules/models.smk"
+include: "rules/action_models.smk"
+include: "rules/erp.smk"
+include: "rules/glhmm.smk"
+include: "rules/neural_state.smk"
 include: "rules/stats.smk"
 include: "rules/figures.smk"
+include: "rules/targets.smk"
 
 
 # -----------------------------------------------------------------------------

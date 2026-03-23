@@ -1,0 +1,31 @@
+trf:
+  analysis_id: "env_self_other"
+
+  predictors:
+    - name: "self_envelope"
+      path: "derivatives/features/envelope/{subject}/run-{run}/self.npy"
+    - name: "other_envelope"
+      path: "derivatives/features/envelope/{subject}/run-{run}/other.npy"
+
+  target:
+    path: "derivatives/eeg/evoked/{subject}/run-{run}.npy"
+
+  timing:
+    target_sfreq_hz: 100
+    tmin_s: -0.2
+    tmax_s: 0.6
+
+  cv:
+    outer: "leave_one_run_out"
+    inner: "leave_one_run_out"
+    n_runs: 8
+
+  model:
+    backend: "spyeeg"
+    estimator: "ridge"
+    alphas: [0.1, 1, 10, 100, 1000]
+
+  output:
+    root: "derivatives/trf/{analysis_id}/{subject}"
+    save_betas: true
+    save_scores: true
