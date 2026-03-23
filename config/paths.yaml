@@ -14,6 +14,15 @@ derivatives_root: "/Users/hiro/Datasets/working/cas"
 # Root for subject-level extracted features such as envelopes or onsets.
 features_root: "/Users/hiro/Datasets/working/cas/derivatives/features"
 
+# Root for EEG arrays exported from raw BIDS EEG files for downstream models.
+eeg_array_root: "/Users/hiro/Datasets/working/cas/derivatives/eeg"
+
+# Root for filtered / preprocessed raw EEG derivatives saved as FIF files.
+preprocessed_eeg_root: "/Users/hiro/Datasets/working/cas/derivatives/preprocessed_eeg"
+
+# Root containing precomputed ICA models used during preprocessing.
+ica_dir: "/Users/hiro/Datasets/Miscellaneous/hyperscanning-testing/derived/eeg/ica_applied"
+
 # Root for TRF model outputs, organized further by analysis_id.
 trf_root: "/Users/hiro/Datasets/working/cas/derivatives/trf"
 

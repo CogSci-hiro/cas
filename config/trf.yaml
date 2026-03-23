@@ -21,7 +21,7 @@ trf:
   target:
     name: "eeg"
     kind: "continuous"
-    path: "derivatives/eeg/evoked/{subject}/run-{run}.npy"
+    path: "evoked/{subject}/run-{run}.npy"
 
   # Dyad table used to resolve partner identity for role="other" predictors.
   pairing:
@@ -55,7 +55,7 @@ trf:
   # Analysis-scoped outputs prevent unrelated TRF analyses from invalidating
   # each other's Snakemake cache paths.
   output:
-    root: "derivatives/trf/{analysis_id}"
+    root: "{analysis_id}"
     save_betas: true
     save_scores: true
     save_predictions: false

@@ -4,11 +4,24 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
+import mne
 import numpy as np
+import yaml
 from scipy.io import wavfile
 
+from cas.preprocessing import (
+    apply_average_reference,
+    apply_precomputed_ica,
+    bandpass_filter_raw,
+    downsample_raw,
+    preprocess_raw,
+    read_bad_channels_from_bids_tsv,
+    set_bad_channels,
+)
+from cas.trf.prepare import load_dyad_table, resolve_predictor_paths
 from cas.features.envelope import extract_hilbert_envelope
 from trf.nested_cv import loro_nested_cv
 from trf.prepare import prepare_trf_runs
@@ -31,6 +44,42 @@ def _load_array(path: str, *, label: str) -> np.ndarray:
     return array
 
 
+def _as_2d_array(array: np.ndarray, *, label: str) -> np.ndarray:
+    x = np.asarray(array, dtype=float)
+    if x.ndim == 1:
+        x = x[:, None]
+    if x.ndim != 2:
+        raise ValueError(f"{label} must be 1D or 2D.")
+    if not np.isfinite(x).all():
+        raise ValueError(f"{label} contains NaN or infinite values.")
+    return x
+
+
+def _load_yaml(path: Path) -> dict:
+    with path.open(encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    if not isinstance(data, dict):
+        raise ValueError(f"Expected a mapping in YAML file: {path}")
+    return data
+
+
+def _load_paths_config(config_root: Path) -> dict:
+    paths_path = config_root / "paths.yaml"
+    if not paths_path.exists():
+        raise FileNotFoundError(f"Paths config not found: {paths_path}")
+    return _load_yaml(paths_path)
+
+
+def _resolve_path(path_str: str, *, project_root: Path, fallback_root: Path | None = None) -> Path:
+    path = Path(path_str)
+    if path.is_absolute():
+        return path
+    project_candidate = project_root / path
+    if project_candidate.exists() or fallback_root is None:
+        return project_candidate
+    return fallback_root / path
+
+
 def _load_signal(path: str) -> tuple[np.ndarray, float | None]:
     input_path = Path(path)
     if input_path.suffix.lower() == ".npy":
@@ -45,6 +94,26 @@ def _load_signal(path: str) -> tuple[np.ndarray, float | None]:
         return signal_array, float(sampling_rate_hz)
 
     raise ValueError(f"Unsupported input format for envelope extraction: {input_path.suffix}")
+
+
+def _load_raw_eeg(path: str) -> "mne.io.BaseRaw":
+    input_path = Path(path)
+    suffix = input_path.suffix.lower()
+    if suffix == ".fif":
+        return mne.io.read_raw_fif(input_path, preload=True, verbose="ERROR")
+    if suffix == ".edf":
+        return mne.io.read_raw_edf(input_path, preload=True, verbose="ERROR")
+    raise ValueError(f"Unsupported EEG input format: {input_path.suffix}")
+
+
+def _save_raw_fif(raw: "mne.io.BaseRaw", output_path_str: str) -> Path:
+    output_path = Path(output_path_str)
+    if output_path.suffix.lower() != ".fif":
+        raise ValueError("Output raw path must end with .fif.")
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    raw.save(output_path, overwrite=True)
+    return output_path
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -69,6 +138,43 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Optional output prefix for scores (.json) and coefficients (.npz).",
     )
 
+    trf_config_parser = subparsers.add_parser(
+        "trf-config",
+        help="Run TRF nested CV from config-driven self/other predictor definitions.",
+    )
+    trf_config_parser.add_argument("--config", required=True, help="Path to config/trf.yaml.")
+    trf_config_parser.add_argument("--subject", required=True, help="Target subject id, e.g. sub-001.")
+    trf_config_parser.add_argument(
+        "--project-root",
+        default=".",
+        help="Project root used to resolve relative config paths. Defaults to cwd.",
+    )
+    trf_config_parser.add_argument(
+        "--runs",
+        nargs="+",
+        type=int,
+        default=None,
+        help="Optional run list. Defaults to 1..n_runs from the TRF config.",
+    )
+
+    eeg_array_parser = subparsers.add_parser(
+        "eeg-array",
+        help="Convert raw EEG (.edf or .fif) into a channel-wise NumPy array for TRF input.",
+    )
+    eeg_array_parser.add_argument("--input", required=True, help="Input EEG .edf or .fif path.")
+    eeg_array_parser.add_argument("--output", required=True, help="Output .npy path.")
+    eeg_array_parser.add_argument(
+        "--target-sfreq-hz",
+        type=float,
+        default=None,
+        help="Optional resampling rate in Hz.",
+    )
+    eeg_array_parser.add_argument(
+        "--metadata-json",
+        default=None,
+        help="Optional JSON sidecar path with channel names and sampling rate.",
+    )
+
     envelope_parser = subparsers.add_parser(
         "envelope",
         help="Extract a Hilbert speech envelope from a .wav or 1D .npy signal.",
@@ -87,6 +193,127 @@ def _build_parser() -> argparse.ArgumentParser:
         "--summary-json",
         default=None,
         help="Optional JSON sidecar path for envelope metadata.",
+    )
+
+    preprocess_raw_parser = subparsers.add_parser(
+        "preprocess-raw",
+        help="Run the EEG preprocessing pipeline and save the result as .fif.",
+    )
+    preprocess_raw_parser.add_argument("--input", required=True, help="Input EEG .edf or .fif path.")
+    preprocess_raw_parser.add_argument("--output", required=True, help="Output preprocessed .fif path.")
+    preprocess_raw_parser.add_argument(
+        "--channels-tsv",
+        default=None,
+        help="Optional BIDS channels.tsv path used to load bad channels.",
+    )
+    preprocess_raw_parser.add_argument(
+        "--ica-path",
+        default=None,
+        help="Optional precomputed ICA .fif path.",
+    )
+    preprocess_raw_parser.add_argument(
+        "--target-sfreq-hz",
+        type=float,
+        default=None,
+        help="Optional target sampling rate in Hz.",
+    )
+    preprocess_raw_parser.add_argument(
+        "--low-cut-hz",
+        type=float,
+        default=None,
+        help="Optional high-pass cutoff in Hz.",
+    )
+    preprocess_raw_parser.add_argument(
+        "--high-cut-hz",
+        type=float,
+        default=None,
+        help="Optional low-pass cutoff in Hz.",
+    )
+    preprocess_raw_parser.add_argument(
+        "--skip-interpolate-bads",
+        action="store_true",
+        help="Skip bad channel interpolation.",
+    )
+    preprocess_raw_parser.add_argument(
+        "--skip-rereference",
+        action="store_true",
+        help="Skip average rereferencing.",
+    )
+
+    downsample_raw_parser = subparsers.add_parser(
+        "downsample-raw",
+        help="Downsample raw EEG and save the result as .fif.",
+    )
+    downsample_raw_parser.add_argument("--input", required=True, help="Input EEG .edf or .fif path.")
+    downsample_raw_parser.add_argument("--output", required=True, help="Output downsampled .fif path.")
+    downsample_raw_parser.add_argument(
+        "--target-sfreq-hz",
+        type=float,
+        required=True,
+        help="Target sampling rate in Hz.",
+    )
+
+    filter_raw_parser = subparsers.add_parser(
+        "filter-raw",
+        help="Apply broad EEG filtering and save the result as .fif.",
+    )
+    filter_raw_parser.add_argument("--input", required=True, help="Input EEG .edf or .fif path.")
+    filter_raw_parser.add_argument("--output", required=True, help="Output filtered .fif path.")
+    filter_raw_parser.add_argument(
+        "--low-cut-hz",
+        type=float,
+        default=None,
+        help="Optional high-pass cutoff in Hz.",
+    )
+    filter_raw_parser.add_argument(
+        "--high-cut-hz",
+        type=float,
+        default=None,
+        help="Optional low-pass cutoff in Hz.",
+    )
+
+    set_bad_channels_parser = subparsers.add_parser(
+        "set-bad-channels",
+        help="Load bad channels from BIDS channels.tsv, set them on raw, and save as .fif.",
+    )
+    set_bad_channels_parser.add_argument("--input", required=True, help="Input EEG .edf or .fif path.")
+    set_bad_channels_parser.add_argument("--output", required=True, help="Output .fif path.")
+    set_bad_channels_parser.add_argument(
+        "--channels-tsv",
+        required=True,
+        help="BIDS channels.tsv path used to load bad channels.",
+    )
+
+    average_reference_parser = subparsers.add_parser(
+        "average-reference",
+        help="Apply average EEG reference and save the result as .fif.",
+    )
+    average_reference_parser.add_argument(
+        "--input",
+        required=True,
+        help="Input EEG .edf or .fif path.",
+    )
+    average_reference_parser.add_argument(
+        "--output",
+        required=True,
+        help="Output rereferenced .fif path.",
+    )
+    average_reference_parser.add_argument(
+        "--projection",
+        action="store_true",
+        help="Add the average reference as a projection instead of applying it directly.",
+    )
+
+    apply_ica_parser = subparsers.add_parser(
+        "apply-ica",
+        help="Apply precomputed ICA and save the result as .fif.",
+    )
+    apply_ica_parser.add_argument("--input", required=True, help="Input EEG .edf or .fif path.")
+    apply_ica_parser.add_argument("--output", required=True, help="Output ICA-cleaned .fif path.")
+    apply_ica_parser.add_argument(
+        "--ica-path",
+        required=True,
+        help="Precomputed ICA .fif path.",
     )
     return parser
 
@@ -162,13 +389,265 @@ def _run_envelope(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_eeg_array(args: argparse.Namespace) -> int:
+    raw = _load_raw_eeg(args.input)
+    raw.pick("eeg")
+    if args.target_sfreq_hz is not None:
+        raw.resample(float(args.target_sfreq_hz))
+
+    data = raw.get_data().T
+    output_path = Path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    np.save(output_path, np.asarray(data, dtype=float))
+    print(f"Saved EEG array to {output_path}")
+
+    if args.metadata_json:
+        metadata_path = Path(args.metadata_json)
+        metadata_path.parent.mkdir(parents=True, exist_ok=True)
+        metadata = {
+            "input": str(Path(args.input)),
+            "output": str(output_path),
+            "sampling_rate_hz": float(raw.info["sfreq"]),
+            "n_samples": int(data.shape[0]),
+            "n_channels": int(data.shape[1]),
+            "channel_names": list(raw.ch_names),
+        }
+        metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+        print(f"Saved EEG metadata to {metadata_path}")
+
+    return 0
+
+
+def _run_preprocess_raw(args: argparse.Namespace) -> int:
+    raw = _load_raw_eeg(args.input)
+    processed_raw = preprocess_raw(
+        raw,
+        channels_tsv_path=args.channels_tsv,
+        ica_path=args.ica_path,
+        target_sampling_rate_hz=args.target_sfreq_hz,
+        low_cut_hz=args.low_cut_hz,
+        high_cut_hz=args.high_cut_hz,
+        interpolate_bad_channels=not args.skip_interpolate_bads,
+        apply_rereference=not args.skip_rereference,
+    )
+    output_path = _save_raw_fif(processed_raw, args.output)
+    print(f"Saved preprocessed raw to {output_path}")
+    return 0
+
+
+def _run_downsample_raw(args: argparse.Namespace) -> int:
+    raw = _load_raw_eeg(args.input)
+    downsample_raw(raw, sampling_rate_hz=float(args.target_sfreq_hz))
+    output_path = _save_raw_fif(raw, args.output)
+    print(f"Saved downsampled raw to {output_path}")
+    return 0
+
+
+def _run_filter_raw(args: argparse.Namespace) -> int:
+    raw = _load_raw_eeg(args.input)
+    bandpass_filter_raw(
+        raw,
+        low_cut_hz=args.low_cut_hz,
+        high_cut_hz=args.high_cut_hz,
+    )
+    output_path = _save_raw_fif(raw, args.output)
+    print(f"Saved filtered raw to {output_path}")
+    return 0
+
+
+def _run_set_bad_channels(args: argparse.Namespace) -> int:
+    raw = _load_raw_eeg(args.input)
+    bad_channel_names = read_bad_channels_from_bids_tsv(args.channels_tsv)
+    set_bad_channels(raw, bad_channel_names)
+    output_path = _save_raw_fif(raw, args.output)
+    print(f"Saved raw with bad channels to {output_path}")
+    return 0
+
+
+def _run_average_reference(args: argparse.Namespace) -> int:
+    raw = _load_raw_eeg(args.input)
+    apply_average_reference(raw, projection=bool(args.projection))
+    output_path = _save_raw_fif(raw, args.output)
+    print(f"Saved average-referenced raw to {output_path}")
+    return 0
+
+
+def _run_apply_ica(args: argparse.Namespace) -> int:
+    raw = _load_raw_eeg(args.input)
+    apply_precomputed_ica(raw, args.ica_path)
+    output_path = _save_raw_fif(raw, args.output)
+    print(f"Saved ICA-cleaned raw to {output_path}")
+    return 0
+
+
+def _build_config_driven_trf_inputs(
+    *,
+    trf_config: dict,
+    subject_id: str,
+    runs: list[int],
+    project_root: Path,
+    config_root: Path,
+) -> tuple[list[np.ndarray], list[np.ndarray], list[str]]:
+    trf_section = trf_config.get("trf", {})
+    paths_config = _load_paths_config(config_root)
+    predictors = trf_section.get("predictors", [])
+    target_config = trf_section.get("target", {})
+    pairing_config = trf_section.get("pairing", {})
+
+    dyads_csv = pairing_config.get("dyads_csv")
+    if not isinstance(dyads_csv, str) or not dyads_csv:
+        raise ValueError("TRF config must define trf.pairing.dyads_csv.")
+    dyad_table = load_dyad_table(
+        _resolve_path(dyads_csv, project_root=project_root, fallback_root=config_root)
+    )
+
+    target_path_template = target_config.get("path")
+    if not isinstance(target_path_template, str) or not target_path_template:
+        raise ValueError("TRF config must define trf.target.path.")
+    eeg_array_root = Path(paths_config["eeg_array_root"])
+
+    predictor_runs: list[np.ndarray] = []
+    eeg_runs: list[np.ndarray] = []
+    predictor_names = [str(predictor["name"]) for predictor in predictors]
+
+    original_cwd = Path.cwd()
+    os.chdir(project_root)
+    try:
+        for run in runs:
+            predictor_paths = resolve_predictor_paths(subject_id, run, predictors, dyad_table)
+            predictor_arrays = [
+                _as_2d_array(
+                    _load_array(str(_resolve_path(str(path), project_root=project_root)), label=name),
+                    label=name,
+                )
+                for name, path in predictor_paths.items()
+            ]
+            predictor_runs.append(np.concatenate(predictor_arrays, axis=1))
+
+            target_path = _resolve_path(
+                str(eeg_array_root / target_path_template.format(subject=subject_id, run=run)),
+                project_root=project_root,
+            )
+            eeg_runs.append(
+                _as_2d_array(_load_array(str(target_path), label="target"), label="target")
+            )
+    finally:
+        os.chdir(original_cwd)
+
+    return eeg_runs, predictor_runs, predictor_names
+
+
+def _default_trf_output_prefix(*, trf_config: dict, subject_id: str, config_root: Path) -> Path:
+    trf_section = trf_config.get("trf", {})
+    analysis_id = trf_section.get("analysis_id")
+    if not isinstance(analysis_id, str) or not analysis_id:
+        raise ValueError("TRF config must define trf.analysis_id.")
+
+    output_root_template = trf_section.get("output", {}).get("root")
+    if not isinstance(output_root_template, str) or not output_root_template:
+        raise ValueError("TRF config must define trf.output.root.")
+
+    paths_config = _load_paths_config(config_root)
+    trf_root = Path(paths_config["trf_root"])
+    output_root = trf_root / output_root_template.format(analysis_id=analysis_id)
+    return output_root / subject_id / "trf"
+
+
+def _run_trf_config(args: argparse.Namespace) -> int:
+    project_root = Path(args.project_root).resolve()
+    config_path = _resolve_path(args.config, project_root=project_root).resolve()
+    trf_config = _load_yaml(config_path)
+    config_root = config_path.parent.parent if config_path.parent.name == "config" else config_path.parent
+    trf_section = trf_config.get("trf", {})
+    timing_config = trf_section.get("timing", {})
+    model_config = trf_section.get("model", {})
+    output_config = trf_section.get("output", {})
+    cv_config = trf_section.get("cv", {})
+
+    n_runs = int(cv_config.get("n_runs", 0))
+    runs = list(args.runs) if args.runs is not None else list(range(1, n_runs + 1))
+    if not runs:
+        raise ValueError("No runs requested. Provide --runs or set trf.cv.n_runs > 0.")
+
+    eeg_runs, predictor_runs, predictor_names = _build_config_driven_trf_inputs(
+        trf_config=trf_config,
+        subject_id=args.subject,
+        runs=runs,
+        project_root=project_root,
+        config_root=config_root,
+    )
+    target_sfreq_hz = float(timing_config["target_sfreq_hz"])
+    X_runs, Y_runs = prepare_trf_runs(
+        eeg_runs=eeg_runs,
+        predictor_runs=predictor_runs,
+        eeg_sfreq=target_sfreq_hz,
+        predictor_sfreq=target_sfreq_hz,
+        target_sfreq=target_sfreq_hz,
+        tmin_s=float(timing_config["tmin_s"]),
+        tmax_s=float(timing_config["tmax_s"]),
+    )
+    fold_scores, fold_coefficients = loro_nested_cv(
+        X_runs=X_runs,
+        Y_runs=Y_runs,
+        alphas=[float(alpha) for alpha in model_config["alphas"]],
+    )
+
+    result = {
+        "analysis_id": trf_section.get("analysis_id"),
+        "subject": args.subject,
+        "runs": runs,
+        "predictors": predictor_names,
+        "fold_scores": fold_scores,
+    }
+    print(json.dumps(result, indent=2))
+
+    output_prefix = _default_trf_output_prefix(
+        trf_config=trf_config,
+        subject_id=args.subject,
+        config_root=config_root,
+    )
+    output_prefix.parent.mkdir(parents=True, exist_ok=True)
+
+    if bool(output_config.get("save_scores", True)):
+        score_path = output_prefix.with_suffix(".scores.json")
+        score_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+        print(f"Saved scores to {score_path}")
+
+    if bool(output_config.get("save_betas", True)):
+        coef_path = output_prefix.with_suffix(".coefs.npz")
+        np.savez(
+            coef_path,
+            fold_coefficients=np.array(fold_coefficients, dtype=object),
+            predictor_names=np.array(predictor_names, dtype=object),
+        )
+        print(f"Saved coefficients to {coef_path}")
+
+    return 0
+
+
 def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
     if args.command == "trf":
         return _run_trf(args)
+    if args.command == "trf-config":
+        return _run_trf_config(args)
+    if args.command == "eeg-array":
+        return _run_eeg_array(args)
     if args.command == "envelope":
         return _run_envelope(args)
+    if args.command == "preprocess-raw":
+        return _run_preprocess_raw(args)
+    if args.command == "downsample-raw":
+        return _run_downsample_raw(args)
+    if args.command == "filter-raw":
+        return _run_filter_raw(args)
+    if args.command == "set-bad-channels":
+        return _run_set_bad_channels(args)
+    if args.command == "average-reference":
+        return _run_average_reference(args)
+    if args.command == "apply-ica":
+        return _run_apply_ica(args)
     parser.error(f"Unknown command: {args.command}")
     return 2
 

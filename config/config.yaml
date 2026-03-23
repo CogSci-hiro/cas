@@ -5,4 +5,5 @@
 paths: "config/paths.yaml"
 dataset: "config/dataset.yaml"
 sampling: "config/sampling.yaml"
+preprocessing: "config/preprocessing.yaml"
 trf: "config/trf.yaml"
