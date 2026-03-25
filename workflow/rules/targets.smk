@@ -17,3 +17,8 @@ rule events_all:
     input:
         EVENTS_CSV_OUTPUT,
         PAIRING_ISSUES_CSV_OUTPUT
+
+
+rule epochs_all:
+    input:
+        EPOCH_OUTPUTS

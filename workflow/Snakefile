@@ -18,6 +18,7 @@ PATHS_CONFIG_PATH = f"{CONFIG_DIR}/paths.yaml"
 PREPROCESSING_CONFIG_PATH = f"{CONFIG_DIR}/preprocessing.yaml"
 TRF_CONFIG_PATH = f"{CONFIG_DIR}/trf.yaml"
 EVENTS_CONFIG_PATH = f"{CONFIG_DIR}/events.yaml"
+EPOCHS_CONFIG_PATH = f"{CONFIG_DIR}/epochs.yaml"
 DYADS_CSV_PATH = f"{CONFIG_DIR}/dyads.csv"
 with open(PATHS_CONFIG_PATH, encoding="utf-8") as f:
     PATHS_CONFIG = yaml.safe_load(f) or {}
@@ -27,6 +28,8 @@ with open(TRF_CONFIG_PATH, encoding="utf-8") as f:
     TRF_CONFIG = yaml.safe_load(f) or {}
 with open(EVENTS_CONFIG_PATH, encoding="utf-8") as f:
     EVENTS_CONFIG = yaml.safe_load(f) or {}
+with open(EPOCHS_CONFIG_PATH, encoding="utf-8") as f:
+    EPOCHS_CONFIG = yaml.safe_load(f) or {}
 
 BIDS_DIR = PATHS_CONFIG["bids_root"]
 OUT_DIR = PATHS_CONFIG["derivatives_root"]

@@ -1,0 +1,13 @@
+epochs:
+  output:
+    root: "epochs"
+  timing:
+    tmin_s: -0.2
+    tmax_s: 0.8
+    baseline_s:
+      - -0.2
+      - 0.0
+  event_types:
+    - "fpp"
+    - "spp"
+  reject_by_annotation: true
