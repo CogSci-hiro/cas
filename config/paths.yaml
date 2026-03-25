@@ -28,3 +28,6 @@ trf_root: "/Users/hiro/Datasets/working/cas/derivatives/trf"
 
 # Root for human-readable summaries, figures, and reports.
 reports_root: "/Users/hiro/Datasets/working/cas/reports"
+
+# Root containing validated TextGrid annotation files used for canonical event extraction.
+annotations_dir: "/Users/hiro/Projects/active/cas/data/annotations"

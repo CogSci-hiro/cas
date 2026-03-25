@@ -11,4 +11,4 @@ events:
     method: "minmax_0_1"   # implemented as t_onset / T_run
 
   matching:
-    absdiff_window_s: 1.0
+    offset_margin_s: 1.0
