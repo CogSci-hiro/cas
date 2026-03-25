@@ -147,8 +147,3 @@ rule preprocess_eeg:
             command_parts.append(f'--ica-path "{ica_inputs[0]}"')
 
         shell(" ".join(command_parts))
-
-
-rule preprocess_all:
-    input:
-        PREPROCESSED_EEG_OUTPUTS

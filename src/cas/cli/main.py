@@ -6,25 +6,16 @@ import argparse
 import json
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import mne
 import numpy as np
 import yaml
 from scipy.io import wavfile
 
-from cas.preprocessing import (
-    apply_average_reference,
-    apply_precomputed_ica,
-    bandpass_filter_raw,
-    downsample_raw,
-    preprocess_raw,
-    read_bad_channels_from_bids_tsv,
-    set_bad_channels,
-)
-from cas.trf.prepare import load_dyad_table, resolve_predictor_paths
-from cas.features.envelope import extract_hilbert_envelope
-from trf.nested_cv import loro_nested_cv
-from trf.prepare import prepare_trf_runs
+from cas.cli.commands.annotations import add_annotations_parser, run_annotations_command
+
+if TYPE_CHECKING:
+    import mne
 
 
 def _load_runs(paths: list[str], *, label: str) -> list[np.ndarray]:
@@ -97,6 +88,8 @@ def _load_signal(path: str) -> tuple[np.ndarray, float | None]:
 
 
 def _load_raw_eeg(path: str) -> "mne.io.BaseRaw":
+    import mne
+
     input_path = Path(path)
     suffix = input_path.suffix.lower()
     if suffix == ".fif":
@@ -119,6 +112,7 @@ def _save_raw_fif(raw: "mne.io.BaseRaw", output_path_str: str) -> Path:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="cas", description="CAS command line interface.")
     subparsers = parser.add_subparsers(dest="command", required=True)
+    add_annotations_parser(subparsers)
 
     trf_parser = subparsers.add_parser("trf", help="Run TRF nested CV from run-wise arrays.")
     trf_parser.add_argument("--eeg-runs", nargs="+", required=True, help="Run-wise EEG .npy paths.")
@@ -319,6 +313,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _run_trf(args: argparse.Namespace) -> int:
+    from trf.nested_cv import loro_nested_cv
+    from trf.prepare import prepare_trf_runs
+
     eeg_runs = _load_runs(args.eeg_runs, label="eeg")
     predictor_runs = _load_runs(args.predictor_runs, label="predictor")
 
@@ -353,6 +350,8 @@ def _run_trf(args: argparse.Namespace) -> int:
 
 
 def _run_envelope(args: argparse.Namespace) -> int:
+    from cas.features.envelope import extract_hilbert_envelope
+
     signal, inferred_sampling_rate_hz = _load_signal(args.input)
     sampling_rate_hz = args.sampling_rate_hz
     if sampling_rate_hz is None:
@@ -419,6 +418,8 @@ def _run_eeg_array(args: argparse.Namespace) -> int:
 
 
 def _run_preprocess_raw(args: argparse.Namespace) -> int:
+    from cas.preprocessing import preprocess_raw
+
     raw = _load_raw_eeg(args.input)
     processed_raw = preprocess_raw(
         raw,
@@ -436,6 +437,8 @@ def _run_preprocess_raw(args: argparse.Namespace) -> int:
 
 
 def _run_downsample_raw(args: argparse.Namespace) -> int:
+    from cas.preprocessing import downsample_raw
+
     raw = _load_raw_eeg(args.input)
     downsample_raw(raw, sampling_rate_hz=float(args.target_sfreq_hz))
     output_path = _save_raw_fif(raw, args.output)
@@ -444,6 +447,8 @@ def _run_downsample_raw(args: argparse.Namespace) -> int:
 
 
 def _run_filter_raw(args: argparse.Namespace) -> int:
+    from cas.preprocessing import bandpass_filter_raw
+
     raw = _load_raw_eeg(args.input)
     bandpass_filter_raw(
         raw,
@@ -456,6 +461,8 @@ def _run_filter_raw(args: argparse.Namespace) -> int:
 
 
 def _run_set_bad_channels(args: argparse.Namespace) -> int:
+    from cas.preprocessing import read_bad_channels_from_bids_tsv, set_bad_channels
+
     raw = _load_raw_eeg(args.input)
     bad_channel_names = read_bad_channels_from_bids_tsv(args.channels_tsv)
     set_bad_channels(raw, bad_channel_names)
@@ -465,6 +472,8 @@ def _run_set_bad_channels(args: argparse.Namespace) -> int:
 
 
 def _run_average_reference(args: argparse.Namespace) -> int:
+    from cas.preprocessing import apply_average_reference
+
     raw = _load_raw_eeg(args.input)
     apply_average_reference(raw, projection=bool(args.projection))
     output_path = _save_raw_fif(raw, args.output)
@@ -473,6 +482,8 @@ def _run_average_reference(args: argparse.Namespace) -> int:
 
 
 def _run_apply_ica(args: argparse.Namespace) -> int:
+    from cas.preprocessing import apply_precomputed_ica
+
     raw = _load_raw_eeg(args.input)
     apply_precomputed_ica(raw, args.ica_path)
     output_path = _save_raw_fif(raw, args.output)
@@ -488,6 +499,8 @@ def _build_config_driven_trf_inputs(
     project_root: Path,
     config_root: Path,
 ) -> tuple[list[np.ndarray], list[np.ndarray], list[str]]:
+    from cas.trf.prepare import load_dyad_table, resolve_predictor_paths
+
     trf_section = trf_config.get("trf", {})
     paths_config = _load_paths_config(config_root)
     predictors = trf_section.get("predictors", [])
@@ -554,6 +567,9 @@ def _default_trf_output_prefix(*, trf_config: dict, subject_id: str, config_root
 
 
 def _run_trf_config(args: argparse.Namespace) -> int:
+    from trf.nested_cv import loro_nested_cv
+    from trf.prepare import prepare_trf_runs
+
     project_root = Path(args.project_root).resolve()
     config_path = _resolve_path(args.config, project_root=project_root).resolve()
     trf_config = _load_yaml(config_path)
@@ -628,6 +644,8 @@ def _run_trf_config(args: argparse.Namespace) -> int:
 def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
+    if args.command == "annotations":
+        return run_annotations_command(args)
     if args.command == "trf":
         return _run_trf(args)
     if args.command == "trf-config":
