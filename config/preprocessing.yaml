@@ -30,12 +30,14 @@ preprocessing:
     - "(?i)\\bemg\\b"
 
   # EEG processing defaults
-  target_sampling_rate_hz: 200.0
+  target_sampling_rate_hz: 64.0
   low_cut_hz: 0.1
-  high_cut_hz: 40.0
+  high_cut_hz: 30.0
   interpolate_bad_channels: true
   apply_rereference: true
+  save_intermediates: false
 
-  # Apply precomputed ICA only when a matching file exists.
+  # Apply precomputed ICA. When enabled, preprocessing now fails if the
+  # matching ICA file is missing or cannot be applied.
   apply_ica: true
-  ica_filename_template: "sub-{subject}_task-{task}_run-{run}_raw_ica.fif"
+  ica_filename_template: "sub-{subject}_task-{task}-ica.fif"

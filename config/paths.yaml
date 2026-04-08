@@ -21,7 +21,7 @@ eeg_array_root: "/Users/hiro/Datasets/working/cas/derivatives/eeg"
 preprocessed_eeg_root: "/Users/hiro/Datasets/working/cas/derivatives/preprocessed_eeg"
 
 # Root containing precomputed ICA models used during preprocessing.
-ica_dir: "/Users/hiro/Datasets/Miscellaneous/hyperscanning-testing/derived/eeg/ica_applied"
+ica_dir: "/Users/hiro/Datasets/working/hyperscanning/precomputed_ica"
 
 # Root for TRF model outputs, organized further by analysis_id.
 trf_root: "/Users/hiro/Datasets/working/cas/derivatives/trf"

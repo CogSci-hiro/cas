@@ -26,4 +26,10 @@ rule epochs_all:
 
 rule lmeeeg_all:
     input:
-        LMEEEG_OUTPUTS
+        LMEEEG_SUMMARY_OUTPUT
+
+
+rule figures_lmeeeg_all:
+    input:
+        LMEEEG_FIGURE_MANIFEST,
+        LMEEEG_INFERENCE_FIGURE_MANIFEST

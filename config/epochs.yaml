@@ -2,11 +2,11 @@ epochs:
   output:
     root: "epochs"
   timing:
-    tmin_s: -0.2
-    tmax_s: 0.8
+    tmin_s: -2.0
+    tmax_s: 0.5
     baseline_s:
-      - -0.2
-      - 0.0
+      - -2.0
+      - 0.5
   event_types:
     - "self_fpp_onset"
     - "self_fpp_offset"

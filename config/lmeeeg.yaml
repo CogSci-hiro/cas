@@ -1,4 +1,10 @@
 lmeeeg:
+  enabled: true
+  backend: "lmeeeg"
+  random_effects:
+    group: "subject_id"
+    structure: "random_intercept"
+
   selection:
     event_type: "other_spp_onset"
     # Optional second-stage pandas query over epoch metadata after epochs[event_type].
@@ -6,21 +12,21 @@ lmeeeg:
 
   models:
     ssp_model:
-      formula: "~ spp_label + latency + duration_s + run"
+      formula: "~ spp_class_1 + spp_class_2 + latency + duration_s + run"
       eligibility:
         not_null:
-          - "spp_label"
+          - "spp_class_1"
+          - "spp_class_2"
           - "latency"
           - "duration_s"
         min_values:
           duration_s: 0.10
       test_predictors:
-        - "spp_label"
+        - "spp_class_1"
+        - "spp_class_2"
       standardize:
         - "latency"
         - "duration_s"
-      random_effect_group: "subject_id"
-      random_effect_structure: "random_intercept"
 
   test:
     method: "cluster"

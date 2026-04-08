@@ -61,6 +61,14 @@ def _load_paths_config(config_root: Path) -> dict:
     return _load_yaml(paths_path)
 
 
+def _resolve_out_dir(config_root: Path) -> Path:
+    paths_config = _load_paths_config(config_root)
+    derivatives_root = paths_config.get("derivatives_root")
+    if not isinstance(derivatives_root, str) or not derivatives_root:
+        raise ValueError(f"`derivatives_root` is missing from {config_root / 'paths.yaml'}.")
+    return Path(derivatives_root)
+
+
 def _resolve_path(path_str: str, *, project_root: Path, fallback_root: Path | None = None) -> Path:
     path = Path(path_str)
     if path.is_absolute():
@@ -296,6 +304,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Optional preprocessing summary .json output path.",
     )
     preprocess_raw_parser.add_argument(
+        "--intermediates-dir",
+        default=None,
+        help="Optional directory for intermediate EEG FIF snapshots.",
+    )
+    preprocess_raw_parser.add_argument(
         "--skip-interpolate-bads",
         action="store_true",
         help="Skip bad channel interpolation.",
@@ -389,9 +402,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
     lmeeeg_parser = subparsers.add_parser(
         "lmeeeg",
-        help="Run config-driven lmeEEG analysis from an existing epochs file.",
+        help="Run config-driven lmeEEG analysis from one or more existing epochs files.",
     )
-    lmeeeg_parser.add_argument("--epochs", required=True, help="Input epochs .fif path.")
+    lmeeeg_parser.add_argument("--epochs", nargs="+", required=True, help="One or more input epochs .fif paths.")
     lmeeeg_parser.add_argument(
         "--config",
         required=True,
@@ -406,6 +419,46 @@ def _build_parser() -> argparse.ArgumentParser:
         "--metadata-csv",
         default=None,
         help="Optional metadata CSV path when epochs.metadata is missing or should be overridden.",
+    )
+
+    figures_lmeeeg_parser = subparsers.add_parser(
+        "figures-lmeeeg",
+        help="Render pooled lmeEEG QC plots and write a figure manifest.",
+    )
+    figures_lmeeeg_parser.add_argument(
+        "--config-root",
+        default="config",
+        help="Directory containing paths.yaml, lmeeeg.yaml, and viz.yaml.",
+    )
+    figures_lmeeeg_parser.add_argument(
+        "--viz-config",
+        default=None,
+        help="Optional explicit viz.yaml path.",
+    )
+    figures_lmeeeg_parser.add_argument(
+        "--output",
+        default=None,
+        help="Optional explicit QC manifest output path.",
+    )
+
+    figures_lmeeeg_inference_parser = subparsers.add_parser(
+        "figures-lmeeeg-inference",
+        help="Render pooled lmeEEG inference plots and write a figure manifest.",
+    )
+    figures_lmeeeg_inference_parser.add_argument(
+        "--config-root",
+        default="config",
+        help="Directory containing paths.yaml and viz.yaml.",
+    )
+    figures_lmeeeg_inference_parser.add_argument(
+        "--viz-config",
+        default=None,
+        help="Optional explicit viz.yaml path.",
+    )
+    figures_lmeeeg_inference_parser.add_argument(
+        "--output",
+        default=None,
+        help="Optional explicit inference manifest output path.",
     )
     return parser
 
@@ -536,6 +589,7 @@ def _run_preprocess_raw(args: argparse.Namespace) -> int:
         interpolate_bad_channels=not args.skip_interpolate_bads,
         apply_rereference=not args.skip_rereference,
         keep_emg=not args.skip_emg,
+        intermediates_dir=args.intermediates_dir,
     )
     output_path = _save_raw_fif(result.eeg_raw, args.output)
     print(f"Saved preprocessed raw to {output_path}")
@@ -615,15 +669,167 @@ def _run_apply_ica(args: argparse.Namespace) -> int:
 
 
 def _run_lmeeeg(args: argparse.Namespace) -> int:
-    from cas.stats.lmeeeg_pipeline import run_lmeeeg_analysis
+    from cas.stats.lmeeeg_pipeline import run_lmeeeg_analysis, run_pooled_lmeeeg_analysis
 
-    summary = run_lmeeeg_analysis(
-        epochs_path=args.epochs,
-        config_path=args.config,
-        output_dir=args.output_dir,
-        metadata_csv=args.metadata_csv,
-    )
+    if len(args.epochs) == 1:
+        summary = run_lmeeeg_analysis(
+            epochs_path=args.epochs[0],
+            config_path=args.config,
+            output_dir=args.output_dir,
+            metadata_csv=args.metadata_csv,
+        )
+    else:
+        if args.metadata_csv is not None:
+            raise ValueError("--metadata-csv is only supported for single-file lmeeeg runs.")
+        summary = run_pooled_lmeeeg_analysis(
+            epochs_paths=args.epochs,
+            config_path=args.config,
+            output_dir=args.output_dir,
+        )
     print(json.dumps(summary, indent=2))
+    return 0
+
+
+def _load_lmeeeg_model_payloads(*, out_dir: Path, config_root: Path) -> dict[str, dict[str, object]]:
+    from cas.stats.lmeeeg_pipeline import load_lmeeeg_config
+
+    lmeeeg_root = out_dir / "lmeeeg"
+    config = load_lmeeeg_config(config_root / "lmeeeg.yaml")
+    model_names = [str(name) for name in (config.get("models") or {}).keys()]
+    payloads: dict[str, dict[str, object]] = {}
+
+    for model_name in model_names:
+        model_dir = lmeeeg_root / model_name
+        required_paths = {
+            "betas": model_dir / "betas.npy",
+            "t_values": model_dir / "t_values.npy",
+            "times": model_dir / "times.npy",
+            "channel_names": model_dir / "channel_names.json",
+            "column_names": model_dir / "column_names.json",
+        }
+        missing = [str(path) for path in required_paths.values() if not path.exists()]
+        if missing:
+            raise FileNotFoundError(
+                f"Missing pooled lmeEEG fit outputs for model `{model_name}`: {', '.join(missing)}"
+            )
+        payloads[model_name] = {
+            "betas": np.load(required_paths["betas"]),
+            "t_values": np.load(required_paths["t_values"]),
+            "times": np.load(required_paths["times"]),
+            "channel_names": json.loads(required_paths["channel_names"].read_text(encoding="utf-8")),
+            "column_names": json.loads(required_paths["column_names"].read_text(encoding="utf-8")),
+        }
+
+    return payloads
+
+
+def _load_viz_section(config_root: Path, explicit_viz_path: str | None) -> dict:
+    viz_path = Path(explicit_viz_path) if explicit_viz_path else config_root / "viz.yaml"
+    if not viz_path.exists():
+        return {}
+    payload = _load_yaml(viz_path)
+    return dict(payload.get("viz") or {})
+
+
+def _load_significance_masks(*, stats_root: Path, model_payloads: dict[str, dict[str, object]]) -> dict[str, dict[str, np.ndarray]]:
+    masks: dict[str, dict[str, np.ndarray]] = {}
+    if not stats_root.exists():
+        return masks
+
+    for effect_dir in sorted(path for path in stats_root.glob("*/*") if path.is_dir()):
+        summary_path = effect_dir / "summary.json"
+        if not summary_path.exists():
+            continue
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        model_name = effect_dir.parent.name
+        effect_name = effect_dir.name
+        if model_name not in model_payloads:
+            continue
+        corrected_p_path = Path(str(summary.get("corrected_p_values", "")))
+        if not corrected_p_path.exists():
+            continue
+        corrected_p_values = np.asarray(np.load(corrected_p_path), dtype=float)
+        if corrected_p_values.ndim != 2:
+            continue
+        masks.setdefault(model_name, {})[effect_name] = corrected_p_values < 0.05
+    return masks
+
+
+def _run_figures_lmeeeg(args: argparse.Namespace) -> int:
+    from ref_viz.lmeeeg import (
+        build_lmeeeg_qc_manifest_from_model_payloads,
+        build_lmeeeg_qc_manifest_from_stats,
+    )
+
+    config_root = Path(args.config_root).resolve()
+    out_dir = _resolve_out_dir(config_root)
+    viz_section = _load_viz_section(config_root, args.viz_config)
+    figure_section = dict((viz_section.get("figures") or {}).get("lmeeeg") or {})
+    formats = tuple(figure_section.get("formats", viz_section.get("formats", ["png", "pdf"])))
+    dpi = int(viz_section.get("dpi", 300))
+    output_path = Path(args.output) if args.output else out_dir / "figures" / "lmeeeg" / "figure_manifest.json"
+
+    model_payloads = _load_lmeeeg_model_payloads(out_dir=out_dir, config_root=config_root)
+    stats_root = out_dir / "stats" / "lmeeeg"
+    significance_masks = _load_significance_masks(stats_root=stats_root, model_payloads=model_payloads)
+    primary_manifest = build_lmeeeg_qc_manifest_from_model_payloads(
+        out_dir=out_dir,
+        model_payloads=model_payloads,
+        manifest_path=output_path,
+        significance_masks=significance_masks,
+        formats=formats,
+        dpi=dpi,
+    )
+
+    overlay_manifest = {"plots": []}
+    if stats_root.exists():
+        model_axes = {
+            model_name: {
+                "channel_names": payload["channel_names"],
+                "times": payload["times"],
+            }
+            for model_name, payload in model_payloads.items()
+        }
+        overlay_manifest = build_lmeeeg_qc_manifest_from_stats(
+            out_dir=out_dir,
+            stats_root=stats_root,
+            manifest_path=output_path,
+            model_axes=model_axes,
+            formats=formats,
+            dpi=dpi,
+        )
+
+    manifest = {
+        "status": "ok",
+        "plot_count": len(primary_manifest.get("plots", [])) + len(overlay_manifest.get("plots", [])),
+        "plots": [*primary_manifest.get("plots", []), *overlay_manifest.get("plots", [])],
+    }
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(json.dumps(manifest, indent=2))
+    return 0
+
+
+def _run_figures_lmeeeg_inference(args: argparse.Namespace) -> int:
+    from ref_viz.lmeeeg import build_lmeeeg_inference_manifest
+
+    config_root = Path(args.config_root).resolve()
+    out_dir = _resolve_out_dir(config_root)
+    viz_section = _load_viz_section(config_root, args.viz_config)
+    figure_section = dict((viz_section.get("figures") or {}).get("lmeeeg_inference") or {})
+    formats = tuple(figure_section.get("formats", viz_section.get("formats", ["png", "pdf"])))
+    dpi = int(viz_section.get("dpi", 300))
+    output_path = Path(args.output) if args.output else out_dir / "figures" / "lmeeeg_inference" / "figure_manifest.json"
+
+    manifest = build_lmeeeg_inference_manifest(
+        out_dir=out_dir,
+        stats_root=out_dir / "stats" / "lmeeeg",
+        lmeeeg_root=out_dir / "lmeeeg",
+        manifest_path=output_path,
+        formats=formats,
+        dpi=dpi,
+    )
+    print(json.dumps(manifest, indent=2))
     return 0
 
 
@@ -804,6 +1010,10 @@ def main() -> int:
         return _run_apply_ica(args)
     if args.command == "lmeeeg":
         return _run_lmeeeg(args)
+    if args.command == "figures-lmeeeg":
+        return _run_figures_lmeeeg(args)
+    if args.command == "figures-lmeeeg-inference":
+        return _run_figures_lmeeeg_inference(args)
     parser.error(f"Unknown command: {args.command}")
     return 2
 

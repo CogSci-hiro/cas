@@ -71,15 +71,8 @@ EPOCH_OUTPUTS = expand(
     run=[record["run"] for record in EPOCH_RECORDS],
 )
 LMEEEG_CONFIG_PATH = f"{CONFIG_DIR}/lmeeeg.yaml"
-LMEEEG_OUTPUT_DIR_PATTERN = f"{OUT_DIR}/lmeeeg/sub-{{subject}}/task-{{task}}/run-{{run}}"
-LMEEEG_SUMMARY_OUTPUT_PATTERN = f"{LMEEEG_OUTPUT_DIR_PATTERN}/lmeeeg_analysis_summary.json"
-LMEEEG_OUTPUTS = expand(
-    LMEEEG_SUMMARY_OUTPUT_PATTERN,
-    zip,
-    subject=[record["subject"] for record in EPOCH_RECORDS],
-    task=[record["task"] for record in EPOCH_RECORDS],
-    run=[record["run"] for record in EPOCH_RECORDS],
-)
+LMEEEG_OUTPUT_DIR = f"{OUT_DIR}/lmeeeg"
+LMEEEG_SUMMARY_OUTPUT = f"{LMEEEG_OUTPUT_DIR}/lmeeeg_analysis_summary.json"
 
 
 rule make_epochs:
@@ -332,21 +325,15 @@ rule make_epochs:
 
 rule run_lmeeeg:
     input:
-        epochs=EPOCHS_OUTPUT_PATTERN,
+        epochs=EPOCH_OUTPUTS,
         config=LMEEEG_CONFIG_PATH,
     output:
-        summary=LMEEEG_SUMMARY_OUTPUT_PATTERN,
+        summary=LMEEEG_SUMMARY_OUTPUT,
     run:
-        output_dir = os.path.dirname(output.summary)
-        shell(
-            'PYTHONPATH="{src_dir}" "{python_bin}" -m cas.cli.main lmeeeg '
-            '--epochs "{epochs}" '
-            '--config "{config}" '
-            '--output-dir "{output_dir}"'.format(
-                src_dir=SRC_DIR,
-                python_bin=PYTHON_BIN,
-                epochs=input.epochs,
-                config=input.config,
-                output_dir=output_dir,
-            )
+        from cas.stats.lmeeeg_pipeline import run_pooled_lmeeeg_analysis
+
+        run_pooled_lmeeeg_analysis(
+            epochs_paths=list(input.epochs),
+            config_path=input.config,
+            output_dir=os.path.dirname(output.summary),
         )
