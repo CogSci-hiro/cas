@@ -22,3 +22,8 @@ rule events_all:
 rule epochs_all:
     input:
         EPOCH_OUTPUTS
+
+
+rule lmeeeg_all:
+    input:
+        LMEEEG_OUTPUTS

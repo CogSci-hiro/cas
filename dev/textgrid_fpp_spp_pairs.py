@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Extract FPP-SPP pairs from Praat TextGrid files into a single CSV.
 
-This script scans a flat directory of files such as::
+This script scans a directory tree of files such as::
 
     /Users/hiro/Datasets/anais/dyad-003_run-1_combined.TextGrid
 
@@ -45,7 +45,7 @@ import csv
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 
 # Parsing constants
@@ -60,6 +60,21 @@ INTERVAL_PATTERN = re.compile(
     re.DOTALL,
 )
 FILENAME_PATTERN = re.compile(r"dyad-(?P<dyad>\d+)_run-(?P<run>\d+)_combined\.TextGrid$")
+SPEAKER_TIER_PATTERN = re.compile(r"(?P<prefix>actions?|palign|ipu)[-\s]+(?P<speaker>[ab])", re.IGNORECASE)
+LABEL_SEPARATOR_PATTERN = re.compile(r"[_\s]+")
+LABEL_COMPONENT_TYPO_MAP = {
+    "?": "",
+    "C": "C",
+    "ONF": "CONF",
+    "C ONF": "CONF",
+    "CON": "CONF",
+    "CONC": "CONF",
+    "CONF": "CONF",
+    "DIS": "DISC",
+    "DISC": "DISC",
+    "DSIC": "DISC",
+    "RFC": "RFC",
+}
 
 
 # Matching constants
@@ -163,7 +178,7 @@ def parse_interval_tiers(text: str) -> Dict[str, List[Interval]]:
         if name_match is None:
             continue
 
-        tier_name = name_match.group(1)
+        tier_name = canonicalize_tier_name(name_match.group(1))
         intervals: List[Interval] = []
         for onset_text, offset_text, label_text in INTERVAL_PATTERN.findall(chunk):
             intervals.append(
@@ -175,9 +190,29 @@ def parse_interval_tiers(text: str) -> Dict[str, List[Interval]]:
             )
 
         if intervals:
-            tiers[tier_name] = intervals
+            tiers.setdefault(tier_name, []).extend(intervals)
 
     return tiers
+
+
+def canonicalize_tier_name(tier_name: str) -> str:
+    """Normalize safe tier-name variants to one canonical spelling."""
+    compact_name = " ".join(tier_name.strip().split())
+    if not compact_name:
+        return tier_name
+
+    speaker_match = SPEAKER_TIER_PATTERN.fullmatch(compact_name)
+    if speaker_match is not None:
+        prefix = speaker_match.group("prefix").lower()
+        speaker_id = speaker_match.group("speaker").upper()
+        if prefix in {"action", "actions"}:
+            return f"actions {speaker_id}"
+        return f"{prefix}-{speaker_id}"
+
+    if compact_name.lower() == "comment":
+        return "comment"
+
+    return compact_name
 
 
 def parse_label_components(label: str) -> Tuple[str, str, str]:
@@ -193,11 +228,30 @@ def parse_label_components(label: str) -> Tuple[str, str, str]:
     tuple of str
         ``(event_type, class_1, class_2)``.
     """
-    parts = label.split("_")
+    normalized_label = normalize_action_label(label)
+    parts = normalized_label.split("_")
     event_type = parts[0] if len(parts) >= 1 else ""
     class_1 = parts[1] if len(parts) >= 2 else ""
     class_2 = "_".join(parts[2:]) if len(parts) >= 3 else ""
     return event_type, class_1, class_2
+
+
+def normalize_action_label(label: str) -> str:
+    """Normalize known label typos without changing intended classes."""
+    normalized_label = label.strip().replace("è", "_")
+    if not normalized_label:
+        return normalized_label
+
+    parts = normalized_label.split("_")
+    normalized_parts: List[str] = []
+    for part in parts:
+        cleaned_part = " ".join(part.split()).upper()
+        canonical_part = LABEL_COMPONENT_TYPO_MAP.get(cleaned_part, cleaned_part)
+        if canonical_part:
+            normalized_parts.extend(
+                token for token in LABEL_SEPARATOR_PATTERN.split(canonical_part) if token
+            )
+    return "_".join(normalized_parts)
 
 
 def extract_action_events(tiers: Dict[str, List[Interval]]) -> List[Event]:
@@ -218,7 +272,7 @@ def extract_action_events(tiers: Dict[str, List[Interval]]) -> List[Event]:
     for speaker_id in ("A", "B"):
         tier_name = f"actions {speaker_id}"
         for interval in tiers.get(tier_name, []):
-            label = interval.text.strip()
+            label = normalize_action_label(interval.text)
             if not label:
                 continue
 
@@ -333,6 +387,22 @@ def parse_dyad_and_run(path: Path) -> Tuple[str, str]:
     return match.group("dyad"), match.group("run")
 
 
+def infer_subject_ids(dyad_id: str) -> Dict[str, str]:
+    """Infer A/B subject IDs from the dyad ID.
+
+    Dyad numbering is 1-based, with speaker A assigned the odd participant
+    index and speaker B assigned the even participant index.
+    """
+    dyad_number = int(dyad_id)
+    subject_a_number = dyad_number * 2 - 1
+    subject_b_number = dyad_number * 2
+    width = max(3, len(dyad_id))
+    return {
+        "A": f"subject-{subject_a_number:0{width}d}",
+        "B": f"subject-{subject_b_number:0{width}d}",
+    }
+
+
 def pair_events_for_file(path: Path) -> List[Dict[str, object]]:
     """Create one output row per matched FPP-SPP pair for a single file.
 
@@ -347,6 +417,7 @@ def pair_events_for_file(path: Path) -> List[Dict[str, object]]:
         CSV-ready rows for this file.
     """
     dyad_id, run_id = parse_dyad_and_run(path)
+    subject_ids = infer_subject_ids(dyad_id)
     tiers = parse_interval_tiers(read_textgrid_text(path))
     events = extract_action_events(tiers)
 
@@ -385,8 +456,8 @@ def pair_events_for_file(path: Path) -> List[Dict[str, object]]:
             {
                 "dyad_id": dyad_id,
                 "run": run_id,
-                "fpp_speaker_id": fpp_event.speaker_id,
-                "spp_speaker_id": spp_event.speaker_id,
+                "fpp_speaker_id": subject_ids[fpp_event.speaker_id],
+                "spp_speaker_id": subject_ids[spp_event.speaker_id],
                 "fpp_onset_s": fpp_event.onset_s,
                 "fpp_offset_s": fpp_event.offset_s,
                 "spp_onset_s": spp_event.onset_s,
@@ -407,19 +478,19 @@ def pair_events_for_file(path: Path) -> List[Dict[str, object]]:
 
 
 def discover_textgrid_paths(input_dir: Path) -> List[Path]:
-    """Find matching TextGrid files in a flat directory.
+    """Find matching TextGrid files in a directory tree.
 
     Parameters
     ----------
     input_dir
-        Directory containing TextGrid files.
+        Root directory containing TextGrid files.
 
     Returns
     -------
     list of Path
         Sorted matching file paths.
     """
-    paths = sorted(input_dir.glob("dyad-*_run-*_combined.TextGrid"))
+    paths = sorted(input_dir.rglob("dyad-*_run-*_combined.TextGrid"))
     return [path for path in paths if path.is_file()]
 
 
@@ -467,7 +538,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "--input-dir",
         type=Path,
         required=True,
-        help="Flat directory containing dyad-*_run-*_combined.TextGrid files.",
+        help="Directory tree containing dyad-*_run-*_combined.TextGrid files.",
     )
     parser.add_argument(
         "--output-csv",

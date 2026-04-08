@@ -25,6 +25,7 @@ dependencies = [
 
     # Statistical modelling
     "statsmodels>=0.14",
+    "lmeeeg==0.3.4",
 
     # Survival / hazard models
     "lifelines>=0.28",

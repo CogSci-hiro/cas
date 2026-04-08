@@ -4,6 +4,7 @@
 
 import csv
 import os
+import sys
 import yaml
 
 # -----------------------------------------------------------------------------
@@ -12,6 +13,9 @@ import yaml
 PROJECT_ROOT = "/Users/hiro/Projects/active/cas"
 WORKFLOW_DIR = f"{PROJECT_ROOT}/workflow"
 SRC_DIR = f"{PROJECT_ROOT}/src"
+PYTHON_BIN = sys.executable
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
 CONFIG_DIR = f"{PROJECT_ROOT}/config"
 
 PATHS_CONFIG_PATH = f"{CONFIG_DIR}/paths.yaml"

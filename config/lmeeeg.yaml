@@ -1,0 +1,38 @@
+lmeeeg:
+  selection:
+    event_type: "other_spp_onset"
+    # Optional second-stage pandas query over epoch metadata after epochs[event_type].
+    # metadata_query: "latency > 0 and duration_s >= 0.1"
+
+  models:
+    ssp_model:
+      formula: "~ spp_label + latency + duration_s + run"
+      eligibility:
+        not_null:
+          - "spp_label"
+          - "latency"
+          - "duration_s"
+        min_values:
+          duration_s: 0.10
+      test_predictors:
+        - "spp_label"
+      standardize:
+        - "latency"
+        - "duration_s"
+      random_effect_group: "subject_id"
+      random_effect_structure: "random_intercept"
+
+  test:
+    method: "cluster"
+    n_permutations: 1024
+    tail: 0
+    adjacency: "mne_default"
+    montage: "standard_1020"
+    cluster_forming_alpha: 0.05
+    seed: 0
+
+    # For TFCE, switch method and provide a threshold mapping:
+    # method: "tfce"
+    # tfce_threshold:
+    #   start: 0.0
+    #   step: 0.2

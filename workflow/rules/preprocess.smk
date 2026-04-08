@@ -85,7 +85,9 @@ def preprocess_annotation_input(wildcards):
     subject_id = f"sub-{wildcards.subject}"
     dyad_id = SUBJECT_TO_DYAD_MAP.get(subject_id)
     if not dyad_id:
-        return []
+        subject_number = int(wildcards.subject)
+        dyad_number = (subject_number + 1) // 2
+        dyad_id = f"dyad-{dyad_number:03d}"
 
     annotation_path = os.path.join(
         ANNOTATIONS_DIR,
@@ -109,7 +111,11 @@ def preprocess_ica_input(wildcards):
             run=wildcards.run,
         ),
     )
-    return [ica_path]
+    # Keep ICA optional at the workflow layer to match CAS/rate preprocessing,
+    # which applies a precomputed ICA only when the file is present.
+    if os.path.exists(ica_path):
+        return [ica_path]
+    return []
 
 
 PREPROCESSED_EEG_RECORDS = _discover_preprocessed_eeg_records()

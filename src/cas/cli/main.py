@@ -386,6 +386,27 @@ def _build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Precomputed ICA .fif path.",
     )
+
+    lmeeeg_parser = subparsers.add_parser(
+        "lmeeeg",
+        help="Run config-driven lmeEEG analysis from an existing epochs file.",
+    )
+    lmeeeg_parser.add_argument("--epochs", required=True, help="Input epochs .fif path.")
+    lmeeeg_parser.add_argument(
+        "--config",
+        required=True,
+        help="Standalone lmeEEG YAML config path.",
+    )
+    lmeeeg_parser.add_argument(
+        "--output-dir",
+        required=True,
+        help="Directory where lmeEEG outputs will be written.",
+    )
+    lmeeeg_parser.add_argument(
+        "--metadata-csv",
+        default=None,
+        help="Optional metadata CSV path when epochs.metadata is missing or should be overridden.",
+    )
     return parser
 
 
@@ -593,6 +614,19 @@ def _run_apply_ica(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_lmeeeg(args: argparse.Namespace) -> int:
+    from cas.stats.lmeeeg_pipeline import run_lmeeeg_analysis
+
+    summary = run_lmeeeg_analysis(
+        epochs_path=args.epochs,
+        config_path=args.config,
+        output_dir=args.output_dir,
+        metadata_csv=args.metadata_csv,
+    )
+    print(json.dumps(summary, indent=2))
+    return 0
+
+
 def _build_config_driven_trf_inputs(
     *,
     trf_config: dict,
@@ -768,6 +802,8 @@ def main() -> int:
         return _run_average_reference(args)
     if args.command == "apply-ica":
         return _run_apply_ica(args)
+    if args.command == "lmeeeg":
+        return _run_lmeeeg(args)
     parser.error(f"Unknown command: {args.command}")
     return 2
 
