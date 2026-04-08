@@ -1,0 +1,14 @@
+viz:
+  dpi: 300
+  formats:
+    - png
+    - pdf
+  figures:
+    lmeeeg:
+      formats:
+        - png
+        - pdf
+    lmeeeg_inference:
+      formats:
+        - png
+        - pdf

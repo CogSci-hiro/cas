@@ -14,9 +14,22 @@ PREPROCESSED_EEG_OUTPUT_PATTERN = f"{PREPROCESSING_RUN_DIR_PATTERN}/preprocessed
 PREPROCESSED_EMG_OUTPUT_PATTERN = f"{PREPROCESSING_RUN_DIR_PATTERN}/emg.npz"
 PREPROCESSED_EVENTS_OUTPUT_PATTERN = f"{PREPROCESSING_RUN_DIR_PATTERN}/events.tsv"
 PREPROCESSED_SUMMARY_OUTPUT_PATTERN = f"{PREPROCESSING_RUN_DIR_PATTERN}/summary.json"
+PREPROCESSED_INTERMEDIATES_DIR_PATTERN = f"{PREPROCESSING_RUN_DIR_PATTERN}/intermediates"
 
 PREPROCESSING_SETTINGS = PREPROCESSING_CONFIG["preprocessing"]
 APPLY_PRECOMPUTED_ICA = bool(PREPROCESSING_SETTINGS.get("apply_ica", False))
+
+
+def _expected_ica_path(subject: str, task: str, run: str) -> str:
+    ica_filename_template = PREPROCESSING_SETTINGS["ica_filename_template"]
+    return os.path.join(
+        ICA_DIR,
+        ica_filename_template.format(
+            subject=subject,
+            task=task,
+            run=run,
+        ),
+    )
 
 
 def _is_included_eeg_record(subject: str, task: str, run: str) -> bool:
@@ -47,6 +60,8 @@ def _discover_preprocessed_eeg_records() -> list[dict[str, str]]:
             if record_key in seen_record_keys:
                 continue
             if not _is_included_eeg_record(subject, task, run):
+                continue
+            if APPLY_PRECOMPUTED_ICA and not os.path.exists(_expected_ica_path(subject, task, run)):
                 continue
             records.append({"subject": subject, "task": task, "run": run})
             seen_record_keys.add(record_key)
@@ -102,20 +117,13 @@ def preprocess_ica_input(wildcards):
     if not APPLY_PRECOMPUTED_ICA:
         return []
 
-    ica_filename_template = PREPROCESSING_SETTINGS["ica_filename_template"]
-    ica_path = os.path.join(
-        ICA_DIR,
-        ica_filename_template.format(
-            subject=wildcards.subject,
-            task=wildcards.task,
-            run=wildcards.run,
-        ),
-    )
-    # Keep ICA optional at the workflow layer to match CAS/rate preprocessing,
-    # which applies a precomputed ICA only when the file is present.
-    if os.path.exists(ica_path):
-        return [ica_path]
-    return []
+    ica_path = _expected_ica_path(wildcards.subject, wildcards.task, wildcards.run)
+    if not os.path.exists(ica_path):
+        raise FileNotFoundError(
+            f"ICA file unexpectedly missing for included record "
+            f"sub-{wildcards.subject} task={wildcards.task} run={wildcards.run}: {ica_path}"
+        )
+    return [ica_path]
 
 
 PREPROCESSED_EEG_RECORDS = _discover_preprocessed_eeg_records()
@@ -191,6 +199,14 @@ rule preprocess_eeg:
 
         if not bool(PREPROCESSING_SETTINGS.get("keep_emg", True)):
             command_parts.append("--skip-emg")
+
+        if bool(PREPROCESSING_SETTINGS.get("save_intermediates", False)):
+            intermediates_dir = PREPROCESSED_INTERMEDIATES_DIR_PATTERN.format(
+                subject=wildcards.subject,
+                task=wildcards.task,
+                run=wildcards.run,
+            )
+            command_parts.append(f'--intermediates-dir "{intermediates_dir}"')
 
         ica_inputs = list(input.ica)
         if ica_inputs:

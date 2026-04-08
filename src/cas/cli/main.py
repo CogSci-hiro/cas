@@ -690,10 +690,15 @@ def _run_lmeeeg(args: argparse.Namespace) -> int:
     return 0
 
 
+def _lmeeeg_analysis_root(out_dir: Path) -> Path:
+    return out_dir / "lmeeeg"
+
+
 def _load_lmeeeg_model_payloads(*, out_dir: Path, config_root: Path) -> dict[str, dict[str, object]]:
     from cas.stats.lmeeeg_pipeline import load_lmeeeg_config
 
-    lmeeeg_root = out_dir / "lmeeeg"
+    analysis_root = _lmeeeg_analysis_root(out_dir)
+    lmeeeg_root = analysis_root / "lmeeeg"
     config = load_lmeeeg_config(config_root / "lmeeeg.yaml")
     model_names = [str(name) for name in (config.get("models") or {}).keys()]
     payloads: dict[str, dict[str, object]] = {}
@@ -742,7 +747,7 @@ def _load_significance_masks(*, stats_root: Path, model_payloads: dict[str, dict
             continue
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
         model_name = effect_dir.parent.name
-        effect_name = effect_dir.name
+        effect_name = str(summary.get("effect") or effect_dir.name)
         if model_name not in model_payloads:
             continue
         corrected_p_path = Path(str(summary.get("corrected_p_values", "")))
@@ -769,8 +774,9 @@ def _run_figures_lmeeeg(args: argparse.Namespace) -> int:
     dpi = int(viz_section.get("dpi", 300))
     output_path = Path(args.output) if args.output else out_dir / "figures" / "lmeeeg" / "figure_manifest.json"
 
+    analysis_root = _lmeeeg_analysis_root(out_dir)
     model_payloads = _load_lmeeeg_model_payloads(out_dir=out_dir, config_root=config_root)
-    stats_root = out_dir / "stats" / "lmeeeg"
+    stats_root = analysis_root / "stats" / "lmeeeg"
     significance_masks = _load_significance_masks(stats_root=stats_root, model_payloads=model_payloads)
     primary_manifest = build_lmeeeg_qc_manifest_from_model_payloads(
         out_dir=out_dir,
@@ -821,10 +827,11 @@ def _run_figures_lmeeeg_inference(args: argparse.Namespace) -> int:
     dpi = int(viz_section.get("dpi", 300))
     output_path = Path(args.output) if args.output else out_dir / "figures" / "lmeeeg_inference" / "figure_manifest.json"
 
+    analysis_root = _lmeeeg_analysis_root(out_dir)
     manifest = build_lmeeeg_inference_manifest(
         out_dir=out_dir,
-        stats_root=out_dir / "stats" / "lmeeeg",
-        lmeeeg_root=out_dir / "lmeeeg",
+        stats_root=analysis_root / "stats" / "lmeeeg",
+        lmeeeg_root=analysis_root / "lmeeeg",
         manifest_path=output_path,
         formats=formats,
         dpi=dpi,
