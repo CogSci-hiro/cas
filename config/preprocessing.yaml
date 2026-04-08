@@ -3,21 +3,39 @@
 # ============================================================
 
 preprocessing:
-  # Optional target sampling rate in Hz. Set to null to keep the native rate.
-  target_sampling_rate_hz: 250.0
+  # Documented pipeline order. Execution is currently hard-coded in
+  # src/cas/preprocessing/pipeline.py rather than driven by this list.
+  pipeline_order:
+    - extract_events
+    - split_channels
+    - apply_montage
+    - load_bad_channels
+    - downsample
+    - filter
+    - apply_ica
+    - interpolate_bad_channels
+    - rereference
 
-  # Broad EEG filtering parameters. Either value can be null for one-sided filtering.
-  low_cut_hz: 0.5
+  # Event extraction
+  annotation_pairing_margin_s: 1.0
+
+  # Channel grouping
+  montage: "standard_1020"
+  keep_emg: true
+  eeg_channel_names: []
+  eeg_channel_patterns: []
+  emg_channel_names: []
+  emg_channel_patterns:
+    - "(?i)^emg\\d*$"
+    - "(?i)\\bemg\\b"
+
+  # EEG processing defaults
+  target_sampling_rate_hz: 200.0
+  low_cut_hz: 0.1
   high_cut_hz: 40.0
-
-  # Use bad channels from the matching BIDS channels.tsv and interpolate them.
   interpolate_bad_channels: true
-
-  # Apply average EEG rereferencing once after bad channel interpolation.
   apply_rereference: true
 
-  # Apply precomputed ICA if available in paths.yaml:ica_dir.
-  apply_ica: false
-
-  # File naming pattern for saved ICA models inside paths.yaml:ica_dir.
+  # Apply precomputed ICA only when a matching file exists.
+  apply_ica: true
   ica_filename_template: "sub-{subject}_task-{task}_run-{run}_raw_ica.fif"

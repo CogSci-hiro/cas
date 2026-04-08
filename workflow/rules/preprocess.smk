@@ -7,10 +7,13 @@ EEG_RAW_FIF_PATTERN = (
 EEG_CHANNELS_TSV_PATTERN = (
     f"{BIDS_DIR}/sub-{{subject}}/eeg/sub-{{subject}}_task-{{task}}_run-{{run}}_channels.tsv"
 )
-PREPROCESSED_EEG_OUTPUT_PATTERN = (
-    f"{PREPROCESSED_EEG_ROOT}/sub-{{subject}}/eeg/"
-    f"sub-{{subject}}_task-{{task}}_run-{{run}}_desc-preprocessed_eeg.fif"
+PREPROCESSING_RUN_DIR_PATTERN = (
+    f"{PREPROCESSED_EEG_ROOT}/sub-{{subject}}/task-{{task}}/run-{{run}}"
 )
+PREPROCESSED_EEG_OUTPUT_PATTERN = f"{PREPROCESSING_RUN_DIR_PATTERN}/preprocessed_eeg.fif"
+PREPROCESSED_EMG_OUTPUT_PATTERN = f"{PREPROCESSING_RUN_DIR_PATTERN}/emg.npz"
+PREPROCESSED_EVENTS_OUTPUT_PATTERN = f"{PREPROCESSING_RUN_DIR_PATTERN}/events.tsv"
+PREPROCESSED_SUMMARY_OUTPUT_PATTERN = f"{PREPROCESSING_RUN_DIR_PATTERN}/summary.json"
 
 PREPROCESSING_SETTINGS = PREPROCESSING_CONFIG["preprocessing"]
 APPLY_PRECOMPUTED_ICA = bool(PREPROCESSING_SETTINGS.get("apply_ica", False))
@@ -78,6 +81,21 @@ def preprocess_channels_tsv_input(wildcards):
     return channels_tsv_path
 
 
+def preprocess_annotation_input(wildcards):
+    subject_id = f"sub-{wildcards.subject}"
+    dyad_id = SUBJECT_TO_DYAD_MAP.get(subject_id)
+    if not dyad_id:
+        return []
+
+    annotation_path = os.path.join(
+        ANNOTATIONS_DIR,
+        f"{dyad_id}_run-{wildcards.run}_combined.TextGrid",
+    )
+    if os.path.exists(annotation_path):
+        return [annotation_path]
+    return []
+
+
 def preprocess_ica_input(wildcards):
     if not APPLY_PRECOMPUTED_ICA:
         return []
@@ -91,11 +109,6 @@ def preprocess_ica_input(wildcards):
             run=wildcards.run,
         ),
     )
-    if not os.path.exists(ica_path):
-        raise FileNotFoundError(
-            f"No ICA file found for sub-{wildcards.subject}, task {wildcards.task}, "
-            f"run {wildcards.run}: {ica_path}"
-        )
     return [ica_path]
 
 
@@ -113,16 +126,27 @@ rule preprocess_eeg:
     input:
         raw=preprocess_raw_input,
         channels_tsv=preprocess_channels_tsv_input,
+        annotation=preprocess_annotation_input,
         ica=preprocess_ica_input,
     output:
-        PREPROCESSED_EEG_OUTPUT_PATTERN,
+        eeg=PREPROCESSED_EEG_OUTPUT_PATTERN,
+        emg=PREPROCESSED_EMG_OUTPUT_PATTERN,
+        events=PREPROCESSED_EVENTS_OUTPUT_PATTERN,
+        summary=PREPROCESSED_SUMMARY_OUTPUT_PATTERN,
     run:
         command_parts = [
             f'PYTHONPATH="{SRC_DIR}" python -m cas.cli.main preprocess-raw',
             f'--input "{input.raw}"',
-            f'--output "{output[0]}"',
+            f'--output "{output.eeg}"',
             f'--channels-tsv "{input.channels_tsv}"',
+            f'--emg-output "{output.emg}"',
+            f'--events-output "{output.events}"',
+            f'--summary-json "{output.summary}"',
         ]
+
+        annotation_inputs = list(input.annotation)
+        if annotation_inputs:
+            command_parts.append(f'--annotations-path "{annotation_inputs[0]}"')
 
         target_sampling_rate_hz = PREPROCESSING_SETTINGS.get("target_sampling_rate_hz")
         if target_sampling_rate_hz is not None:
@@ -136,11 +160,31 @@ rule preprocess_eeg:
         if high_cut_hz is not None:
             command_parts.append(f"--high-cut-hz {float(high_cut_hz)}")
 
+        montage_name = PREPROCESSING_SETTINGS.get("montage")
+        if montage_name is not None:
+            command_parts.append(f'--montage "{montage_name}"')
+
+        annotation_pairing_margin_s = PREPROCESSING_SETTINGS.get("annotation_pairing_margin_s")
+        if annotation_pairing_margin_s is not None:
+            command_parts.append(f"--annotation-pairing-margin-s {float(annotation_pairing_margin_s)}")
+
+        for channel_name in PREPROCESSING_SETTINGS.get("eeg_channel_names", []):
+            command_parts.append(f'--eeg-channel-name "{channel_name}"')
+        for channel_pattern in PREPROCESSING_SETTINGS.get("eeg_channel_patterns", []):
+            command_parts.append(f'--eeg-channel-pattern "{channel_pattern}"')
+        for channel_name in PREPROCESSING_SETTINGS.get("emg_channel_names", []):
+            command_parts.append(f'--emg-channel-name "{channel_name}"')
+        for channel_pattern in PREPROCESSING_SETTINGS.get("emg_channel_patterns", []):
+            command_parts.append(f'--emg-channel-pattern "{channel_pattern}"')
+
         if not bool(PREPROCESSING_SETTINGS.get("interpolate_bad_channels", True)):
             command_parts.append("--skip-interpolate-bads")
 
         if not bool(PREPROCESSING_SETTINGS.get("apply_rereference", True)):
             command_parts.append("--skip-rereference")
+
+        if not bool(PREPROCESSING_SETTINGS.get("keep_emg", True)):
+            command_parts.append("--skip-emg")
 
         ica_inputs = list(input.ica)
         if ica_inputs:

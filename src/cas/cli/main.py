@@ -109,6 +109,23 @@ def _save_raw_fif(raw: "mne.io.BaseRaw", output_path_str: str) -> Path:
     return output_path
 
 
+def _save_npz(output_path_str: str, **arrays: object) -> Path:
+    output_path = Path(output_path_str)
+    if output_path.suffix.lower() != ".npz":
+        raise ValueError("Output NPZ path must end with .npz.")
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez(output_path, **arrays)
+    return output_path
+
+
+def _save_json(data: dict[str, object], output_path_str: str) -> Path:
+    output_path = Path(output_path_str)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return output_path
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="cas", description="CAS command line interface.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -196,6 +213,11 @@ def _build_parser() -> argparse.ArgumentParser:
     preprocess_raw_parser.add_argument("--input", required=True, help="Input EEG .edf or .fif path.")
     preprocess_raw_parser.add_argument("--output", required=True, help="Output preprocessed .fif path.")
     preprocess_raw_parser.add_argument(
+        "--annotations-path",
+        default=None,
+        help="Optional annotation TextGrid path used to derive events before MNE fallback.",
+    )
+    preprocess_raw_parser.add_argument(
         "--channels-tsv",
         default=None,
         help="Optional BIDS channels.tsv path used to load bad channels.",
@@ -224,6 +246,56 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Optional low-pass cutoff in Hz.",
     )
     preprocess_raw_parser.add_argument(
+        "--montage",
+        default="standard_1020",
+        help="Montage name applied to EEG channels. Use an empty string to skip.",
+    )
+    preprocess_raw_parser.add_argument(
+        "--annotation-pairing-margin-s",
+        type=float,
+        default=1.0,
+        help="Pairing margin used when deriving events from annotations.",
+    )
+    preprocess_raw_parser.add_argument(
+        "--eeg-channel-name",
+        action="append",
+        default=[],
+        help="Explicit channel name to force into the EEG set. Repeat as needed.",
+    )
+    preprocess_raw_parser.add_argument(
+        "--eeg-channel-pattern",
+        action="append",
+        default=[],
+        help="Regex pattern used to identify EEG channels. Repeat as needed.",
+    )
+    preprocess_raw_parser.add_argument(
+        "--emg-channel-name",
+        action="append",
+        default=[],
+        help="Explicit channel name to force into the EMG set. Repeat as needed.",
+    )
+    preprocess_raw_parser.add_argument(
+        "--emg-channel-pattern",
+        action="append",
+        default=[],
+        help="Regex pattern used to identify EMG channels. Repeat as needed.",
+    )
+    preprocess_raw_parser.add_argument(
+        "--emg-output",
+        default=None,
+        help="Optional EMG artifact .npz output path.",
+    )
+    preprocess_raw_parser.add_argument(
+        "--events-output",
+        default=None,
+        help="Optional preprocessing events .tsv output path.",
+    )
+    preprocess_raw_parser.add_argument(
+        "--summary-json",
+        default=None,
+        help="Optional preprocessing summary .json output path.",
+    )
+    preprocess_raw_parser.add_argument(
         "--skip-interpolate-bads",
         action="store_true",
         help="Skip bad channel interpolation.",
@@ -232,6 +304,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--skip-rereference",
         action="store_true",
         help="Skip average rereferencing.",
+    )
+    preprocess_raw_parser.add_argument(
+        "--skip-emg",
+        action="store_true",
+        help="Do not preserve EMG channels as a separate NPZ artifact.",
     )
 
     downsample_raw_parser = subparsers.add_parser(
@@ -418,21 +495,46 @@ def _run_eeg_array(args: argparse.Namespace) -> int:
 
 
 def _run_preprocess_raw(args: argparse.Namespace) -> int:
-    from cas.preprocessing import preprocess_raw
+    from cas.preprocessing import preprocess_run, write_events_tsv
 
     raw = _load_raw_eeg(args.input)
-    processed_raw = preprocess_raw(
+    result = preprocess_run(
         raw,
+        annotation_path=args.annotations_path,
         channels_tsv_path=args.channels_tsv,
         ica_path=args.ica_path,
         target_sampling_rate_hz=args.target_sfreq_hz,
         low_cut_hz=args.low_cut_hz,
         high_cut_hz=args.high_cut_hz,
+        montage_name=args.montage or None,
+        annotation_pairing_margin_s=float(args.annotation_pairing_margin_s),
+        eeg_channel_names=list(args.eeg_channel_name),
+        eeg_channel_patterns=list(args.eeg_channel_pattern),
+        emg_channel_names=list(args.emg_channel_name),
+        emg_channel_patterns=list(args.emg_channel_pattern),
         interpolate_bad_channels=not args.skip_interpolate_bads,
         apply_rereference=not args.skip_rereference,
+        keep_emg=not args.skip_emg,
     )
-    output_path = _save_raw_fif(processed_raw, args.output)
+    output_path = _save_raw_fif(result.eeg_raw, args.output)
     print(f"Saved preprocessed raw to {output_path}")
+
+    if args.emg_output:
+        emg_output_path = _save_npz(
+            args.emg_output,
+            data=np.asarray(result.emg_data, dtype=float),
+            channel_names=np.asarray(result.emg_channel_names, dtype=object),
+        )
+        print(f"Saved EMG artifact to {emg_output_path}")
+
+    if args.events_output:
+        events_output_path = write_events_tsv(result.events_rows, args.events_output)
+        print(f"Saved preprocessing events to {events_output_path}")
+
+    if args.summary_json:
+        summary_output_path = _save_json(result.summary, args.summary_json)
+        print(f"Saved preprocessing summary to {summary_output_path}")
+
     return 0
 
 

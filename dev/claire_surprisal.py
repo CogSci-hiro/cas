@@ -39,8 +39,6 @@ Notes
   word list preserves order and corresponds to the same transcript.
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import math
@@ -53,6 +51,7 @@ import numpy as np
 import pandas as pd
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from tqdm import tqdm
 
 
 # Configuration constants
@@ -442,7 +441,7 @@ def compute_per_model_token_surprisal(
     sequence_length = len(input_ids)
     surprisal = np.full(sequence_length, np.nan, dtype=np.float64)
 
-    for target_start in range(1, sequence_length, stride):
+    for target_start in tqdm(range(1, sequence_length, stride)):
         target_end = min(target_start + stride, sequence_length)
         window_start = max(0, target_end - max_length)
         window_ids = input_ids[window_start:target_end]

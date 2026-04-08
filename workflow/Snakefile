@@ -78,6 +78,15 @@ def _load_partner_map(dyads_csv_path: str) -> dict[str, str]:
 PARTNER_MAP = _load_partner_map(DYADS_CSV_PATH)
 
 
+def _load_subject_to_dyad_map(dyads_csv_path: str) -> dict[str, str]:
+    with open(dyads_csv_path, encoding="utf-8") as f:
+        rows = csv.DictReader(f)
+        return {row["subject_id"]: row["dyad_id"] for row in rows}
+
+
+SUBJECT_TO_DYAD_MAP = _load_subject_to_dyad_map(DYADS_CSV_PATH)
+
+
 def _discover_audio_records() -> list[dict[str, str]]:
     wildcard_values = glob_wildcards(AUDIO_PATTERN)
     records: list[dict[str, str]] = []
