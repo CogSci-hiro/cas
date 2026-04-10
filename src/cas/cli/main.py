@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -77,6 +78,10 @@ def _resolve_path(path_str: str, *, project_root: Path, fallback_root: Path | No
     if project_candidate.exists() or fallback_root is None:
         return project_candidate
     return fallback_root / path
+
+
+def _sanitize_token(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_-]+", "_", value).strip("_") or "artifact"
 
 
 def _load_signal(path: str) -> tuple[np.ndarray, float | None]:
@@ -694,17 +699,36 @@ def _lmeeeg_analysis_root(out_dir: Path) -> Path:
     return out_dir / "lmeeeg"
 
 
+def _load_lmeeeg_analysis_summary(*, out_dir: Path) -> dict[str, object]:
+    analysis_root = _lmeeeg_analysis_root(out_dir)
+    summary_path = analysis_root / "lmeeeg_analysis_summary.json"
+    if not summary_path.exists():
+        raise FileNotFoundError(f"Missing pooled lmeEEG analysis summary: {summary_path}")
+    return json.loads(summary_path.read_text(encoding="utf-8"))
+
+
 def _load_lmeeeg_model_payloads(*, out_dir: Path, config_root: Path) -> dict[str, dict[str, object]]:
     from cas.stats.lmeeeg_pipeline import load_lmeeeg_config
 
-    analysis_root = _lmeeeg_analysis_root(out_dir)
-    lmeeeg_root = analysis_root / "lmeeeg"
+    analysis_summary = _load_lmeeeg_analysis_summary(out_dir=out_dir)
+    analysis_models = {
+        str(model.get("model_name")): model
+        for model in (analysis_summary.get("models") or [])
+        if isinstance(model, dict) and model.get("model_name")
+    }
     config = load_lmeeeg_config(config_root / "lmeeeg.yaml")
     model_names = [str(name) for name in (config.get("models") or {}).keys()]
     payloads: dict[str, dict[str, object]] = {}
 
     for model_name in model_names:
-        model_dir = lmeeeg_root / model_name
+        model_summary = analysis_models.get(model_name) or {}
+        fit_summary = model_summary.get("fit") if isinstance(model_summary, dict) else {}
+        model_dir_value = fit_summary.get("output_dir") if isinstance(fit_summary, dict) else None
+        if not isinstance(model_dir_value, str) or not model_dir_value:
+            raise FileNotFoundError(
+                f"Missing pooled lmeEEG fit output directory for model `{model_name}` in analysis summary."
+            )
+        model_dir = Path(model_dir_value)
         required_paths = {
             "betas": model_dir / "betas.npy",
             "t_values": model_dir / "t_values.npy",
@@ -741,14 +765,34 @@ def _load_significance_masks(*, stats_root: Path, model_payloads: dict[str, dict
     if not stats_root.exists():
         return masks
 
-    for effect_dir in sorted(path for path in stats_root.glob("*/*") if path.is_dir()):
+    expected_shapes: dict[str, dict[str, tuple[int, int]]] = {}
+    for model_name, payload in model_payloads.items():
+        column_names = [str(name) for name in (payload.get("column_names") or [])]
+        betas = np.asarray(payload.get("betas"))
+        if betas.ndim != 3:
+            continue
+        model_shapes: dict[str, tuple[int, int]] = {}
+        for column_index, column_name in enumerate(column_names):
+            if column_index >= betas.shape[0]:
+                break
+            column_map = np.asarray(betas[column_index])
+            if column_map.ndim == 2:
+                model_shapes[column_name] = (int(column_map.shape[0]), int(column_map.shape[1]))
+        if model_shapes:
+            expected_shapes[model_name] = model_shapes
+
+    for summary_path in sorted(stats_root.glob("**/summary.json")):
+        effect_dir = summary_path.parent
         summary_path = effect_dir / "summary.json"
         if not summary_path.exists():
             continue
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
-        model_name = effect_dir.parent.name
+        model_name = str(summary.get("model_name") or effect_dir.parent.name)
         effect_name = str(summary.get("effect") or effect_dir.name)
         if model_name not in model_payloads:
+            continue
+        expected_shape = expected_shapes.get(model_name, {}).get(effect_name)
+        if expected_shape is None:
             continue
         corrected_p_path = Path(str(summary.get("corrected_p_values", "")))
         if not corrected_p_path.exists():
@@ -756,7 +800,13 @@ def _load_significance_masks(*, stats_root: Path, model_payloads: dict[str, dict
         corrected_p_values = np.asarray(np.load(corrected_p_path), dtype=float)
         if corrected_p_values.ndim != 2:
             continue
-        masks.setdefault(model_name, {})[effect_name] = corrected_p_values < 0.05
+        if corrected_p_values.shape == expected_shape:
+            mask_array = corrected_p_values < 0.05
+        elif corrected_p_values.T.shape == expected_shape:
+            mask_array = corrected_p_values.T < 0.05
+        else:
+            continue
+        masks.setdefault(model_name, {})[effect_name] = mask_array
     return masks
 
 
@@ -776,7 +826,7 @@ def _run_figures_lmeeeg(args: argparse.Namespace) -> int:
 
     analysis_root = _lmeeeg_analysis_root(out_dir)
     model_payloads = _load_lmeeeg_model_payloads(out_dir=out_dir, config_root=config_root)
-    stats_root = analysis_root / "stats" / "lmeeeg"
+    stats_root = out_dir / "stats" / "lmeeeg"
     significance_masks = _load_significance_masks(stats_root=stats_root, model_payloads=model_payloads)
     primary_manifest = build_lmeeeg_qc_manifest_from_model_payloads(
         out_dir=out_dir,
@@ -817,7 +867,7 @@ def _run_figures_lmeeeg(args: argparse.Namespace) -> int:
 
 
 def _run_figures_lmeeeg_inference(args: argparse.Namespace) -> int:
-    from ref_viz.lmeeeg import build_lmeeeg_inference_manifest
+    from ref_viz.lmeeeg import plot_joint_model_weights
 
     config_root = Path(args.config_root).resolve()
     out_dir = _resolve_out_dir(config_root)
@@ -827,15 +877,98 @@ def _run_figures_lmeeeg_inference(args: argparse.Namespace) -> int:
     dpi = int(viz_section.get("dpi", 300))
     output_path = Path(args.output) if args.output else out_dir / "figures" / "lmeeeg_inference" / "figure_manifest.json"
 
-    analysis_root = _lmeeeg_analysis_root(out_dir)
-    manifest = build_lmeeeg_inference_manifest(
-        out_dir=out_dir,
-        stats_root=analysis_root / "stats" / "lmeeeg",
-        lmeeeg_root=analysis_root / "lmeeeg",
-        manifest_path=output_path,
-        formats=formats,
-        dpi=dpi,
-    )
+    analysis_summary = _load_lmeeeg_analysis_summary(out_dir=out_dir)
+    plots: list[dict[str, object]] = []
+    for model_summary in analysis_summary.get("models") or []:
+        if not isinstance(model_summary, dict):
+            continue
+        model_name = str(model_summary.get("model_name") or "")
+        if not model_name:
+            continue
+        fit_summary = model_summary.get("fit") if isinstance(model_summary.get("fit"), dict) else {}
+        model_dir_value = fit_summary.get("output_dir") if isinstance(fit_summary, dict) else None
+        if not isinstance(model_dir_value, str) or not model_dir_value:
+            continue
+        fit_model_dir = Path(model_dir_value)
+        times_path = fit_model_dir / "times.npy"
+        channel_names_path = fit_model_dir / "channel_names.json"
+        if not times_path.exists() or not channel_names_path.exists():
+            continue
+        times = np.load(times_path)
+        channel_names = json.loads(channel_names_path.read_text(encoding="utf-8"))
+
+        for inference_summary in model_summary.get("inference") or []:
+            if not isinstance(inference_summary, dict):
+                continue
+            effect_name = str(inference_summary.get("effect") or "")
+            observed_value = inference_summary.get("observed_statistic")
+            corrected_p_value = inference_summary.get("corrected_p_values")
+            if not effect_name or not isinstance(observed_value, str) or not isinstance(corrected_p_value, str):
+                continue
+            observed_path = Path(observed_value)
+            corrected_p_path = Path(corrected_p_value)
+            if not observed_path.exists() or not corrected_p_path.exists():
+                continue
+
+            observed_map = np.asarray(np.load(observed_path), dtype=float)
+            corrected_p_array = np.asarray(np.load(corrected_p_path), dtype=float)
+            significance_mask = corrected_p_array < 0.05
+            significance_map = np.where(significance_mask, observed_map, 0.0)
+
+            observed_stem = out_dir / "figures" / "lmeeeg_inference" / model_name / f"{_sanitize_token(effect_name)}_observed"
+            observed_paths = plot_joint_model_weights(
+                observed_map,
+                times=times,
+                channel_names=channel_names,
+                output_stem=observed_stem,
+                title=f"lmeEEG observed statistic | {model_name} | {effect_name}",
+                formats=formats,
+                dpi=dpi,
+                line_width=2.5,
+            )
+            corrected_p_stem = out_dir / "figures" / "lmeeeg_inference" / model_name / f"{_sanitize_token(effect_name)}_corrected_p"
+            corrected_p_paths = plot_joint_model_weights(
+                1.0 - corrected_p_array,
+                times=times,
+                channel_names=channel_names,
+                output_stem=corrected_p_stem,
+                title=f"lmeEEG 1-corrected p | {model_name} | {effect_name}",
+                formats=formats,
+                dpi=dpi,
+                line_width=2.5,
+            )
+            pvalue_stem = out_dir / "figures" / "lmeeeg_inference" / model_name / f"{_sanitize_token(effect_name)}_p005_masked"
+            pvalue_paths = plot_joint_model_weights(
+                significance_map,
+                times=times,
+                channel_names=channel_names,
+                output_stem=pvalue_stem,
+                title=f"lmeEEG corrected p<0.05 | {model_name} | {effect_name}",
+                formats=formats,
+                dpi=dpi,
+                line_width=2.5,
+            )
+            plots.append(
+                {
+                    "model_name": model_name,
+                    "effect": effect_name,
+                    "correction": inference_summary.get("correction"),
+                    "observed_files": [str(path) for path in observed_paths],
+                    "corrected_p_files": [str(path) for path in corrected_p_paths],
+                    "significant_files": [str(path) for path in pvalue_paths],
+                    "has_significant_samples": bool(np.any(significance_mask)),
+                    "min_corrected_p": inference_summary.get("min_corrected_p"),
+                    "n_significant_p_lt_0_05": inference_summary.get("n_significant_p_lt_0_05"),
+                }
+            )
+
+    manifest = {
+        "status": "ok",
+        "plot_count": len(plots),
+        "plots": plots,
+    }
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps(manifest, indent=2))
     return 0
 

@@ -17,3 +17,13 @@ epochs:
     - "other_spp_onset"
     - "other_spp_offset"
   reject_by_annotation: true
+
+induced_source_epochs:
+  output:
+    root: "induced_source_epochs"
+  timing:
+    tmin_s: -1.0
+    tmax_s: 0.5
+    baseline_s:
+      - -0.5
+      - 0.0
