@@ -1,0 +1,20 @@
+"""Test configuration for CAS."""
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_ROOT = PROJECT_ROOT / "src"
+
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
+os.environ.setdefault("MNE_HOME", str(PROJECT_ROOT / ".mne"))
+os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
+os.environ.setdefault("MNE_DONTWRITE_HOME", "true")
