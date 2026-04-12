@@ -334,6 +334,31 @@ def _write_tasklocked_epochs(*, input_eeg, input_raw, events_csv, output_epochs,
 LMEEEG_CONFIG_PATH = f"{CONFIG_DIR}/lmeeeg.yaml"
 LMEEEG_OUTPUT_DIR = f"{OUT_DIR}/lmeeeg"
 LMEEEG_SUMMARY_OUTPUT = f"{LMEEEG_OUTPUT_DIR}/lmeeeg_analysis_summary.json"
+LMEEEG_INDUCED_SUMMARY_OUTPUT = f"{LMEEEG_OUTPUT_DIR}/induced_lmeeeg_analysis_summary.json"
+
+
+def _load_lmeeeg_workflow_config() -> dict[str, object]:
+    with open(LMEEEG_CONFIG_PATH, encoding="utf-8") as handle:
+        payload = yaml.safe_load(handle) or {}
+    if not isinstance(payload, dict):
+        raise ValueError(f"Expected a mapping in {LMEEEG_CONFIG_PATH}.")
+    section = payload.get("lmeeeg", payload)
+    if not isinstance(section, dict):
+        raise ValueError(f"`lmeeeg` in {LMEEEG_CONFIG_PATH} must be a mapping.")
+    loaded = dict(section)
+    if "induced_epochs" in payload:
+        loaded["induced_epochs"] = payload["induced_epochs"]
+    return loaded
+
+
+def _induced_lmeeeg_model_names() -> list[str]:
+    models_cfg = dict(_load_lmeeeg_workflow_config().get("models") or {})
+    selected = [
+        str(model_name)
+        for model_name, model_cfg in models_cfg.items()
+        if str((model_cfg or {}).get("modality", "evoked")).strip().lower() == "induced"
+    ]
+    return sorted(selected)
 
 
 rule make_epochs:
@@ -393,3 +418,56 @@ rule run_lmeeeg:
             config_path=input.config,
             output_dir=os.path.dirname(output.summary),
         )
+
+
+rule run_induced_lmeeeg:
+    input:
+        epochs=EPOCH_OUTPUTS,
+        induced=_induced_epoch_summary_outputs(),
+        config=LMEEEG_CONFIG_PATH,
+    output:
+        summary=LMEEEG_INDUCED_SUMMARY_OUTPUT,
+    run:
+        import json
+        import os
+        import tempfile
+        from pathlib import Path
+
+        from cas.stats.lmeeeg_pipeline import run_pooled_lmeeeg_analysis
+
+        config_payload = _load_lmeeeg_workflow_config()
+        induced_models = {
+            model_name: model_cfg
+            for model_name, model_cfg in dict(config_payload.get("models") or {}).items()
+            if str((model_cfg or {}).get("modality", "evoked")).strip().lower() == "induced"
+        }
+        if not induced_models:
+            raise ValueError("No induced lmeEEG models are configured in config/lmeeeg.yaml.")
+
+        induced_config_payload = {
+            "lmeeeg": {
+                key: value
+                for key, value in config_payload.items()
+                if key not in {"models", "induced_epochs"}
+            }
+        }
+        induced_config_payload["lmeeeg"]["models"] = induced_models
+        if "induced_epochs" in config_payload:
+            induced_config_payload["induced_epochs"] = config_payload["induced_epochs"]
+
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml", encoding="utf-8", delete=False) as handle:
+            yaml.safe_dump(induced_config_payload, handle, sort_keys=False)
+            temp_config_path = handle.name
+
+        try:
+            summary = run_pooled_lmeeeg_analysis(
+                epochs_paths=list(input.epochs),
+                config_path=temp_config_path,
+                output_dir=LMEEEG_OUTPUT_DIR,
+            )
+        finally:
+            if os.path.exists(temp_config_path):
+                os.unlink(temp_config_path)
+
+        Path(output.summary).parent.mkdir(parents=True, exist_ok=True)
+        Path(output.summary).write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")

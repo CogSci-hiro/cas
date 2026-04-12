@@ -27,3 +27,6 @@ induced_source_epochs:
     baseline_s:
       - -0.5
       - 0.0
+
+induced_epochs:
+  bands: ["theta", "alpha", "beta"]

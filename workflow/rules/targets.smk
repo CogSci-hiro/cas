@@ -68,6 +68,11 @@ rule make_induced_epochs_subject:
             write_epoch_summary,
             write_epochs,
         )
+        from rate.induced_epochs.transform import (
+            build_induced_epochs,
+            resolve_induced_band_limits_hz,
+            resolve_induced_band_names,
+        )
 
         source_epochs = [
             mne.read_epochs(path, preload=True, verbose="ERROR")
@@ -85,53 +90,52 @@ rule make_induced_epochs_subject:
         else:
             metadata_df = concatenated.metadata.copy().reset_index(drop=True)
 
-        band_name = "theta"
-        low_hz = 4.0
-        high_hz = 8.0
+        band_names = resolve_induced_band_names(EPOCHS_CONFIG)
+        written_bands = []
+        for band_name in band_names:
+            low_hz, high_hz = resolve_induced_band_limits_hz(band_name, EPOCHS_CONFIG)
+            induced_epochs = build_induced_epochs(concatenated, band_name=band_name, config=EPOCHS_CONFIG)
 
-        induced_epochs = concatenated.copy()
-        induced_epochs.filter(l_freq=low_hz, h_freq=high_hz, picks="data", verbose="ERROR")
-        induced_epochs.apply_hilbert(envelope=True, picks="data", verbose="ERROR")
+            band_dir = Path(OUT_DIR) / "induced_epochs" / band_name / f"sub-{wildcards.subject}"
+            epochs_output = band_dir / "epochs-time_s.fif"
+            metadata_output = band_dir / "metadata-time_s.csv"
+            events_array_output = band_dir / "events-time_s.npy"
+            band_summary_output = band_dir / "epoching_summary-time_s.json"
 
-        band_dir = Path(OUT_DIR) / "induced_epochs" / band_name / f"sub-{wildcards.subject}"
-        epochs_output = band_dir / "epochs-time_s.fif"
-        metadata_output = band_dir / "metadata-time_s.csv"
-        events_array_output = band_dir / "events-time_s.npy"
-        band_summary_output = band_dir / "epoching_summary-time_s.json"
+            band_summary = {
+                "status": "ok",
+                "band_name": band_name,
+                "band_limits_hz": [low_hz, high_hz],
+                "subject_id": f"sub-{wildcards.subject}",
+                "source_epochs_paths": [str(path) for path in input.epochs],
+                "n_source_files": len(input.epochs),
+                "n_epochs": int(len(induced_epochs)),
+                "n_channels": int(len(induced_epochs.ch_names)),
+                "n_times": int(len(induced_epochs.times)),
+                "tmin_s": float(induced_epochs.times[0]) if len(induced_epochs.times) else 0.0,
+                "tmax_s": float(induced_epochs.times[-1]) if len(induced_epochs.times) else 0.0,
+                "sampling_frequency_hz": float(induced_epochs.info["sfreq"]),
+                "method": "bandpass_hilbert_envelope",
+            }
 
-        band_summary = {
-            "status": "ok",
-            "band_name": band_name,
-            "band_limits_hz": [low_hz, high_hz],
-            "subject_id": f"sub-{wildcards.subject}",
-            "source_epochs_paths": [str(path) for path in input.epochs],
-            "n_source_files": len(input.epochs),
-            "n_epochs": int(len(induced_epochs)),
-            "n_channels": int(len(induced_epochs.ch_names)),
-            "n_times": int(len(induced_epochs.times)),
-            "tmin_s": float(induced_epochs.times[0]) if len(induced_epochs.times) else 0.0,
-            "tmax_s": float(induced_epochs.times[-1]) if len(induced_epochs.times) else 0.0,
-            "sampling_frequency_hz": float(induced_epochs.info["sfreq"]),
-            "method": "bandpass_hilbert_envelope",
-        }
-
-        write_epochs(induced_epochs, epochs_output)
-        write_epoch_metadata(metadata_df, metadata_output)
-        write_epoch_events_array(induced_epochs.events.copy(), events_array_output)
-        write_epoch_summary(band_summary, band_summary_output)
+            write_epochs(induced_epochs, epochs_output)
+            write_epoch_metadata(metadata_df, metadata_output)
+            write_epoch_events_array(induced_epochs.events.copy(), events_array_output)
+            write_epoch_summary(band_summary, band_summary_output)
+            written_bands.append(
+                {
+                    "band_name": band_name,
+                    "metadata_output": str(metadata_output),
+                    "epochs_output": str(epochs_output),
+                    "events_array_output": str(events_array_output),
+                    "summary_output": str(band_summary_output),
+                }
+            )
 
         subject_summary = {
             "status": "ok",
             "subject_id": f"sub-{wildcards.subject}",
-            "bands": [
-                {
-                    "band_name": band_name,
-                    "epochs_output": str(epochs_output),
-                    "metadata_output": str(metadata_output),
-                    "events_array_output": str(events_array_output),
-                    "summary_output": str(band_summary_output),
-                }
-            ],
+            "bands": written_bands,
         }
         output_path = Path(output.summary)
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -146,6 +150,11 @@ rule induced_epochs_all:
 rule lmeeeg_all:
     input:
         LMEEEG_SUMMARY_OUTPUT
+
+
+rule induced_lmeeeg_all:
+    input:
+        LMEEEG_INDUCED_SUMMARY_OUTPUT
 
 
 rule figures_lmeeeg_all:
