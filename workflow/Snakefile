@@ -236,7 +236,7 @@ rule confirmatory_core:
 
 rule exploratory:
     input:
-        f"{OUT_DIR}/models/glhmm/results.parquet"
+        GLHMM_FIT_SUMMARY_OUTPUT
 
 
 # -----------------------------------------------------------------------------

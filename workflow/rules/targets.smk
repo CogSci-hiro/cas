@@ -170,6 +170,11 @@ rule induced_lmeeeg_all:
         LMEEEG_INDUCED_SUMMARY_OUTPUT
 
 
+rule tde_hmm_all:
+    input:
+        GLHMM_FIT_SUMMARY_OUTPUT
+
+
 rule figures_lmeeeg_all:
     input:
         LMEEEG_FIGURE_MANIFEST,

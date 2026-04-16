@@ -1,31 +1,14 @@
-
 #!/usr/bin/env python3
 """
-Compute model-token surprisal, Shannon entropy, and a configurable grid of
-Rényi entropies from SPPAS-derived token annotations while preserving original
-annotation structure and timestamps.
+Score clean dialogue uncertainty from SPPAS-derived tokens.
 
-Expected input
---------------
-CSV produced by convert_sppas_tokens_for_lm.py with columns:
-    run, token, speaker, start, end, token_kind, render_for_lm,
-    rendered_text, rendered_piece_count, rendered_pieces_json
-
-What the LM sees
-----------------
-- underscore-joined tokens like du_coup become "du coup"
-- configured special tokens such as @ or * can be skipped entirely
-- original timestamps and SPPAS token rows are preserved
-
-Outputs
--------
-- annotation-level uncertainty CSV
-- rendered-piece/word uncertainty CSV
-- model-token uncertainty CSV
-- rendered_prompt.txt
-- prompt_spans.json
-- rendered_pieces.csv
-- optional compressed full log-probability chunks
+What this version changes
+-------------------------
+1. Fixes bfloat16 full-logprob saving by casting to float32 before NumPy export.
+2. Treats each `run` as a separate conversation context.
+3. Preserves original SPPAS token rows and timestamps while scoring only the
+   clean LM-rendered text.
+4. Supports tiny-model smoke tests and full 7B runs with the same interface.
 """
 
 from __future__ import annotations
@@ -76,91 +59,44 @@ def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description=__doc__)
 
-    parser.add_argument(
-        "--tokens_csv",
-        type=Path,
-        required=True,
-        help="CSV with LM rendering fields from convert_sppas_tokens_for_lm.py.",
-    )
-    parser.add_argument(
-        "--output_dir",
-        type=Path,
-        required=True,
-        help="Directory for outputs.",
-    )
-    parser.add_argument(
-        "--model_name",
-        type=str,
-        default=DEFAULT_MODEL_NAME,
-        help="HF model name or local path.",
-    )
+    parser.add_argument("--tokens_csv", type=Path, required=True)
+    parser.add_argument("--output_dir", type=Path, required=True)
+    parser.add_argument("--model_name", type=str, default=DEFAULT_MODEL_NAME)
     parser.add_argument(
         "--device",
         type=str,
         default="auto",
         choices=["auto", "cpu", "cuda", "mps"],
-        help="Execution device.",
     )
     parser.add_argument(
         "--dtype",
         type=str,
         default="auto",
         choices=["auto", "float32", "float16", "bfloat16"],
-        help="Model dtype.",
     )
-    parser.add_argument(
-        "--max_length",
-        type=int,
-        default=None,
-        help="Override model context length.",
-    )
-    parser.add_argument(
-        "--stride",
-        type=int,
-        default=DEFAULT_STRIDE,
-        help="Number of newly scored positions per forward window.",
-    )
-    parser.add_argument(
-        "--newline_gap_s",
-        type=float,
-        default=DEFAULT_MAX_NEWLINE_GAP_S,
-        help="Insert a line break after silences or gaps at or above this duration.",
-    )
+    parser.add_argument("--max_length", type=int, default=None)
+    parser.add_argument("--stride", type=int, default=DEFAULT_STRIDE)
+    parser.add_argument("--newline_gap_s", type=float, default=DEFAULT_MAX_NEWLINE_GAP_S)
     parser.add_argument(
         "--speaker_prefix_mode",
         type=str,
         default="alphabetic",
         choices=["alphabetic", "original"],
-        help="Use [SpeakerA:] / [SpeakerB:] or original speaker labels.",
     )
-    parser.add_argument(
-        "--bos_token",
-        action="store_true",
-        help="Prepend tokenizer BOS token if available.",
-    )
-    parser.add_argument(
-        "--trust_remote_code",
-        action="store_true",
-        help="Pass trust_remote_code=True to HF loaders.",
-    )
+    parser.add_argument("--bos_token", action="store_true")
+    parser.add_argument("--trust_remote_code", action="store_true")
     parser.add_argument(
         "--renyi_alphas",
         type=float,
         nargs="*",
         default=list(DEFAULT_RENYI_ALPHAS),
-        help="Rényi entropy orders to compute.",
     )
-    parser.add_argument(
-        "--save_full_logprobs_npz",
-        action="store_true",
-        help="Save full per-position log-probability matrices in compressed NPZ chunks.",
-    )
+    parser.add_argument("--save_full_logprobs_npz", action="store_true")
     parser.add_argument(
         "--full_logprobs_dtype",
         type=str,
         default="float16",
         choices=["float16", "float32"],
-        help="Dtype used when saving full log-probability chunks.",
     )
 
     return parser.parse_args()
@@ -188,9 +124,13 @@ def load_tokens_csv(tokens_csv: Path) -> pd.DataFrame:
     tokens_df["start"] = pd.to_numeric(tokens_df["start"], errors="raise")
     tokens_df["end"] = pd.to_numeric(tokens_df["end"], errors="raise")
 
-    sort_columns = ["run", "start", "end", "annotation_index"] if "run" in tokens_df.columns else ["start", "end", "annotation_index"]
+    if "run" not in tokens_df.columns:
+        tokens_df["run"] = 1
+
+    sort_columns = ["run", "start", "end", "annotation_index"]
     tokens_df = tokens_df.sort_values(sort_columns, kind="stable").reset_index(drop=True)
     tokens_df["annotation_index"] = np.arange(len(tokens_df), dtype=int)
+
     return tokens_df
 
 
@@ -272,7 +212,11 @@ def build_prompt_from_tokens(
     speaker_prefix_mode: str,
     newline_gap_s: float,
 ) -> tuple[str, list[SpanRecord], pd.DataFrame, dict[str, str], pd.DataFrame]:
-    """Render clean LM text from token rows while preserving annotation mapping."""
+    """
+    Render clean LM text from token rows while preserving annotation mapping.
+
+    Each `run` is treated as a separate conversation context.
+    """
     tokens_df = tokens_df.copy()
 
     speaker_map = canonicalize_speaker_labels(
@@ -285,12 +229,14 @@ def build_prompt_from_tokens(
     spans: list[SpanRecord] = []
     piece_rows: list[dict[str, Any]] = []
 
+    previous_run: Optional[int] = None
     previous_speaker: Optional[str] = None
     previous_end: Optional[float] = None
     previous_rendered_piece: Optional[str] = None
     at_line_start = True
 
     for row in tokens_df.itertuples(index=False):
+        run_id = int(row.run)
         token_text = str(row.token)
         speaker = str(row.speaker)
         start_time = float(row.start)
@@ -302,25 +248,32 @@ def build_prompt_from_tokens(
         rendered_pieces = [str(piece) for piece in rendered_pieces if str(piece) != ""]
 
         is_silence = token_text == "#"
+        run_changed = previous_run is None or run_id != previous_run
         speaker_changed = previous_speaker is None or speaker != previous_speaker
-        silence_gap_s = None if previous_end is None else max(0.0, start_time - previous_end)
+        silence_gap_s = None if previous_end is None or run_changed else max(0.0, start_time - previous_end)
+
         force_newline = bool(
-            speaker_changed
+            run_changed
+            or speaker_changed
             or (silence_gap_s is not None and silence_gap_s >= newline_gap_s)
             or is_silence
         )
 
-        if force_newline and parts and not parts[-1].endswith("\n"):
-            append_text(
-                parts=parts,
-                spans=spans,
-                text="\n",
-                kind="separator",
-                payload={"reason": "turn_or_gap"},
-            )
+        if run_changed and parts:
+            if not parts[-1].endswith("\n"):
+                append_text(parts, spans, "\n", "separator", payload={"reason": "run_boundary"})
+            append_text(parts, spans, "\n", "separator", payload={"reason": "run_boundary_blank_line"})
+            at_line_start = True
+            previous_rendered_piece = None
+            previous_end = None
+            previous_speaker = None
+
+        elif force_newline and parts and not parts[-1].endswith("\n"):
+            append_text(parts, spans, "\n", "separator", payload={"reason": "turn_or_gap"})
             at_line_start = True
 
         if len(rendered_pieces) == 0:
+            previous_run = run_id
             previous_end = end_time
             previous_speaker = speaker
             previous_rendered_piece = None
@@ -329,11 +282,11 @@ def build_prompt_from_tokens(
         if at_line_start:
             speaker_prefix = f"[{rendered_speaker}:] "
             append_text(
-                parts=parts,
-                spans=spans,
-                text=speaker_prefix,
-                kind="speaker_prefix",
-                payload={"speaker": speaker, "rendered_speaker": rendered_speaker},
+                parts,
+                spans,
+                speaker_prefix,
+                "speaker_prefix",
+                payload={"run": run_id, "speaker": speaker, "rendered_speaker": rendered_speaker},
             )
             at_line_start = False
             previous_rendered_piece = None
@@ -344,22 +297,17 @@ def build_prompt_from_tokens(
                 and needs_space_before(piece_text)
                 and not previous_rendered_piece.endswith(APOSTROPHE_ENDINGS)
             ):
-                append_text(
-                    parts=parts,
-                    spans=spans,
-                    text=" ",
-                    kind="separator",
-                    payload={"reason": "intra_turn_space"},
-                )
+                append_text(parts, spans, " ", "separator", payload={"reason": "intra_turn_space"})
 
             append_text(
-                parts=parts,
-                spans=spans,
-                text=piece_text,
-                kind="annotation_piece",
+                parts,
+                spans,
+                piece_text,
+                "annotation_piece",
                 annotation_index=annotation_index,
                 piece_index=piece_index,
                 payload={
+                    "run": run_id,
                     "original_token": token_text,
                     "speaker": speaker,
                     "rendered_speaker": rendered_speaker,
@@ -370,6 +318,7 @@ def build_prompt_from_tokens(
 
             piece_rows.append(
                 {
+                    "run": run_id,
                     "annotation_index": annotation_index,
                     "piece_index": piece_index,
                     "original_token": token_text,
@@ -383,6 +332,7 @@ def build_prompt_from_tokens(
 
             previous_rendered_piece = piece_text
 
+        previous_run = run_id
         previous_speaker = speaker
         previous_end = end_time
 
@@ -478,9 +428,7 @@ def tokenize_prompt(tokenizer: Any, prompt_text: str, bos_token: bool) -> dict[s
         bos_length = len(tokenizer.bos_token)
         adjusted_offsets: list[tuple[int, int]] = []
         for start_char, end_char in encoded["offset_mapping"]:
-            adjusted_offsets.append(
-                (max(0, start_char - bos_length), max(0, end_char - bos_length))
-            )
+            adjusted_offsets.append((max(0, start_char - bos_length), max(0, end_char - bos_length)))
         encoded["offset_mapping"] = adjusted_offsets
 
     return encoded
@@ -524,6 +472,42 @@ def compute_renyi_entropy_from_probs(probs: torch.Tensor, alpha: float) -> torch
     return torch.log(power_sum) / (1.0 - alpha)
 
 
+def infer_run_boundaries(tokens_df: pd.DataFrame, spans: Sequence[SpanRecord], offset_mapping: Sequence[Sequence[int]]) -> list[int]:
+    """Infer model-token run boundaries from annotation spans."""
+    annotation_run_map = {
+        int(row.annotation_index): int(row.run)
+        for row in tokens_df[["annotation_index", "run"]].itertuples(index=False)
+    }
+
+    candidate_boundaries: list[int] = []
+    current_run = None
+
+    ordered_piece_spans = [
+        span for span in spans
+        if span.kind == "annotation_piece" and span.annotation_index is not None
+    ]
+
+    for span in ordered_piece_spans:
+        run_id = annotation_run_map[int(span.annotation_index)]
+        if current_run is None:
+            current_run = run_id
+            continue
+
+        if run_id != current_run:
+            boundary_index = None
+            for model_token_index, (offset_start, offset_end) in enumerate(offset_mapping):
+                if int(offset_end) <= int(span.start_char):
+                    continue
+                boundary_index = model_token_index
+                break
+
+            if boundary_index is not None:
+                candidate_boundaries.append(int(boundary_index))
+            current_run = run_id
+
+    return sorted(set(candidate_boundaries))
+
+
 @torch.inference_mode()
 def compute_distributional_metrics(
     model: Any,
@@ -535,8 +519,9 @@ def compute_distributional_metrics(
     save_full_logprobs_npz: bool,
     full_logprobs_dtype: str,
     output_dir: Path,
+    run_boundaries: Sequence[int],
 ) -> dict[str, Any]:
-    """Compute surprisal and entropy metrics per model position."""
+    """Compute surprisal and entropy metrics per model position with run resets."""
     sequence_length = len(input_ids)
 
     observed_logprob = np.full(sequence_length, np.nan, dtype=np.float64)
@@ -556,68 +541,89 @@ def compute_distributional_metrics(
     else:
         full_logprobs_dir = None
 
-    for chunk_index, target_start in enumerate(range(1, sequence_length, stride)):
-        target_end = min(target_start + stride, sequence_length)
-        window_start = max(0, target_end - max_length)
-        window_ids = input_ids[window_start:target_end]
+    run_boundaries = sorted(set(int(index) for index in run_boundaries if 0 <= int(index) <= sequence_length))
+    if 0 not in run_boundaries:
+        run_boundaries = [0] + run_boundaries
+    if sequence_length not in run_boundaries:
+        run_boundaries = run_boundaries + [sequence_length]
 
-        window_tensor = torch.tensor([window_ids], dtype=torch.long)
-        if device != "cpu":
-            window_tensor = window_tensor.to(device)
+    chunk_index = 0
 
-        outputs = model(window_tensor)
-        logits = outputs.logits[0]
+    for run_start, run_end in zip(run_boundaries[:-1], run_boundaries[1:]):
+        if run_end - run_start <= 1:
+            continue
 
-        log_probs = torch.log_softmax(logits[:-1, :], dim=-1)
-        probs = torch.exp(log_probs)
+        run_input_ids = input_ids[run_start:run_end]
+        run_length = len(run_input_ids)
 
-        chunk_absolute_positions = list(range(max(target_start, window_start + 1), target_end))
-        chunk_local_prev_indices = [
-            absolute_position - window_start - 1
-            for absolute_position in chunk_absolute_positions
-        ]
+        for target_start in range(1, run_length, stride):
+            target_end = min(target_start + stride, run_length)
+            window_start = max(0, target_end - max_length)
+            window_ids = run_input_ids[window_start:target_end]
 
-        selected_log_probs = log_probs[chunk_local_prev_indices, :]
-        selected_probs = probs[chunk_local_prev_indices, :]
+            window_tensor = torch.tensor([window_ids], dtype=torch.long)
+            if device != "cpu":
+                window_tensor = window_tensor.to(device)
 
-        shannon_entropy_chunk = compute_shannon_entropy_from_log_probs(
-            log_probs=selected_log_probs,
-            probs=selected_probs,
-        )
+            outputs = model(window_tensor)
+            logits = outputs.logits[0]
 
-        renyi_chunk_map: dict[float, torch.Tensor] = {}
-        for alpha in renyi_alphas:
-            renyi_chunk_map[float(alpha)] = compute_renyi_entropy_from_probs(
+            log_probs = torch.log_softmax(logits[:-1, :], dim=-1)
+            probs = torch.exp(log_probs)
+
+            chunk_relative_positions = list(range(max(target_start, window_start + 1), target_end))
+            chunk_local_prev_indices = [
+                relative_position - window_start - 1
+                for relative_position in chunk_relative_positions
+            ]
+            chunk_absolute_positions = [run_start + relative_position for relative_position in chunk_relative_positions]
+
+            selected_log_probs = log_probs[chunk_local_prev_indices, :]
+            selected_probs = probs[chunk_local_prev_indices, :]
+
+            shannon_entropy_chunk = compute_shannon_entropy_from_log_probs(
+                log_probs=selected_log_probs,
                 probs=selected_probs,
-                alpha=float(alpha),
             )
 
-        for row_index, absolute_position in enumerate(chunk_absolute_positions):
-            token_id = int(input_ids[absolute_position])
-            token_logprob = float(selected_log_probs[row_index, token_id].item())
-
-            observed_logprob[absolute_position] = token_logprob
-            surprisal_nats[absolute_position] = -token_logprob
-            shannon_entropy_nats[absolute_position] = float(shannon_entropy_chunk[row_index].item())
-
+            renyi_chunk_map: dict[float, torch.Tensor] = {}
             for alpha in renyi_alphas:
-                renyi_entropy_arrays[float(alpha)][absolute_position] = float(
-                    renyi_chunk_map[float(alpha)][row_index].item()
+                renyi_chunk_map[float(alpha)] = compute_renyi_entropy_from_probs(
+                    probs=selected_probs,
+                    alpha=float(alpha),
                 )
 
-        if save_full_logprobs_npz and full_logprobs_dir is not None:
-            if full_logprobs_dtype == "float16":
-                log_probs_to_save = selected_log_probs.detach().cpu().numpy().astype(np.float16)
-            else:
-                log_probs_to_save = selected_log_probs.detach().cpu().numpy().astype(np.float32)
+            for row_index, absolute_position in enumerate(chunk_absolute_positions):
+                token_id = int(input_ids[absolute_position])
+                token_logprob = float(selected_log_probs[row_index, token_id].item())
 
-            chunk_path = full_logprobs_dir / f"logprobs_chunk_{chunk_index:05d}.npz"
-            np.savez_compressed(
-                chunk_path,
-                absolute_positions=np.asarray(chunk_absolute_positions, dtype=np.int32),
-                log_probs=log_probs_to_save,
-            )
-            saved_chunk_paths.append(str(chunk_path.name))
+                observed_logprob[absolute_position] = token_logprob
+                surprisal_nats[absolute_position] = -token_logprob
+                shannon_entropy_nats[absolute_position] = float(shannon_entropy_chunk[row_index].item())
+
+                for alpha in renyi_alphas:
+                    renyi_entropy_arrays[float(alpha)][absolute_position] = float(
+                        renyi_chunk_map[float(alpha)][row_index].item()
+                    )
+
+            if save_full_logprobs_npz and full_logprobs_dir is not None:
+                selected_log_probs_cpu = (
+                    selected_log_probs.detach().to(torch.float32).cpu().numpy()
+                )
+
+                if full_logprobs_dtype == "float16":
+                    log_probs_to_save = selected_log_probs_cpu.astype(np.float16)
+                else:
+                    log_probs_to_save = selected_log_probs_cpu.astype(np.float32)
+
+                chunk_path = full_logprobs_dir / f"logprobs_chunk_{chunk_index:05d}.npz"
+                np.savez_compressed(
+                    chunk_path,
+                    absolute_positions=np.asarray(chunk_absolute_positions, dtype=np.int32),
+                    log_probs=log_probs_to_save,
+                )
+                saved_chunk_paths.append(str(chunk_path.name))
+                chunk_index += 1
 
     return {
         "observed_logprob": observed_logprob,
@@ -640,8 +646,7 @@ def map_annotation_spans_to_model_tokens(
     }
 
     annotation_piece_spans = [
-        span
-        for span in spans
+        span for span in spans
         if span.kind == "annotation_piece" and span.annotation_index is not None
     ]
 
@@ -772,8 +777,6 @@ def aggregate_rendered_pieces_to_words(
     pieces_df: pd.DataFrame,
     distribution_metrics: dict[str, Any],
     offset_mapping: Sequence[Sequence[int]],
-    tokenizer: Any,
-    input_ids: Sequence[int],
     prompt_text: str,
 ) -> pd.DataFrame:
     """Aggregate model-position metrics to rendered lexical pieces in order."""
@@ -805,6 +808,7 @@ def aggregate_rendered_pieces_to_words(
         if len(overlapping_model_indices) == 0:
             row_record: dict[str, Any] = {
                 "word_index": word_index,
+                "run": int(row.run),
                 "word": rendered_piece,
                 "matched": False,
                 "match_status": "no_model_token_overlap",
@@ -841,6 +845,7 @@ def aggregate_rendered_pieces_to_words(
 
         row_record = {
             "word_index": word_index,
+            "run": int(row.run),
             "word": rendered_piece,
             "matched": True,
             "match_status": "ok",
@@ -886,6 +891,7 @@ def build_summary(
     stride: int,
     renyi_alphas: Sequence[float],
     saved_full_logprobs_chunks: Sequence[str],
+    run_boundaries: Sequence[int],
 ) -> dict[str, Any]:
     """Create run-summary metadata."""
     n_lexical_tokens = int(tokens_df["render_for_lm"].fillna(False).sum())
@@ -895,6 +901,7 @@ def build_summary(
     return {
         "model_name": model_name,
         "n_annotations": int(len(tokens_df)),
+        "n_runs": int(tokens_df["run"].nunique()),
         "n_lexical_tokens_for_lm": n_lexical_tokens,
         "n_silence_markers": n_silence_markers,
         "n_rendered_words": int(len(words_df)),
@@ -905,6 +912,7 @@ def build_summary(
         "prompt_num_characters": int(len(prompt_text)),
         "renyi_alphas": [float(alpha) for alpha in renyi_alphas],
         "saved_full_logprobs_chunks": list(saved_full_logprobs_chunks),
+        "run_boundaries": [int(index) for index in run_boundaries],
     }
 
 
@@ -941,6 +949,12 @@ def main() -> None:
         user_max_length=arguments.max_length,
     )
 
+    run_boundaries = infer_run_boundaries(
+        tokens_df=tokens_df,
+        spans=spans,
+        offset_mapping=offset_mapping,
+    )
+
     distribution_metrics = compute_distributional_metrics(
         model=model,
         input_ids=input_ids,
@@ -951,6 +965,7 @@ def main() -> None:
         save_full_logprobs_npz=arguments.save_full_logprobs_npz,
         full_logprobs_dtype=arguments.full_logprobs_dtype,
         output_dir=arguments.output_dir,
+        run_boundaries=run_boundaries,
     )
 
     tokens_df = map_annotation_spans_to_model_tokens(
@@ -968,8 +983,6 @@ def main() -> None:
         pieces_df=pieces_df,
         distribution_metrics=distribution_metrics,
         offset_mapping=offset_mapping,
-        tokenizer=tokenizer,
-        input_ids=input_ids,
         prompt_text=prompt_text,
     )
 
@@ -1031,6 +1044,7 @@ def main() -> None:
         stride=arguments.stride,
         renyi_alphas=arguments.renyi_alphas,
         saved_full_logprobs_chunks=distribution_metrics["saved_full_logprobs_chunks"],
+        run_boundaries=run_boundaries,
     )
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
