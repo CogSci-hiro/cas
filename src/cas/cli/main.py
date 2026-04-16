@@ -707,26 +707,40 @@ def _load_lmeeeg_analysis_summary(*, out_dir: Path) -> dict[str, object]:
     return json.loads(summary_path.read_text(encoding="utf-8"))
 
 
+def _lmeeeg_model_key(model_name: str, band_name: str | None = None) -> str:
+    if band_name:
+        return f"{model_name}__{band_name}"
+    return model_name
+
+
+def _lmeeeg_model_label(model_name: str, band_name: str | None = None) -> str:
+    if band_name:
+        return f"{model_name} [{band_name}]"
+    return model_name
+
+
 def _load_lmeeeg_model_payloads(*, out_dir: Path, config_root: Path) -> dict[str, dict[str, object]]:
     from cas.stats.lmeeeg_pipeline import load_lmeeeg_config
 
     analysis_summary = _load_lmeeeg_analysis_summary(out_dir=out_dir)
-    analysis_models = {
-        str(model.get("model_name")): model
-        for model in (analysis_summary.get("models") or [])
-        if isinstance(model, dict) and model.get("model_name")
-    }
     config = load_lmeeeg_config(config_root / "lmeeeg.yaml")
-    model_names = [str(name) for name in (config.get("models") or {}).keys()]
     payloads: dict[str, dict[str, object]] = {}
 
-    for model_name in model_names:
-        model_summary = analysis_models.get(model_name) or {}
+    config_models = {str(name) for name in (config.get("models") or {}).keys()}
+    for model_summary in analysis_summary.get("models") or []:
+        if not isinstance(model_summary, dict):
+            continue
+        model_name = str(model_summary.get("model_name") or "")
+        if not model_name or model_name not in config_models:
+            continue
+        band_name = model_summary.get("band_name")
+        band_name = str(band_name) if band_name is not None else None
+        model_key = _lmeeeg_model_key(model_name, band_name)
         fit_summary = model_summary.get("fit") if isinstance(model_summary, dict) else {}
         model_dir_value = fit_summary.get("output_dir") if isinstance(fit_summary, dict) else None
         if not isinstance(model_dir_value, str) or not model_dir_value:
             raise FileNotFoundError(
-                f"Missing pooled lmeEEG fit output directory for model `{model_name}` in analysis summary."
+                f"Missing pooled lmeEEG fit output directory for model `{model_key}` in analysis summary."
             )
         model_dir = Path(model_dir_value)
         required_paths = {
@@ -739,9 +753,12 @@ def _load_lmeeeg_model_payloads(*, out_dir: Path, config_root: Path) -> dict[str
         missing = [str(path) for path in required_paths.values() if not path.exists()]
         if missing:
             raise FileNotFoundError(
-                f"Missing pooled lmeEEG fit outputs for model `{model_name}`: {', '.join(missing)}"
+                f"Missing pooled lmeEEG fit outputs for model `{model_key}`: {', '.join(missing)}"
             )
-        payloads[model_name] = {
+        payloads[model_key] = {
+            "model_name": model_name,
+            "band_name": band_name,
+            "model_label": _lmeeeg_model_label(model_name, band_name),
             "betas": np.load(required_paths["betas"]),
             "t_values": np.load(required_paths["t_values"]),
             "times": np.load(required_paths["times"]),
@@ -803,19 +820,25 @@ def _load_significance_masks(
             model_name = model_summary.get("model_name")
             if not model_name:
                 continue
+            band_name = model_summary.get("band_name")
             for inference_summary in model_summary.get("inference") or []:
                 if not isinstance(inference_summary, dict):
                     continue
                 summary = dict(inference_summary)
                 summary.setdefault("model_name", model_name)
+                if band_name is not None:
+                    summary.setdefault("band_name", band_name)
                 summaries.append(summary)
 
     for summary in summaries:
         model_name = str(summary.get("model_name") or "")
+        band_name = summary.get("band_name")
+        band_name = str(band_name) if band_name is not None else None
+        model_key = _lmeeeg_model_key(model_name, band_name)
         effect_name = str(summary.get("effect") or "")
-        if model_name not in model_payloads:
+        if model_key not in model_payloads:
             continue
-        expected_shape = expected_shapes.get(model_name, {}).get(effect_name)
+        expected_shape = expected_shapes.get(model_key, {}).get(effect_name)
         if expected_shape is None:
             continue
         corrected_p_path = Path(str(summary.get("corrected_p_values", "")))
@@ -830,7 +853,7 @@ def _load_significance_masks(
             mask_array = corrected_p_values.T < 0.05
         else:
             continue
-        masks.setdefault(model_name, {})[effect_name] = mask_array
+        masks.setdefault(model_key, {})[effect_name] = mask_array
     return masks
 
 
@@ -869,11 +892,11 @@ def _run_figures_lmeeeg(args: argparse.Namespace) -> int:
     overlay_manifest = {"plots": []}
     if stats_root.exists():
         model_axes = {
-            model_name: {
+            model_key: {
                 "channel_names": payload["channel_names"],
                 "times": payload["times"],
             }
-            for model_name, payload in model_payloads.items()
+            for model_key, payload in model_payloads.items()
         }
         overlay_manifest = build_lmeeeg_qc_manifest_from_stats(
             out_dir=out_dir,
@@ -914,6 +937,10 @@ def _run_figures_lmeeeg_inference(args: argparse.Namespace) -> int:
         model_name = str(model_summary.get("model_name") or "")
         if not model_name:
             continue
+        band_name = model_summary.get("band_name")
+        band_name = str(band_name) if band_name is not None else None
+        model_key = _lmeeeg_model_key(model_name, band_name)
+        model_label = _lmeeeg_model_label(model_name, band_name)
         fit_summary = model_summary.get("fit") if isinstance(model_summary.get("fit"), dict) else {}
         model_dir_value = fit_summary.get("output_dir") if isinstance(fit_summary, dict) else None
         if not isinstance(model_dir_value, str) or not model_dir_value:
@@ -944,37 +971,37 @@ def _run_figures_lmeeeg_inference(args: argparse.Namespace) -> int:
             significance_mask = corrected_p_array < 0.05
             significance_map = np.where(significance_mask, observed_map, 0.0)
 
-            observed_stem = out_dir / "figures" / "lmeeeg_inference" / model_name / f"{_sanitize_token(effect_name)}_observed"
+            observed_stem = out_dir / "figures" / "lmeeeg_inference" / model_key / f"{_sanitize_token(effect_name)}_observed"
             observed_paths = plot_joint_model_weights(
                 observed_map,
                 times=times,
                 channel_names=channel_names,
                 output_stem=observed_stem,
-                title=f"lmeEEG observed statistic | {model_name} | {effect_name}",
+                title=f"lmeEEG observed statistic | {model_label} | {effect_name}",
                 formats=formats,
                 dpi=dpi,
                 line_width=2.5,
                 significance_mask=significance_mask,
             )
-            corrected_p_stem = out_dir / "figures" / "lmeeeg_inference" / model_name / f"{_sanitize_token(effect_name)}_corrected_p"
+            corrected_p_stem = out_dir / "figures" / "lmeeeg_inference" / model_key / f"{_sanitize_token(effect_name)}_corrected_p"
             corrected_p_paths = plot_joint_model_weights(
                 1.0 - corrected_p_array,
                 times=times,
                 channel_names=channel_names,
                 output_stem=corrected_p_stem,
-                title=f"lmeEEG 1-corrected p | {model_name} | {effect_name}",
+                title=f"lmeEEG 1-corrected p | {model_label} | {effect_name}",
                 formats=formats,
                 dpi=dpi,
                 line_width=2.5,
                 significance_mask=significance_mask,
             )
-            pvalue_stem = out_dir / "figures" / "lmeeeg_inference" / model_name / f"{_sanitize_token(effect_name)}_p005_masked"
+            pvalue_stem = out_dir / "figures" / "lmeeeg_inference" / model_key / f"{_sanitize_token(effect_name)}_p005_masked"
             pvalue_paths = plot_joint_model_weights(
                 significance_map,
                 times=times,
                 channel_names=channel_names,
                 output_stem=pvalue_stem,
-                title=f"lmeEEG corrected p<0.05 | {model_name} | {effect_name}",
+                title=f"lmeEEG corrected p<0.05 | {model_label} | {effect_name}",
                 formats=formats,
                 dpi=dpi,
                 line_width=2.5,
@@ -982,7 +1009,9 @@ def _run_figures_lmeeeg_inference(args: argparse.Namespace) -> int:
             )
             plots.append(
                 {
+                    "model_key": model_key,
                     "model_name": model_name,
+                    "band_name": band_name,
                     "effect": effect_name,
                     "correction": inference_summary.get("correction"),
                     "observed_files": [str(path) for path in observed_paths],

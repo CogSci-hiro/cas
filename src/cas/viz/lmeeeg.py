@@ -184,6 +184,17 @@ def plot_joint_model_weights(
         significance_mask=significance_array,
     )
     topomap_args: dict[str, object] = {}
+    if significance_array is not None:
+        topomap_args["mask"] = significance_array
+        topomap_args["mask_params"] = {
+            "marker": "o",
+            "markerfacecolor": "0.6",
+            "markeredgecolor": "k",
+            "linestyle": "None",
+            "linewidth": 0,
+            "markeredgewidth": 1.0,
+            "markersize": 6.0,
+        }
     try:
         figure = evoked.plot_joint(times=selected_joint_times, title=title, show=False, topomap_args=topomap_args)
     except ValueError as exc:
@@ -195,6 +206,8 @@ def plot_joint_model_weights(
             raise
         keep_indices = [evoked.ch_names.index(name) for name in keep_channels]
         reduced_topomap_args = dict(topomap_args)
+        if significance_array is not None:
+            reduced_topomap_args["mask"] = significance_array[np.asarray(keep_indices, dtype=int)]
         figure = evoked.copy().pick(keep_channels).plot_joint(
             times=selected_joint_times,
             title=title,
@@ -236,6 +249,10 @@ def build_lmeeeg_qc_manifest_from_model_payloads(
 
     plots: list[dict[str, object]] = []
     for model_name, payload in sorted(model_payloads.items()):
+        display_model_name = str(payload.get("model_name") or model_name)
+        band_name = payload.get("band_name")
+        band_name = str(band_name) if band_name is not None else None
+        model_label = str(payload.get("model_label") or display_model_name)
         channel_names = [str(name) for name in payload["channel_names"]]
         times = np.asarray(payload["times"], dtype=float)
         column_names = [str(name) for name in payload["column_names"]]
@@ -263,7 +280,7 @@ def build_lmeeeg_qc_manifest_from_model_payloads(
                     times=times,
                     channel_names=channel_names,
                     output_stem=output_stem,
-                    title=f"lmeEEG {measure_name} | {model_name} | {column_name}",
+                    title=f"lmeEEG {measure_name} | {model_label} | {column_name}",
                     formats=formats,
                     dpi=dpi,
                     line_width=2.5,
@@ -271,7 +288,10 @@ def build_lmeeeg_qc_manifest_from_model_payloads(
                 )
                 plots.append(
                     {
-                        "model_name": model_name,
+                        "model_key": model_name,
+                        "band_name": band_name,
+                        "model_name": display_model_name,
+                        "display_model_name": display_model_name,
                         "kernel": column_name,
                         "measure": measure_name,
                         "has_significance_overlay": significance_mask is not None and bool(np.any(significance_mask)),
