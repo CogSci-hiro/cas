@@ -31,6 +31,18 @@ counting aligned intervals that overlap the event. The script ignores empty
 labels and common non-lexical/alignment markers such as ``#``, ``@``, ``sil``,
 ``sp``, ``spn``, and ``pau``.
 
+Syllable counting
+-----------------
+Syllable counts are read from per-subject CSV files in a separate directory,
+for example::
+
+    /Users/hiro/Projects/active/diapix-annotations/EEG/annotations/syllable_v1/sub-001_run-1_syllable.csv
+
+For each event, the script counts syllable intervals in the corresponding
+subject/run CSV that overlap the event interval, then computes speech rate as::
+
+    n_syllables / duration_s
+
 Safety improvements
 -------------------
 Compared with the earlier version, this script now:
@@ -42,15 +54,11 @@ Compared with the earlier version, this script now:
 
 Usage example
 -------------
-    python textgrid_fpp_spp_pairs.py \
-        --input-dir /Users/hiro/Datasets/anais \
-        --output-csv /Users/hiro/Datasets/anais/fpp_spp_pairs.csv \
-        --debug-tier-selection
+    python textgrid_fpp_spp_pairs.py
 """
 
 from __future__ import annotations
 
-import argparse
 import csv
 import re
 from dataclasses import dataclass
@@ -58,6 +66,23 @@ from pathlib import Path
 from statistics import mean
 from typing import Dict, List, Optional, Sequence, Tuple
 
+
+# User configuration
+INPUT_DIR = Path("/Users/hiro/Datasets/anais")
+OUTPUT_CSV = Path("/Users/hiro/Datasets/anais/fpp_spp_pairs.csv")
+SYLLABLE_DIR = Path("/Users/hiro/Projects/active/diapix-annotations/EEG/annotations/syllable_v1")
+DEBUG_TIER_SELECTION = False
+
+# Syllable CSV schema
+# Syllable CSV schema (headerless CSV)
+# Example row:
+#   SyllAlign,4.33,4.96272,A/-l-R
+SYLLABLE_ONSET_COLUMN_INDEX = 1
+SYLLABLE_OFFSET_COLUMN_INDEX = 2
+SYLLABLE_TIER_COLUMN_INDEX = 0
+SYLLABLE_LABEL_COLUMN_INDEX = 3
+SYLLABLE_MIN_COLUMNS = 4
+PREFERRED_SYLLABLE_TIER_NAMES: Tuple[str, ...] = ("SyllAlign", "SyllClassAlign")
 
 # Parsing constants
 ENCODING_CANDIDATES: Tuple[str, ...] = ("utf-16", "utf-8", "utf-8-sig", "latin-1")
@@ -71,6 +96,7 @@ INTERVAL_PATTERN = re.compile(
     re.DOTALL,
 )
 FILENAME_PATTERN = re.compile(r"dyad-(?P<dyad>\d+)_run-(?P<run>\d+)_combined\.TextGrid$")
+SYLLABLE_FILENAME_PATTERN = re.compile(r"sub-(?P<subject>\d+)_run-(?P<run>\d+)_syllable\.csv$")
 SPEAKER_TIER_PATTERN = re.compile(r"(?P<prefix>actions?|palign|ipu)[-\s]+(?P<speaker>[ab])", re.IGNORECASE)
 LABEL_SEPARATOR_PATTERN = re.compile(r"[_\s]+")
 LABEL_COMPONENT_TYPO_MAP = {
@@ -86,7 +112,6 @@ LABEL_COMPONENT_TYPO_MAP = {
     "DSIC": "DISC",
     "RFC": "RFC",
 }
-
 
 # Matching constants
 WINDOW_LEFT_S = 1.0
@@ -561,6 +586,52 @@ def count_overlapping_tokens(word_intervals: Sequence[Interval], onset_s: float,
     return n_tokens
 
 
+def count_overlapping_syllables(
+    syllable_intervals: Sequence[Interval],
+    onset_s: float,
+    offset_s: float,
+) -> int:
+    """Count syllable intervals overlapping an event interval.
+
+    Parameters
+    ----------
+    syllable_intervals
+        Intervals from a per-subject syllable CSV.
+    onset_s
+        Event onset.
+    offset_s
+        Event offset.
+
+    Returns
+    -------
+    int
+        Number of overlapping syllable intervals.
+
+    Usage example
+    -------------
+        n_syllables = count_overlapping_syllables(intervals, 1.0, 2.0)
+    """
+    n_syllables = 0
+    for interval in syllable_intervals:
+        if not interval.text.strip():
+            continue
+        if interval_overlap_s(onset_s, offset_s, interval.onset_s, interval.offset_s) > 0.0:
+            n_syllables += 1
+    return n_syllables
+
+
+def compute_speech_rate_syllables_per_s(n_syllables: int, duration_s: float) -> float:
+    """Compute speech rate in syllables per second.
+
+    Usage example
+    -------------
+        speech_rate = compute_speech_rate_syllables_per_s(5, 1.25)
+    """
+    if duration_s <= 0.0:
+        return 0.0
+    return n_syllables / duration_s
+
+
 def find_best_spp_match(fpp_event: Event, candidate_spp_events: Sequence[Tuple[int, Event]]) -> Optional[int]:
     """Return the index of the best available SPP match for one FPP.
 
@@ -645,6 +716,16 @@ def infer_subject_ids(dyad_id: str) -> Dict[str, str]:
     }
 
 
+def subject_id_to_syllable_stem(subject_id: str) -> str:
+    """Convert ``subject-001`` to ``sub-001`` for syllable CSV lookup.
+
+    Usage example
+    -------------
+        stem = subject_id_to_syllable_stem("subject-001")
+    """
+    return subject_id.replace("subject-", "sub-")
+
+
 def select_alignment_tier(tiers: Dict[str, List[Interval]], speaker_id: str) -> List[Interval]:
     """Select the alignment tier for one speaker and validate it.
 
@@ -690,13 +771,138 @@ def select_alignment_tier(tiers: Dict[str, List[Interval]], speaker_id: str) -> 
     return selected_intervals
 
 
-def pair_events_for_file(path: Path, debug_tier_selection: bool = False) -> List[Dict[str, object]]:
+def parse_syllable_csv(path: Path) -> List[Interval]:
+    """Parse one headerless syllable CSV into intervals.
+
+    Parameters
+    ----------
+    path
+        Path to a subject/run syllable CSV.
+
+    Returns
+    -------
+    list of Interval
+        Parsed syllable intervals.
+
+    Usage example
+    -------------
+        intervals = parse_syllable_csv(path)
+    """
+    intervals_by_tier: Dict[str, List[Interval]] = {}
+
+    with path.open("r", newline="", encoding="utf-8-sig") as file_handle:
+        reader = csv.reader(file_handle)
+
+        for row_number, row in enumerate(reader, start=1):
+            if not row:
+                continue
+
+            if len(row) < SYLLABLE_MIN_COLUMNS:
+                raise ValueError(
+                    f"Syllable CSV {path} has too few columns on row {row_number}: {row}"
+                )
+
+            tier_name = row[SYLLABLE_TIER_COLUMN_INDEX].strip()
+            onset_text = row[SYLLABLE_ONSET_COLUMN_INDEX].strip()
+            offset_text = row[SYLLABLE_OFFSET_COLUMN_INDEX].strip()
+            label_text = row[SYLLABLE_LABEL_COLUMN_INDEX].strip()
+
+            if not onset_text or not offset_text:
+                continue
+
+            try:
+                interval = Interval(
+                    onset_s=float(onset_text),
+                    offset_s=float(offset_text),
+                    text=label_text,
+                )
+                intervals_by_tier.setdefault(tier_name, []).append(interval)
+            except ValueError as error:
+                raise ValueError(
+                    f"Could not parse syllable timing in {path} on row {row_number}: {row}"
+                ) from error
+
+    for tier_name in PREFERRED_SYLLABLE_TIER_NAMES:
+        if tier_name in intervals_by_tier:
+            return intervals_by_tier[tier_name]
+
+    available_tier_names = ", ".join(sorted(intervals_by_tier)) or "<none>"
+    raise ValueError(
+        f"Could not find a supported syllable tier in {path}. "
+        f"Available tier names: {available_tier_names}"
+    )
+
+
+def discover_syllable_csv_paths(syllable_dir: Path) -> List[Path]:
+    """Find syllable CSV files in a directory tree.
+
+    Parameters
+    ----------
+    syllable_dir
+        Root directory containing ``sub-*_run-*_syllable.csv`` files.
+
+    Returns
+    -------
+    list of Path
+        Sorted matching CSV paths.
+
+    Usage example
+    -------------
+        paths = discover_syllable_csv_paths(SYLLABLE_DIR)
+    """
+    paths = sorted(syllable_dir.rglob("sub-*_run-*_syllable.csv"))
+    return [path for path in paths if path.is_file()]
+
+
+def build_syllable_interval_index(syllable_dir: Path) -> Dict[Tuple[str, str], List[Interval]]:
+    """Build an index from ``(subject_id, run_id)`` to syllable intervals.
+
+    Parameters
+    ----------
+    syllable_dir
+        Root directory containing syllable CSV files.
+
+    Returns
+    -------
+    dict
+        Mapping from ``(sub-XXX, run)`` to syllable intervals.
+
+    Usage example
+    -------------
+        syllable_index = build_syllable_interval_index(SYLLABLE_DIR)
+    """
+    syllable_index: Dict[Tuple[str, str], List[Interval]] = {}
+
+    for path in discover_syllable_csv_paths(syllable_dir):
+        match = SYLLABLE_FILENAME_PATTERN.search(path.name)
+        if match is None:
+            continue
+
+        subject_id = f"sub-{match.group('subject')}"
+        run_id = match.group("run")
+        key = (subject_id, run_id)
+
+        if key in syllable_index:
+            raise ValueError(f"Duplicate syllable CSV for {key}: {path}")
+
+        syllable_index[key] = parse_syllable_csv(path)
+
+    return syllable_index
+
+
+def pair_events_for_file(
+    path: Path,
+    syllable_index: Dict[Tuple[str, str], List[Interval]],
+    debug_tier_selection: bool = False,
+) -> List[Dict[str, object]]:
     """Create one output row per matched FPP-SPP pair for a single file.
 
     Parameters
     ----------
     path
         Input TextGrid path.
+    syllable_index
+        Mapping from ``(sub-XXX, run)`` to syllable intervals.
     debug_tier_selection
         Whether to print tier diagnostics.
 
@@ -707,7 +913,7 @@ def pair_events_for_file(path: Path, debug_tier_selection: bool = False) -> List
 
     Usage example
     -------------
-        rows = pair_events_for_file(path, debug_tier_selection=True)
+        rows = pair_events_for_file(path, syllable_index, debug_tier_selection=True)
     """
     dyad_id, run_id = parse_dyad_and_run(path)
     subject_ids = infer_subject_ids(dyad_id)
@@ -748,12 +954,49 @@ def pair_events_for_file(path: Path, debug_tier_selection: bool = False) -> List
             offset_s=spp_event.offset_s,
         )
 
+        fpp_subject_id = subject_ids[fpp_event.speaker_id]
+        spp_subject_id = subject_ids[spp_event.speaker_id]
+
+        fpp_syllable_key = (subject_id_to_syllable_stem(fpp_subject_id), run_id)
+        spp_syllable_key = (subject_id_to_syllable_stem(spp_subject_id), run_id)
+
+        if fpp_syllable_key not in syllable_index:
+            raise KeyError(
+                f"Missing syllable CSV for FPP subject/run {fpp_syllable_key}. "
+                f"Expected file like {fpp_syllable_key[0]}_run-{run_id}_syllable.csv in {SYLLABLE_DIR}"
+            )
+        if spp_syllable_key not in syllable_index:
+            raise KeyError(
+                f"Missing syllable CSV for SPP subject/run {spp_syllable_key}. "
+                f"Expected file like {spp_syllable_key[0]}_run-{run_id}_syllable.csv in {SYLLABLE_DIR}"
+            )
+
+        fpp_syllables = count_overlapping_syllables(
+            syllable_intervals=syllable_index[fpp_syllable_key],
+            onset_s=fpp_event.onset_s,
+            offset_s=fpp_event.offset_s,
+        )
+        spp_syllables = count_overlapping_syllables(
+            syllable_intervals=syllable_index[spp_syllable_key],
+            onset_s=spp_event.onset_s,
+            offset_s=spp_event.offset_s,
+        )
+
+        fpp_speech_rate = compute_speech_rate_syllables_per_s(
+            n_syllables=fpp_syllables,
+            duration_s=fpp_event.duration_s,
+        )
+        spp_speech_rate = compute_speech_rate_syllables_per_s(
+            n_syllables=spp_syllables,
+            duration_s=spp_event.duration_s,
+        )
+
         rows.append(
             {
                 "dyad_id": dyad_id,
                 "run": run_id,
-                "fpp_speaker_id": subject_ids[fpp_event.speaker_id],
-                "spp_speaker_id": subject_ids[spp_event.speaker_id],
+                "fpp_speaker_id": fpp_subject_id,
+                "spp_speaker_id": spp_subject_id,
                 "fpp_onset_s": fpp_event.onset_s,
                 "fpp_offset_s": fpp_event.offset_s,
                 "spp_onset_s": spp_event.onset_s,
@@ -763,6 +1006,10 @@ def pair_events_for_file(path: Path, debug_tier_selection: bool = False) -> List
                 "response_latency_s": spp_event.onset_s - fpp_event.offset_s,
                 "fpp_n_tokens": fpp_tokens,
                 "spp_n_tokens": spp_tokens,
+                "fpp_n_syllables": fpp_syllables,
+                "spp_n_syllables": spp_syllables,
+                "fpp_speech_rate_syllables_per_s": fpp_speech_rate,
+                "spp_speech_rate_syllables_per_s": spp_speech_rate,
                 "fpp_class_1": fpp_event.class_1,
                 "fpp_class_2": fpp_event.class_2,
                 "spp_class_1": spp_event.class_1,
@@ -822,6 +1069,10 @@ def write_rows_to_csv(rows: Sequence[Dict[str, object]], output_csv: Path) -> No
         "response_latency_s",
         "fpp_n_tokens",
         "spp_n_tokens",
+        "fpp_n_syllables",
+        "spp_n_syllables",
+        "fpp_speech_rate_syllables_per_s",
+        "spp_speech_rate_syllables_per_s",
         "fpp_class_1",
         "fpp_class_2",
         "spp_class_1",
@@ -835,34 +1086,6 @@ def write_rows_to_csv(rows: Sequence[Dict[str, object]], output_csv: Path) -> No
         writer.writerows(rows)
 
 
-def build_argument_parser() -> argparse.ArgumentParser:
-    """Create the command-line argument parser.
-
-    Usage example
-    -------------
-        parser = build_argument_parser()
-    """
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--input-dir",
-        type=Path,
-        required=True,
-        help="Directory tree containing dyad-*_run-*_combined.TextGrid files.",
-    )
-    parser.add_argument(
-        "--output-csv",
-        type=Path,
-        required=True,
-        help="Path to the output CSV file.",
-    )
-    parser.add_argument(
-        "--debug-tier-selection",
-        action="store_true",
-        help="Print diagnostic information about parsed tiers and token-tier labels.",
-    )
-    return parser
-
-
 def main() -> None:
     """CLI entry point.
 
@@ -870,13 +1093,16 @@ def main() -> None:
     -------------
         main()
     """
-    parser = build_argument_parser()
-    arguments = parser.parse_args()
-
-    textgrid_paths = discover_textgrid_paths(arguments.input_dir)
+    textgrid_paths = discover_textgrid_paths(INPUT_DIR)
     if not textgrid_paths:
         raise FileNotFoundError(
-            f"No files matching 'dyad-*_run-*_combined.TextGrid' found in {arguments.input_dir}"
+            f"No files matching 'dyad-*_run-*_combined.TextGrid' found in {INPUT_DIR}"
+        )
+
+    syllable_index = build_syllable_interval_index(SYLLABLE_DIR)
+    if not syllable_index:
+        raise FileNotFoundError(
+            f"No files matching 'sub-*_run-*_syllable.csv' found in {SYLLABLE_DIR}"
         )
 
     all_rows: List[Dict[str, object]] = []
@@ -884,12 +1110,13 @@ def main() -> None:
         all_rows.extend(
             pair_events_for_file(
                 path=textgrid_path,
-                debug_tier_selection=arguments.debug_tier_selection,
+                syllable_index=syllable_index,
+                debug_tier_selection=DEBUG_TIER_SELECTION,
             )
         )
 
-    write_rows_to_csv(all_rows, arguments.output_csv)
-    print(f"Wrote {len(all_rows)} matched FPP-SPP pairs to {arguments.output_csv}")
+    write_rows_to_csv(all_rows, OUTPUT_CSV)
+    print(f"Wrote {len(all_rows)} matched FPP-SPP pairs to {OUTPUT_CSV}")
 
 
 if __name__ == "__main__":

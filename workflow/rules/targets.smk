@@ -62,13 +62,13 @@ rule make_induced_epochs_subject:
         import numpy as np
         import pandas as pd
 
-        from rate.epochs.io import (
+        from cas.epochs.io import (
             write_epoch_events_array,
             write_epoch_metadata,
             write_epoch_summary,
             write_epochs,
         )
-        from rate.induced_epochs.transform import (
+        from cas.induced_epochs.transform import (
             build_induced_epochs,
             resolve_induced_band_limits_hz,
             resolve_induced_band_names,

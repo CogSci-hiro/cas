@@ -13,6 +13,8 @@ rule figures_lmeeeg:
     shell:
         r"""
         set -euo pipefail
+        mkdir -p "{resources.tmpdir}/mpl" "{resources.tmpdir}/cache"
+        MPLCONFIGDIR="{resources.tmpdir}/mpl" XDG_CACHE_HOME="{resources.tmpdir}/cache" \
         PYTHONPATH="{SRC_DIR}:{PROJECT_ROOT}" "{PYTHON_BIN}" -m cas.cli.main figures-lmeeeg \
           --config-root "{CONFIG_DIR}" \
           --viz-config "{input.viz}" \
@@ -30,6 +32,8 @@ rule figures_lmeeeg_inference:
     shell:
         r"""
         set -euo pipefail
+        mkdir -p "{resources.tmpdir}/mpl" "{resources.tmpdir}/cache"
+        MPLCONFIGDIR="{resources.tmpdir}/mpl" XDG_CACHE_HOME="{resources.tmpdir}/cache" \
         PYTHONPATH="{SRC_DIR}:{PROJECT_ROOT}" "{PYTHON_BIN}" -m cas.cli.main figures-lmeeeg-inference \
           --config-root "{CONFIG_DIR}" \
           --viz-config "{input.viz}" \

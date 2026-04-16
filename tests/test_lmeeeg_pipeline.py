@@ -1,17 +1,28 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
+import sys
 
 import numpy as np
 import pandas as pd
 import pytest
 
 from cas.stats.lmeeeg_pipeline import (
+    _configure_mne_runtime,
+    _build_adjacency,
+    _patch_mne_cluster_level,
+    _prepare_model_inputs,
     _augment_lmeeeg_metadata,
+    _fit_one_model,
+    _run_permutation_inference,
+    _resolve_test_effects,
+    _run_model_inference,
     _row_from_epochs_path,
     _resolve_pooled_source_paths,
     load_lmeeeg_config,
+    load_epochs_with_metadata,
     run_pooled_lmeeeg_analysis,
     select_epochs_from_config,
 )
@@ -123,6 +134,366 @@ def test_augment_lmeeeg_metadata_splits_label_classes():
     assert augmented["fpp_class_2"].tolist() == ["DECL", "INT"]
     assert augmented["spp_class_1"].tolist() == ["CONF", "DISC"]
     assert augmented["spp_class_2"].tolist() == ["SIMP", "CORR"]
+
+
+def test_prepare_model_inputs_applies_eligibility_standardization_and_formula_alignment():
+    runtime_config = {
+        "lmeeeg": {
+            "random_effects": {"group": "subject_id"},
+            "models": {
+                "demo": {
+                    "formula": "~ fpp_class_2 + latency + duration_s + run",
+                    "eligibility": {
+                        "not_null": ["fpp_class_2", "latency", "duration_s"],
+                        "min_values": {"duration_s": 0.10},
+                    },
+                    "standardize": ["latency", "duration_s"],
+                }
+            },
+        }
+    }
+    eeg = np.arange(4, dtype=float).reshape(4, 1, 1)
+    metadata = pd.DataFrame(
+        {
+            "fpp_class_2": ["DECL", None, "INT", "DECL"],
+            "latency": [1.0, 2.0, None, 4.0],
+            "duration_s": [0.20, 0.30, 0.40, 0.05],
+            "run": [1, 1, 2, 2],
+            "subject_id": ["sub-001", "sub-001", "sub-002", "sub-002"],
+        }
+    )
+
+    cleaned_eeg, cleaned_metadata = _prepare_model_inputs(
+        runtime_config,
+        model_name="demo",
+        eeg_data=eeg,
+        metadata=metadata,
+    )
+
+    assert cleaned_eeg.shape == (1, 1, 1)
+    assert cleaned_eeg[:, 0, 0].tolist() == [0.0]
+    assert cleaned_metadata["fpp_class_2"].tolist() == ["DECL"]
+    assert cleaned_metadata["latency"].tolist() == [0.0]
+    assert cleaned_metadata["duration_s"].tolist() == [0.0]
+
+
+def test_prepare_model_inputs_drops_formula_missing_rows_even_without_explicit_eligibility():
+    runtime_config = {
+        "lmeeeg": {
+            "random_effects": {"group": "subject_id"},
+            "models": {
+                "demo": {
+                    "formula": "~ latency + run",
+                }
+            },
+        }
+    }
+    eeg = np.arange(3, dtype=float).reshape(3, 1, 1)
+    metadata = pd.DataFrame(
+        {
+            "latency": [0.1, None, 0.3],
+            "run": [1, 1, 2],
+            "subject_id": ["sub-001", "sub-001", "sub-002"],
+        }
+    )
+
+    cleaned_eeg, cleaned_metadata = _prepare_model_inputs(
+        runtime_config,
+        model_name="demo",
+        eeg_data=eeg,
+        metadata=metadata,
+    )
+
+    assert cleaned_eeg[:, 0, 0].tolist() == [0.0, 2.0]
+    assert cleaned_metadata["latency"].tolist() == [0.1, 0.3]
+
+
+def test_fit_one_model_uses_fixed_column_names(tmp_path, monkeypatch):
+    class DummyDesignSpec:
+        fixed_column_names = ["Intercept", "latency"]
+
+    class DummyFitResult:
+        design_spec = DummyDesignSpec()
+        ols_betas = {
+            "Intercept": np.ones((1, 2), dtype=float),
+            "latency": np.full((1, 2), 2.0, dtype=float),
+        }
+        ols_t_values = {
+            "Intercept": np.full((1, 2), 3.0, dtype=float),
+            "latency": np.full((1, 2), 4.0, dtype=float),
+        }
+
+    monkeypatch.setattr(
+        "lmeeeg.fit_lmm_mass_univariate",
+        lambda **kwargs: DummyFitResult(),
+    )
+
+    runtime_config = {
+        "paths": {"out_dir": str(tmp_path)},
+        "lmeeeg": {"models": {"demo": {"formula": "~ latency"}}},
+    }
+    trial_data = SimpleNamespace(
+        eeg_data=np.ones((2, 1, 2), dtype=float),
+        trial_metadata=pd.DataFrame(
+            {"latency": [0.1, 0.2], "subject_id": ["sub-001", "sub-002"]}
+        ),
+        channel_names=["Cz"],
+        times=np.array([0.1, 0.2], dtype=float),
+    )
+
+    summary = _fit_one_model(runtime_config, trial_data, model_name="demo")
+
+    assert summary["betas_shape"] == [2, 1, 2]
+    assert (tmp_path / "lmeeeg" / "demo" / "column_names.json").exists()
+
+
+def test_resolve_test_effects_expands_categorical_predictor():
+    fixed_column_names = [
+        "Intercept",
+        "fpp_class_2[T.INF]",
+        "fpp_class_2[T.INT]",
+        "latency",
+    ]
+
+    assert _resolve_test_effects(fixed_column_names, "latency") == ["latency"]
+    assert _resolve_test_effects(fixed_column_names, "fpp_class_2") == [
+        "fpp_class_2[T.INF]",
+        "fpp_class_2[T.INT]",
+    ]
+
+
+def test_run_model_inference_runs_each_expanded_effect(tmp_path, monkeypatch):
+    runtime_config = {
+        "paths": {"out_dir": str(tmp_path)},
+        "lmeeeg": {
+            "models": {"demo": {"formula": "~ fpp_class_2 + latency", "test_predictors": ["fpp_class_2"]}},
+            "test": {"method": "maxstat", "n_permutations": 8, "seed": 0, "tail": 0},
+        },
+    }
+    trial_data = SimpleNamespace(
+        eeg_data=np.ones((3, 1, 2), dtype=float),
+        trial_metadata=pd.DataFrame({"subject_id": ["sub-001", "sub-002", "sub-003"]}),
+        channel_names=["Cz"],
+        times=np.array([0.1, 0.2], dtype=float),
+    )
+
+    class DummyDesignSpec:
+        fixed_column_names = ["Intercept", "fpp_class_2[T.INF]", "fpp_class_2[T.INT]", "latency"]
+
+    fit_result = SimpleNamespace(design_spec=DummyDesignSpec())
+    seen_effects: list[str] = []
+
+    monkeypatch.setattr(
+        "cas.stats.lmeeeg_pipeline._refit_for_inference",
+        lambda runtime_config, trial_data, *, model_name: fit_result,
+    )
+
+    def fake_permute_fixed_effect(fit_result, *, effect, **kwargs):
+        seen_effects.append(effect)
+        return SimpleNamespace(
+            observed_statistic=np.ones((1, 2), dtype=float),
+            corrected_p_values=np.full((1, 2), 0.04, dtype=float),
+        )
+
+    monkeypatch.setattr("lmeeeg.permute_fixed_effect", fake_permute_fixed_effect)
+
+    results = _run_model_inference(runtime_config, trial_data, model_name="demo")
+
+    assert seen_effects == ["fpp_class_2[T.INF]", "fpp_class_2[T.INT]"]
+    assert [result["effect"] for result in results] == seen_effects
+    csv_path = Path(results[0]["corrected_p_values_csv"])
+    assert csv_path.exists()
+    csv_rows = pd.read_csv(csv_path)
+    assert csv_rows.columns.tolist() == ["p_values", "channel", "time"]
+    assert csv_rows["channel"].tolist() == ["Cz", "Cz"]
+    assert csv_rows["time"].tolist() == [0.1, 0.2]
+    assert csv_rows["p_values"].tolist() == [0.04, 0.04]
+
+
+def test_run_permutation_inference_skips_on_backend_failure(monkeypatch):
+    calls: list[str] = []
+
+    def fake_permute_fixed_effect(fit_result, *, effect, correction, **kwargs):
+        calls.append(correction)
+        raise AttributeError("'function' object has no attribute 'get_call_template'")
+
+    monkeypatch.setattr("lmeeeg.permute_fixed_effect", fake_permute_fixed_effect)
+
+    result = _run_permutation_inference(
+        SimpleNamespace(),
+        effect_name="latency",
+        correction="cluster",
+        n_permutations=8,
+        seed=0,
+        tail=0,
+        threshold=2.0,
+        adjacency=np.eye(2),
+    )
+
+    assert calls == ["cluster"]
+    assert result["status"] == "skipped"
+    assert result["correction"] == "cluster"
+    assert "get_call_template" in result["error"]
+    assert "Traceback" in result["traceback"]
+    assert "fake_permute_fixed_effect" in result["traceback"]
+
+
+def test_build_adjacency_uses_biosemi64_and_combines_time(monkeypatch):
+    calls: dict[str, object] = {}
+    spatial_adjacency = object()
+    combined_adjacency = object()
+
+    def fake_create_info(channel_names, sfreq, ch_types):
+        calls["create_info"] = {
+            "channel_names": list(channel_names),
+            "sfreq": sfreq,
+            "ch_types": ch_types,
+        }
+        return SimpleNamespace(set_montage=lambda montage, on_missing=None: calls.update({
+            "set_montage": {"montage": montage, "on_missing": on_missing}
+        }))
+
+    def fake_make_standard_montage(name):
+        calls["montage_name"] = name
+        return f"montage:{name}"
+
+    def fake_find_ch_adjacency(info, ch_type):
+        calls["find_ch_adjacency"] = {"info": info, "ch_type": ch_type}
+        return spatial_adjacency, ["Cz", "Pz"]
+
+    def fake_combine_adjacency(n_times, adjacency):
+        calls["combine_adjacency"] = {"n_times": n_times, "adjacency": adjacency}
+        return combined_adjacency
+
+    fake_mne = SimpleNamespace(
+        create_info=fake_create_info,
+        channels=SimpleNamespace(
+            make_standard_montage=fake_make_standard_montage,
+            find_ch_adjacency=fake_find_ch_adjacency,
+        ),
+        stats=SimpleNamespace(combine_adjacency=fake_combine_adjacency),
+    )
+    monkeypatch.setitem(sys.modules, "mne", fake_mne)
+
+    adjacency = _build_adjacency(["Cz", "Pz"], 17, {"adjacency": "mne_default", "montage": "biosemi64"})
+
+    assert adjacency is combined_adjacency
+    assert calls["montage_name"] == "biosemi64"
+    assert calls["combine_adjacency"] == {"n_times": 17, "adjacency": spatial_adjacency}
+
+
+def test_build_adjacency_configures_mne_runtime_before_import(monkeypatch):
+    calls: dict[str, int] = {"configure": 0}
+
+    def fake_configure_mne_runtime():
+        calls["configure"] += 1
+
+    monkeypatch.setattr(
+        "lmeeeg.backends.correction._regression.configure_mne_runtime",
+        fake_configure_mne_runtime,
+    )
+
+    real_import = __import__
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "mne":
+            assert calls["configure"] == 1
+            return SimpleNamespace(
+                create_info=lambda channel_names, sfreq, ch_types: SimpleNamespace(
+                    set_montage=lambda montage, on_missing=None: None
+                ),
+                channels=SimpleNamespace(
+                    make_standard_montage=lambda name: f"montage:{name}",
+                    find_ch_adjacency=lambda info, ch_type: ("spatial", ["Cz"]),
+                ),
+                stats=SimpleNamespace(combine_adjacency=lambda n_times, adjacency: "combined"),
+            )
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.delitem(sys.modules, "mne", raising=False)
+    monkeypatch.setattr("builtins.__import__", fake_import)
+
+    adjacency = _build_adjacency(["Cz"], 5, {"adjacency": "mne_default"})
+
+    assert adjacency == "combined"
+    assert calls["configure"] == 1
+
+
+def test_configure_mne_runtime_disables_mne_numba(monkeypatch):
+    calls: dict[str, int] = {"configure": 0}
+
+    def fake_configure_mne_runtime():
+        calls["configure"] += 1
+
+    monkeypatch.setattr(
+        "lmeeeg.backends.correction._regression.configure_mne_runtime",
+        fake_configure_mne_runtime,
+    )
+    monkeypatch.delenv("MNE_USE_NUMBA", raising=False)
+
+    _configure_mne_runtime()
+
+    assert calls["configure"] == 1
+    assert os.environ["MNE_USE_NUMBA"] == "false"
+
+
+def test_patch_mne_cluster_level_replaces_numba_helpers(monkeypatch):
+    calls: dict[str, int] = {"configure": 0}
+
+    def fake_configure_mne_runtime():
+        calls["configure"] += 1
+
+    fake_cluster_level = SimpleNamespace(
+        _masked_sum="old_masked_sum",
+        _masked_sum_power="old_masked_sum_power",
+    )
+
+    monkeypatch.setattr(
+        "lmeeeg.backends.correction._regression.configure_mne_runtime",
+        fake_configure_mne_runtime,
+    )
+    monkeypatch.setitem(sys.modules, "mne", SimpleNamespace(stats=SimpleNamespace()))
+    monkeypatch.setitem(sys.modules, "mne.stats", SimpleNamespace(cluster_level=fake_cluster_level))
+    monkeypatch.setitem(sys.modules, "mne.stats.cluster_level", fake_cluster_level)
+
+    _patch_mne_cluster_level()
+
+    assert calls["configure"] == 1
+    assert callable(fake_cluster_level._masked_sum)
+    assert callable(fake_cluster_level._masked_sum_power)
+    assert fake_cluster_level._masked_sum(np.array([1.0, 2.0, 3.0]), np.array([0, 2])) == 4.0
+
+
+def test_load_epochs_with_metadata_configures_runtime_before_mne_import(monkeypatch, tmp_path):
+    calls: dict[str, int] = {"configure": 0}
+
+    def fake_configure_mne_runtime():
+        calls["configure"] += 1
+
+    metadata_path = tmp_path / "metadata.csv"
+    metadata_path.write_text("value\n1\n", encoding="utf-8")
+    fake_epochs = SimpleNamespace(metadata=None)
+
+    real_import = __import__
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "mne":
+            assert calls["configure"] == 1
+            return SimpleNamespace(read_epochs=lambda *args, **kwargs: fake_epochs)
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(
+        "lmeeeg.backends.correction._regression.configure_mne_runtime",
+        fake_configure_mne_runtime,
+    )
+    monkeypatch.delitem(sys.modules, "mne", raising=False)
+    monkeypatch.setattr("builtins.__import__", fake_import)
+
+    epochs, metadata = load_epochs_with_metadata(tmp_path / "epochs.fif", metadata_csv=metadata_path)
+
+    assert epochs is fake_epochs
+    assert metadata["value"].tolist() == [1]
+    assert calls["configure"] == 1
 
 
 def test_select_epochs_from_config_uses_metadata_event_type_fallback():

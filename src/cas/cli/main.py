@@ -811,7 +811,7 @@ def _load_significance_masks(*, stats_root: Path, model_payloads: dict[str, dict
 
 
 def _run_figures_lmeeeg(args: argparse.Namespace) -> int:
-    from ref_viz.lmeeeg import (
+    from cas.viz.lmeeeg import (
         build_lmeeeg_qc_manifest_from_model_payloads,
         build_lmeeeg_qc_manifest_from_stats,
     )
@@ -867,7 +867,7 @@ def _run_figures_lmeeeg(args: argparse.Namespace) -> int:
 
 
 def _run_figures_lmeeeg_inference(args: argparse.Namespace) -> int:
-    from ref_viz.lmeeeg import plot_joint_model_weights
+    from cas.viz.lmeeeg import plot_joint_model_weights
 
     config_root = Path(args.config_root).resolve()
     out_dir = _resolve_out_dir(config_root)
