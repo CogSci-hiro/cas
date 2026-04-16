@@ -12,37 +12,37 @@ lmeeeg:
     # metadata_query: "latency > 0 and duration_s >= 0.1"
 
   models:
-    #ssp_model:
-    #  modality: "evoked"
-    #  selection:
-    #    event_type: "other_spp_onset"
-    #  formula: "~ spp_class_1 + latency + duration_s + run"
-    #  eligibility:
-    #    not_null:
-    #      - "spp_class_1"
-    #      - "latency"
-    #      - "duration_s"
-    #    min_values:
-    #      duration_s: 0.10
-    #  test_predictors:
-    #    - "spp_class_1"
-    #  standardize:
-    #    - "latency"
-    #    - "duration_s"
-    fpp_model:
-      modality: "induced"
+    evoked_model:
+      modality: "evoked"
       selection:
-        event_type: "self_fpp_onset"
-      formula: "~ fpp_class_1 + latency + duration_s + run"
+        event_type: "other_spp_onset"
+      formula: "~ spp_class_1 + latency + duration_s + run"
       eligibility:
         not_null:
-          - "fpp_class_1"
+          - "spp_class_1"
           - "latency"
           - "duration_s"
         min_values:
           duration_s: 0.10
       test_predictors:
-        - "fpp_class_1"
+        - "spp_class_1"
+      standardize:
+        - "latency"
+        - "duration_s"
+    induced_model:
+      modality: "induced"
+      selection:
+        event_type: "self_spp_onset"
+      formula: "~ spp_class_1 + latency + duration_s + run"
+      eligibility:
+        not_null:
+          - "spp_class_1"
+          - "latency"
+          - "duration_s"
+        min_values:
+          duration_s: 0.10
+      test_predictors:
+        - "spp_class_1"
       standardize:
         - "latency"
         - "duration_s"

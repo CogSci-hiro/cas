@@ -760,10 +760,13 @@ def _load_viz_section(config_root: Path, explicit_viz_path: str | None) -> dict:
     return dict(payload.get("viz") or {})
 
 
-def _load_significance_masks(*, stats_root: Path, model_payloads: dict[str, dict[str, object]]) -> dict[str, dict[str, np.ndarray]]:
+def _load_significance_masks(
+    *,
+    stats_root: Path,
+    model_payloads: dict[str, dict[str, object]],
+    analysis_summary: dict[str, object] | None = None,
+) -> dict[str, dict[str, np.ndarray]]:
     masks: dict[str, dict[str, np.ndarray]] = {}
-    if not stats_root.exists():
-        return masks
 
     expected_shapes: dict[str, dict[str, tuple[int, int]]] = {}
     for model_name, payload in model_payloads.items():
@@ -781,14 +784,35 @@ def _load_significance_masks(*, stats_root: Path, model_payloads: dict[str, dict
         if model_shapes:
             expected_shapes[model_name] = model_shapes
 
-    for summary_path in sorted(stats_root.glob("**/summary.json")):
-        effect_dir = summary_path.parent
-        summary_path = effect_dir / "summary.json"
-        if not summary_path.exists():
-            continue
-        summary = json.loads(summary_path.read_text(encoding="utf-8"))
-        model_name = str(summary.get("model_name") or effect_dir.parent.name)
-        effect_name = str(summary.get("effect") or effect_dir.name)
+    summaries: list[dict[str, object]] = []
+    if stats_root.exists():
+        for summary_path in sorted(stats_root.glob("**/summary.json")):
+            effect_dir = summary_path.parent
+            if not summary_path.exists():
+                continue
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            if "model_name" not in summary:
+                summary["model_name"] = effect_dir.parent.name
+            if "effect" not in summary:
+                summary["effect"] = effect_dir.name
+            summaries.append(summary)
+    elif analysis_summary is not None:
+        for model_summary in analysis_summary.get("models") or []:
+            if not isinstance(model_summary, dict):
+                continue
+            model_name = model_summary.get("model_name")
+            if not model_name:
+                continue
+            for inference_summary in model_summary.get("inference") or []:
+                if not isinstance(inference_summary, dict):
+                    continue
+                summary = dict(inference_summary)
+                summary.setdefault("model_name", model_name)
+                summaries.append(summary)
+
+    for summary in summaries:
+        model_name = str(summary.get("model_name") or "")
+        effect_name = str(summary.get("effect") or "")
         if model_name not in model_payloads:
             continue
         expected_shape = expected_shapes.get(model_name, {}).get(effect_name)
@@ -825,9 +849,14 @@ def _run_figures_lmeeeg(args: argparse.Namespace) -> int:
     output_path = Path(args.output) if args.output else out_dir / "figures" / "lmeeeg" / "figure_manifest.json"
 
     analysis_root = _lmeeeg_analysis_root(out_dir)
+    analysis_summary = _load_lmeeeg_analysis_summary(out_dir=out_dir)
     model_payloads = _load_lmeeeg_model_payloads(out_dir=out_dir, config_root=config_root)
     stats_root = out_dir / "stats" / "lmeeeg"
-    significance_masks = _load_significance_masks(stats_root=stats_root, model_payloads=model_payloads)
+    significance_masks = _load_significance_masks(
+        stats_root=stats_root,
+        model_payloads=model_payloads,
+        analysis_summary=analysis_summary,
+    )
     primary_manifest = build_lmeeeg_qc_manifest_from_model_payloads(
         out_dir=out_dir,
         model_payloads=model_payloads,
@@ -925,6 +954,7 @@ def _run_figures_lmeeeg_inference(args: argparse.Namespace) -> int:
                 formats=formats,
                 dpi=dpi,
                 line_width=2.5,
+                significance_mask=significance_mask,
             )
             corrected_p_stem = out_dir / "figures" / "lmeeeg_inference" / model_name / f"{_sanitize_token(effect_name)}_corrected_p"
             corrected_p_paths = plot_joint_model_weights(
@@ -936,6 +966,7 @@ def _run_figures_lmeeeg_inference(args: argparse.Namespace) -> int:
                 formats=formats,
                 dpi=dpi,
                 line_width=2.5,
+                significance_mask=significance_mask,
             )
             pvalue_stem = out_dir / "figures" / "lmeeeg_inference" / model_name / f"{_sanitize_token(effect_name)}_p005_masked"
             pvalue_paths = plot_joint_model_weights(
@@ -947,6 +978,7 @@ def _run_figures_lmeeeg_inference(args: argparse.Namespace) -> int:
                 formats=formats,
                 dpi=dpi,
                 line_width=2.5,
+                significance_mask=significance_mask,
             )
             plots.append(
                 {

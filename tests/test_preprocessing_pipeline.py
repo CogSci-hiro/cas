@@ -103,7 +103,7 @@ def test_preprocess_run_uses_annotation_events_before_mne_fallback(tmp_path: Pat
     assert result.events_rows[0]["pair_id"]
 
 
-def test_preprocess_run_delegates_processing_steps_to_rate_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_preprocess_run_delegates_processing_steps_to_local_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
     raw = _make_eeg_emg_raw()
     calls: list[tuple[object, ...]] = []
 
@@ -196,7 +196,7 @@ def test_preprocess_run_saves_only_requested_intermediate_steps(
 
     monkeypatch.setattr(preprocessing_pipeline, "downsample_raw", lambda raw_arg, config: None)
     monkeypatch.setattr(preprocessing_pipeline, "apply_bandpass_filter", lambda raw_arg, config: None)
-    monkeypatch.setattr(preprocessing_pipeline, "rate_interpolate_bad_channels", lambda raw_arg: None)
+    monkeypatch.setattr(preprocessing_pipeline, "interpolate_bad_eeg_channels", lambda raw_arg: None)
     monkeypatch.setattr(preprocessing_pipeline, "apply_average_reference", lambda raw_arg: None)
 
     result = preprocess_run(

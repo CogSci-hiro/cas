@@ -3,8 +3,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from rate.induced_epochs.io import build_induced_epoch_band_paths
-from rate.induced_epochs.transform import (
+from cas.induced_epochs.io import build_induced_epoch_band_paths
+from cas.induced_epochs.transform import (
     build_induced_epochs,
     resolve_induced_band_names,
 )

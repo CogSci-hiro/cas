@@ -165,7 +165,7 @@ def write_dyad_outputs(
 
         rows_sorted = sorted(
             rows,
-            key=lambda x: (x["run"], x["start"]),
+            key=lambda x: (x["run"], x["start"], x["end"]),
         )
 
         with output_path.open("w", newline="", encoding="utf-8") as f:
