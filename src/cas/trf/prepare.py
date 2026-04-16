@@ -119,7 +119,14 @@ def build_feature_path(base_feature: str, subject_id: str, run: int) -> Path:
     pathlib.Path
         Canonical subject-level feature path.
     """
-    return Path("derivatives") / "features" / base_feature / subject_id / f"run-{run}.npy"
+    run_token = f"{int(run)}"
+    return (
+        Path("derivatives")
+        / "features"
+        / base_feature
+        / subject_id
+        / f"{subject_id}_task-conversation_run-{run_token}_{base_feature}.npy"
+    )
 
 
 def resolve_predictor_paths(

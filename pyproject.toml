@@ -41,5 +41,8 @@ dependencies = [
     "pyarrow>=14.0",
 
     # Utility
-    "tqdm"
+    "tqdm",
+
+    # Acoustic feature extraction
+    "voxatlas>=0.1.0"
 ]

@@ -21,6 +21,7 @@ CONFIG_DIR = f"{PROJECT_ROOT}/config"
 PATHS_CONFIG_PATH = f"{CONFIG_DIR}/paths.yaml"
 PREPROCESSING_CONFIG_PATH = f"{CONFIG_DIR}/preprocessing.yaml"
 TRF_CONFIG_PATH = f"{CONFIG_DIR}/trf.yaml"
+ACOUSTIC_CONFIG_PATH = f"{CONFIG_DIR}/acoustic.yaml"
 EVENTS_CONFIG_PATH = f"{CONFIG_DIR}/events.yaml"
 EPOCHS_CONFIG_PATH = f"{CONFIG_DIR}/epochs.yaml"
 DYADS_CSV_PATH = f"{CONFIG_DIR}/dyads.csv"
@@ -30,6 +31,8 @@ with open(PREPROCESSING_CONFIG_PATH, encoding="utf-8") as f:
     PREPROCESSING_CONFIG = yaml.safe_load(f) or {}
 with open(TRF_CONFIG_PATH, encoding="utf-8") as f:
     TRF_CONFIG = yaml.safe_load(f) or {}
+with open(ACOUSTIC_CONFIG_PATH, encoding="utf-8") as f:
+    ACOUSTIC_CONFIG = yaml.safe_load(f) or {}
 with open(EVENTS_CONFIG_PATH, encoding="utf-8") as f:
     EVENTS_CONFIG = yaml.safe_load(f) or {}
 with open(EPOCHS_CONFIG_PATH, encoding="utf-8") as f:
@@ -65,6 +68,18 @@ AUDIO_PATTERN = (
 ENVELOPE_OUTPUT_PATTERN = (
     f"{FEATURES_ROOT}/envelope/sub-{{subject}}/"
     f"sub-{{subject}}_task-{{task}}_run-{{run}}_envelope.npy"
+)
+ENVELOPE_SUMMARY_OUTPUT_PATTERN = (
+    f"{FEATURES_ROOT}/envelope/sub-{{subject}}/"
+    f"sub-{{subject}}_task-{{task}}_run-{{run}}_envelope.summary.json"
+)
+F0_OUTPUT_PATTERN = (
+    f"{FEATURES_ROOT}/f0/sub-{{subject}}/"
+    f"sub-{{subject}}_task-{{task}}_run-{{run}}_f0.npy"
+)
+F0_SUMMARY_OUTPUT_PATTERN = (
+    f"{FEATURES_ROOT}/f0/sub-{{subject}}/"
+    f"sub-{{subject}}_task-{{task}}_run-{{run}}_f0.summary.json"
 )
 TRF_ANALYSIS_ID = TRF_CONFIG["trf"]["analysis_id"]
 TRF_TARGET_PATH_TEMPLATE = TRF_CONFIG["trf"]["target"]["path"]
@@ -134,6 +149,27 @@ AUDIO_INPUTS = expand(
 )
 ENVELOPE_OUTPUTS = expand(
     ENVELOPE_OUTPUT_PATTERN,
+    zip,
+    subject=AUDIO_RECORD_SUBJECTS,
+    task=AUDIO_RECORD_TASKS,
+    run=AUDIO_RECORD_RUNS,
+)
+ENVELOPE_SUMMARY_OUTPUTS = expand(
+    ENVELOPE_SUMMARY_OUTPUT_PATTERN,
+    zip,
+    subject=AUDIO_RECORD_SUBJECTS,
+    task=AUDIO_RECORD_TASKS,
+    run=AUDIO_RECORD_RUNS,
+)
+F0_OUTPUTS = expand(
+    F0_OUTPUT_PATTERN,
+    zip,
+    subject=AUDIO_RECORD_SUBJECTS,
+    task=AUDIO_RECORD_TASKS,
+    run=AUDIO_RECORD_RUNS,
+)
+F0_SUMMARY_OUTPUTS = expand(
+    F0_SUMMARY_OUTPUT_PATTERN,
     zip,
     subject=AUDIO_RECORD_SUBJECTS,
     task=AUDIO_RECORD_TASKS,

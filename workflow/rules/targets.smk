@@ -32,6 +32,19 @@ rule envelope_all:
         ENVELOPE_OUTPUTS
 
 
+rule f0_all:
+    input:
+        F0_OUTPUTS
+
+
+rule acoustic_all:
+    input:
+        ENVELOPE_OUTPUTS,
+        ENVELOPE_SUMMARY_OUTPUTS,
+        F0_OUTPUTS,
+        F0_SUMMARY_OUTPUTS
+
+
 rule trf_all:
     input:
         TRF_SCORE_OUTPUTS,

@@ -1,19 +1,19 @@
-rule extract_envelope:
+rule extract_acoustic_features:
     input:
-        AUDIO_PATTERN,
+        audio=AUDIO_PATTERN,
+        config=ACOUSTIC_CONFIG_PATH,
     output:
-        f"{FEATURES_ROOT}/envelope/sub-{{subject}}/sub-{{subject}}_task-{{task}}_run-{{run}}_envelope.npy",
-    run:
-        shell(
-            'PYTHONPATH="{src_dir}" python -m cas.cli.main envelope '
-            '--input "{input_file}" '
-            '--output "{output_file}" '
-            '--lowpass-hz {lowpass_hz} '
-            '--filter-order {filter_order}'.format(
-                src_dir=SRC_DIR,
-                input_file=input[0],
-                output_file=output[0],
-                lowpass_hz=ENVELOPE_LOWPASS_HZ,
-                filter_order=ENVELOPE_FILTER_ORDER,
-            )
-        )
+        envelope=ENVELOPE_OUTPUT_PATTERN,
+        envelope_summary=ENVELOPE_SUMMARY_OUTPUT_PATTERN,
+        f0=F0_OUTPUT_PATTERN,
+        f0_summary=F0_SUMMARY_OUTPUT_PATTERN,
+    shell:
+        """
+        PYTHONPATH="{SRC_DIR}" python -m cas.cli.main acoustic-features \
+            --input "{input.audio}" \
+            --config "{input.config}" \
+            --envelope-output "{output.envelope}" \
+            --f0-output "{output.f0}" \
+            --envelope-summary-json "{output.envelope_summary}" \
+            --f0-summary-json "{output.f0_summary}"
+        """

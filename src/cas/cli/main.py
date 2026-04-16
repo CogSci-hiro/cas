@@ -219,6 +219,33 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Optional JSON sidecar path for envelope metadata.",
     )
 
+    acoustic_parser = subparsers.add_parser(
+        "acoustic-features",
+        help="Extract VoxAtlas speech envelope and F0 from a WAV file.",
+    )
+    acoustic_parser.add_argument("--input", required=True, help="Input .wav path.")
+    acoustic_parser.add_argument("--config", required=True, help="Path to config/acoustic.yaml.")
+    acoustic_parser.add_argument(
+        "--envelope-output",
+        required=True,
+        help="Output .npy path for the frame-aligned envelope values.",
+    )
+    acoustic_parser.add_argument(
+        "--f0-output",
+        required=True,
+        help="Output .npy path for the frame-aligned F0 values.",
+    )
+    acoustic_parser.add_argument(
+        "--envelope-summary-json",
+        default=None,
+        help="Optional JSON sidecar path for envelope metadata.",
+    )
+    acoustic_parser.add_argument(
+        "--f0-summary-json",
+        default=None,
+        help="Optional JSON sidecar path for F0 metadata.",
+    )
+
     preprocess_raw_parser = subparsers.add_parser(
         "preprocess-raw",
         help="Run the EEG preprocessing pipeline and save the result as .fif.",
@@ -540,6 +567,59 @@ def _run_envelope(args: argparse.Namespace) -> int:
         }
         summary_path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
         print(f"Saved summary to {summary_path}")
+
+    return 0
+
+
+def _run_acoustic_features(args: argparse.Namespace) -> int:
+    from cas.features.voxatlas import (
+        build_feature_summary,
+        extract_acoustic_features,
+        load_mono_audio,
+    )
+
+    config = _load_yaml(Path(args.config))
+    signal, sampling_rate_hz = load_mono_audio(args.input)
+    bundle = extract_acoustic_features(
+        signal,
+        sampling_rate_hz,
+        config,
+        source_path=args.input,
+    )
+
+    envelope_output_path = Path(args.envelope_output)
+    envelope_output_path.parent.mkdir(parents=True, exist_ok=True)
+    np.save(envelope_output_path, bundle.envelope.values)
+    print(f"Saved envelope to {envelope_output_path}")
+
+    f0_output_path = Path(args.f0_output)
+    f0_output_path.parent.mkdir(parents=True, exist_ok=True)
+    np.save(f0_output_path, bundle.f0.values)
+    print(f"Saved F0 to {f0_output_path}")
+
+    if args.envelope_summary_json:
+        summary_output_path = _save_json(
+            build_feature_summary(
+                input_path=args.input,
+                output_path=envelope_output_path,
+                sampling_rate_hz=bundle.sampling_rate_hz,
+                result=bundle.envelope,
+            ),
+            args.envelope_summary_json,
+        )
+        print(f"Saved envelope summary to {summary_output_path}")
+
+    if args.f0_summary_json:
+        summary_output_path = _save_json(
+            build_feature_summary(
+                input_path=args.input,
+                output_path=f0_output_path,
+                sampling_rate_hz=bundle.sampling_rate_hz,
+                result=bundle.f0,
+            ),
+            args.f0_summary_json,
+        )
+        print(f"Saved F0 summary to {summary_output_path}")
 
     return 0
 
@@ -1197,6 +1277,8 @@ def main() -> int:
         return _run_eeg_array(args)
     if args.command == "envelope":
         return _run_envelope(args)
+    if args.command == "acoustic-features":
+        return _run_acoustic_features(args)
     if args.command == "preprocess-raw":
         return _run_preprocess_raw(args)
     if args.command == "downsample-raw":
