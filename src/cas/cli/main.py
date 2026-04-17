@@ -15,6 +15,10 @@ from scipy.io import wavfile
 
 from cas.cli.commands.annotations import add_annotations_parser, run_annotations_command
 from cas.cli.commands.fit_tde_hmm import add_fit_tde_hmm_parser, run_fit_tde_hmm_command
+from cas.cli.commands.plot_tde_hmm_qc import (
+    add_plot_tde_hmm_qc_parser,
+    run_plot_tde_hmm_qc_command,
+)
 
 if TYPE_CHECKING:
     import mne
@@ -145,6 +149,7 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     add_annotations_parser(subparsers)
     add_fit_tde_hmm_parser(subparsers)
+    add_plot_tde_hmm_qc_parser(subparsers)
 
     trf_parser = subparsers.add_parser("trf", help="Run TRF nested CV from run-wise arrays.")
     trf_parser.add_argument("--eeg-runs", nargs="+", required=True, help="Run-wise EEG .npy paths.")
@@ -1273,6 +1278,8 @@ def main() -> int:
         return run_annotations_command(args)
     if args.command == "fit-tde-hmm":
         return run_fit_tde_hmm_command(args)
+    if args.command == "plot-tde-hmm-qc":
+        return run_plot_tde_hmm_qc_command(args)
     if args.command == "trf":
         return _run_trf(args)
     if args.command == "trf-config":
