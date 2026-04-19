@@ -14,7 +14,7 @@ hmm:
   minimum_chunk_duration_s: 0.5
 
   # Candidate state counts evaluated during model selection.
-  candidate_k: [4, 5, 6, 7]
+  candidate_k: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 
   # Number of GLHMM random initializations per K.
   n_initializations: 5
@@ -23,7 +23,7 @@ hmm:
   standardize_per_run: true
 
   # Dimensionality reduction applied after causal TDE.
-  pca_n_components: 16
+  pca_n_components: 10
 
   # Random seed for reproducible fitting.
   random_seed: 123
