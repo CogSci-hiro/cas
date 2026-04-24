@@ -10,6 +10,7 @@ from typing import Any, Literal
 UnmatchedSurprisalStrategy = Literal["drop", "zero", "keep_nan"]
 TokenAvailability = Literal["onset", "offset"]
 ExpectedInfoGroup = Literal["partner_ipu_class", "partner_role", "global"]
+EpisodeAnchor = Literal["partner_ipu", "legacy_fpp_previous_partner"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +41,8 @@ class BehaviourHazardConfig:
         Maximum gap between adjacent partner tokens when inferring IPUs.
     max_followup_s
         Follow-up duration for censored negative episodes.
+    episode_anchor
+        Whether episodes are anchored to partner IPUs or legacy FPP-linked anchors.
     include_censored
         Whether to construct censored negative episodes when possible.
     token_availability
@@ -85,10 +88,12 @@ class BehaviourHazardConfig:
     baseline_spline_df: int = 6
     baseline_spline_degree: int = 3
     ipu_gap_threshold_s: float = 0.300
-    max_followup_s: float = 5.0
+    max_followup_s: float = 6.0
+    episode_anchor: EpisodeAnchor = "partner_ipu"
     include_censored: bool = True
     token_availability: TokenAvailability = "onset"
     expected_info_group: ExpectedInfoGroup = "partner_ipu_class"
+    target_fpp_label_prefix: str = "FPP_"
     require_partner_offset_before_fpp: bool = True
     partner_offset_fpp_tolerance_s: float = 0.020
     overlapping_episode_strategy: Literal["exclude", "truncate", "keep"] = "exclude"
@@ -97,6 +102,19 @@ class BehaviourHazardConfig:
     save_riskset: bool = True
     clip_proportions: bool = False
     clip_range: tuple[float, float] = (0.0, 1.5)
+    lag_grid_ms: tuple[int, ...] = (0, 100, 200, 300, 500, 700, 1000)
+    primary_lagged_predictor: str = "information_rate"
+    lagged_feature_fill_value: float = 0.0
+    fit_primary_behaviour_models: bool = True
+    fit_primary_stat_tests: bool = True
+    make_primary_publication_figures: bool = True
+    run_primary_leave_one_cluster: bool = False
+    primary_information_rate_lag_ms: int = 0
+    primary_prop_expected_lag_ms: int = 300
+    primary_model_baseline_spline_df: int = 6
+    primary_model_baseline_spline_degree: int = 3
+    fit_lagged_models: bool = True
+    save_lagged_feature_table: bool = True
     default_output_prefix: str = "hazard_behavior_fpp"
     default_expected_info_group_column: str = "partner_ipu_class"
     default_model_family: str = "binomial_glm"
@@ -124,6 +142,8 @@ class BehaviourHazardConfig:
             raise ValueError("`ipu_gap_threshold_s` must be non-negative.")
         if self.max_followup_s <= 0.0:
             raise ValueError("`max_followup_s` must be positive.")
+        if self.episode_anchor not in {"partner_ipu", "legacy_fpp_previous_partner"}:
+            raise ValueError("`episode_anchor` must be one of partner_ipu, legacy_fpp_previous_partner.")
         if self.unmatched_surprisal_strategy not in {"drop", "zero", "keep_nan"}:
             raise ValueError("`unmatched_surprisal_strategy` must be one of drop, zero, keep_nan.")
         if self.token_availability not in {"onset", "offset"}:
@@ -137,6 +157,31 @@ class BehaviourHazardConfig:
         lower, upper = self.clip_range
         if lower >= upper:
             raise ValueError("`clip_range` must be an increasing interval.")
+        if not self.target_fpp_label_prefix:
+            raise ValueError("`target_fpp_label_prefix` must be non-empty.")
+        if not self.lag_grid_ms:
+            raise ValueError("`lag_grid_ms` must contain at least one lag.")
+        if any(int(lag_ms) < 0 for lag_ms in self.lag_grid_ms):
+            raise ValueError("`lag_grid_ms` must contain only non-negative integers.")
+        if self.primary_information_rate_lag_ms < 0:
+            raise ValueError("`primary_information_rate_lag_ms` must be non-negative.")
+        if self.primary_prop_expected_lag_ms < 0:
+            raise ValueError("`primary_prop_expected_lag_ms` must be non-negative.")
+        if self.primary_model_baseline_spline_df < 3:
+            raise ValueError("`primary_model_baseline_spline_df` must be at least 3.")
+        if self.primary_model_baseline_spline_degree < 1:
+            raise ValueError("`primary_model_baseline_spline_degree` must be at least 1.")
+        if self.primary_lagged_predictor not in {
+            "information_rate",
+            "cumulative_info",
+            "prop_actual_cumulative_info",
+            "prop_expected_cumulative_info",
+        }:
+            raise ValueError("`primary_lagged_predictor` must name a supported information feature.")
+
+    @property
+    def include_censored_episodes(self) -> bool:
+        return self.include_censored
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-friendly mapping."""

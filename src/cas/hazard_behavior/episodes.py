@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+import re
 
 import numpy as np
 import pandas as pd
@@ -12,6 +13,7 @@ from cas.hazard_behavior.config import BehaviourHazardConfig
 from cas.hazard_behavior.progress import progress_iterable
 
 DEFAULT_PARTNER_IPU_CLASS = "unknown"
+SUPPORTED_SPEAKERS = {"A", "B"}
 LOGGER = logging.getLogger(__name__)
 
 
@@ -25,12 +27,14 @@ class EpisodeBuildResult:
     validation_qc: dict[str, object]
     warnings: list[str]
     used_partner_anchor: str
+    partner_ipu_table: pd.DataFrame
+    event_rows_debug: pd.DataFrame
 
 
 def infer_partner_speaker(participant_speaker: str) -> str:
     """Infer the partner speaker in a two-speaker dyad."""
 
-    speaker = str(participant_speaker).strip().upper()
+    speaker = _normalize_speaker_label(participant_speaker)
     if speaker == "A":
         return "B"
     if speaker == "B":
@@ -38,21 +42,84 @@ def infer_partner_speaker(participant_speaker: str) -> str:
     raise ValueError(f"Expected participant speaker A or B, found {participant_speaker!r}.")
 
 
+def infer_participant_speaker(partner_speaker: str) -> str:
+    """Infer the non-partner speaker in a two-speaker dyad."""
+
+    return infer_partner_speaker(partner_speaker)
+
+
 def compute_ipu_token_table(
     surprisal_table: pd.DataFrame,
     *,
     gap_threshold_s: float,
 ) -> pd.DataFrame:
-    """Group consecutive tokens into IPU-like intervals.
+    """Group consecutive tokens into IPU-like intervals."""
 
-    Usage example
-    -------------
-        ipu_table = compute_ipu_token_table(tokens, gap_threshold_s=0.3)
-    """
+    return build_partner_ipus_from_tokens(surprisal_table, gap_threshold_s=gap_threshold_s)
+
+
+def extract_fpp_events(
+    events_table: pd.DataFrame,
+    config: BehaviourHazardConfig,
+    *,
+    token_speakers: set[str] | None = None,
+) -> pd.DataFrame:
+    """Extract one row per target FPP event from the events table."""
+
+    working = events_table.copy()
+    working["dyad_id"] = working["dyad_id"].map(_normalize_dyad_id)
+    working["run"] = working["run"].map(_normalize_run_label)
+
+    speaker_column = _resolve_fpp_speaker_column(working)
+    working["fpp_speaker"] = working[speaker_column].map(
+        lambda value: _normalize_speaker_label(
+            value,
+            event_speakers=set(str(item) for item in working[speaker_column].dropna().unique()),
+            token_speakers=token_speakers,
+            dyad_run_example=_first_dyad_run_example(working),
+        )
+    )
+    working["fpp_onset"] = pd.to_numeric(working["fpp_onset"], errors="coerce")
+    working["fpp_offset"] = pd.to_numeric(working.get("fpp_offset"), errors="coerce")
+    label_column = "fpp_label" if "fpp_label" in working.columns else None
+    if label_column is not None:
+        working["fpp_label"] = working[label_column].astype(str)
+        working = working.loc[working["fpp_label"].str.startswith(config.target_fpp_label_prefix)].copy()
+    else:
+        working["fpp_label"] = ""
+
+    extracted = working.loc[
+        working["fpp_onset"].notna(),
+        ["dyad_id", "run", "fpp_speaker", "fpp_onset", "fpp_offset", "fpp_label"],
+    ].copy()
+    extracted["source_event_id"] = np.arange(len(extracted), dtype=int)
+    extracted = extracted.sort_values(["dyad_id", "run", "fpp_speaker", "fpp_onset"], kind="mergesort").reset_index(drop=True)
+    return extracted
+
+
+def build_partner_ipus_from_tokens(
+    surprisal_table: pd.DataFrame,
+    *,
+    gap_threshold_s: float,
+) -> pd.DataFrame:
+    """Infer partner IPUs from token timing gaps."""
+
+    working = surprisal_table.copy()
+    working["dyad_id"] = working["dyad_id"].map(_normalize_dyad_id)
+    working["run"] = working["run"].map(_normalize_run_label)
+    working["speaker"] = working["speaker"].map(_normalize_speaker_label)
+    working["onset"] = pd.to_numeric(working["onset"], errors="coerce")
+    working["offset"] = pd.to_numeric(working["offset"], errors="coerce")
+    working = working.loc[
+        working["speaker"].isin(SUPPORTED_SPEAKERS)
+        & working["onset"].notna()
+        & working["offset"].notna()
+        & (working["offset"] > working["onset"])
+    ].copy()
 
     rows: list[dict[str, object]] = []
     group_columns = ["dyad_id", "run", "speaker"]
-    for group_key, speaker_tokens in surprisal_table.groupby(group_columns, sort=False):
+    for group_key, speaker_tokens in working.groupby(group_columns, sort=False):
         sorted_tokens = speaker_tokens.sort_values(["onset", "offset"], kind="mergesort").reset_index(drop=True)
         ipu_rows = _build_ipu_rows_from_tokens(
             sorted_tokens=sorted_tokens,
@@ -60,7 +127,296 @@ def compute_ipu_token_table(
             gap_threshold_s=gap_threshold_s,
         )
         rows.extend(ipu_rows)
-    return pd.DataFrame(rows)
+
+    ipu_table = pd.DataFrame(rows)
+    if ipu_table.empty:
+        return ipu_table
+    ipu_table["partner_ipu_duration"] = ipu_table["partner_ipu_offset"] - ipu_table["partner_ipu_onset"]
+    ipu_table["next_partner_ipu_onset"] = (
+        ipu_table.sort_values(["dyad_id", "run", "speaker", "partner_ipu_onset"], kind="mergesort")
+        .groupby(["dyad_id", "run", "speaker"], sort=False)["partner_ipu_onset"]
+        .shift(-1)
+    )
+    ipu_table["anchor_source"] = "partner_ipu_tokens"
+    return ipu_table.reset_index(drop=True)
+
+
+def compute_next_same_speaker_ipu_onset(ipu_table: pd.DataFrame) -> pd.Series:
+    """Return the next onset for each IPU within speaker-specific dyad/run groups."""
+
+    return (
+        ipu_table.sort_values(["dyad_id", "run", "speaker", "partner_ipu_onset"], kind="mergesort")
+        .groupby(["dyad_id", "run", "speaker"], sort=False)["partner_ipu_onset"]
+        .shift(-1)
+    )
+
+
+def find_first_fpp_in_episode_window(
+    fpp_events: pd.DataFrame,
+    *,
+    dyad_id: str,
+    run: str,
+    participant_speaker: str,
+    episode_start: float,
+    episode_end: float,
+) -> pd.Series | None:
+    """Find the first FPP onset within an episode window."""
+
+    matches = fpp_events.loc[
+        (fpp_events["dyad_id"] == dyad_id)
+        & (fpp_events["run"] == run)
+        & (fpp_events["fpp_speaker"] == participant_speaker)
+        & (fpp_events["fpp_onset"] >= episode_start)
+        & (fpp_events["fpp_onset"] < episode_end)
+    ].sort_values(["fpp_onset", "source_event_id"], kind="mergesort")
+    if matches.empty:
+        return None
+    return matches.iloc[0]
+
+
+def build_partner_ipu_anchored_episodes(
+    *,
+    events_table: pd.DataFrame,
+    surprisal_table: pd.DataFrame,
+    config: BehaviourHazardConfig,
+) -> EpisodeBuildResult:
+    """Build partner-IPU-anchored behavioural hazard episodes."""
+
+    warnings: list[str] = []
+    partner_ipu_table = build_partner_ipus_from_tokens(
+        surprisal_table,
+        gap_threshold_s=config.ipu_gap_threshold_s,
+    )
+    if partner_ipu_table.empty:
+        raise ValueError("No partner IPUs could be constructed from the surprisal token table.")
+
+    token_speakers = set(partner_ipu_table["speaker"].astype(str).unique())
+    fpp_events = extract_fpp_events(events_table, config, token_speakers=token_speakers)
+    episodes: list[dict[str, object]] = []
+    assigned_event_ids: list[int] = []
+    event_rows_debug: list[dict[str, object]] = []
+    ipu_records = list(partner_ipu_table.to_dict("records"))
+    for ipu_row in progress_iterable(
+        ipu_records,
+        total=len(ipu_records),
+        description="Partner-IPU episodes",
+        enabled=LOGGER.isEnabledFor(logging.INFO),
+    ):
+        dyad_id = str(ipu_row["dyad_id"])
+        run = str(ipu_row["run"])
+        partner_speaker = str(ipu_row["speaker"])
+        participant_speaker = infer_participant_speaker(partner_speaker)
+        episode_start = float(ipu_row["partner_ipu_onset"])
+        next_partner_ipu_onset = pd.to_numeric(pd.Series([ipu_row.get("next_partner_ipu_onset")]), errors="coerce").iloc[0]
+        window_end, censor_reason = _compute_episode_window_end(
+            episode_start=episode_start,
+            next_partner_ipu_onset=next_partner_ipu_onset,
+            run_end=None,
+            config=config,
+        )
+        event_row = find_first_fpp_in_episode_window(
+            fpp_events,
+            dyad_id=dyad_id,
+            run=run,
+            participant_speaker=participant_speaker,
+            episode_start=episode_start,
+            episode_end=window_end,
+        )
+        has_event = event_row is not None
+        own_fpp_onset = float(event_row["fpp_onset"]) if event_row is not None else np.nan
+        own_fpp_offset = float(event_row["fpp_offset"]) if event_row is not None and pd.notna(event_row["fpp_offset"]) else np.nan
+        own_fpp_label = str(event_row["fpp_label"]) if event_row is not None else ""
+        censor_time = own_fpp_onset if has_event else float(window_end)
+        event_latency_from_partner_onset = own_fpp_onset - episode_start if has_event else np.nan
+        partner_ipu_offset = float(ipu_row["partner_ipu_offset"])
+        event_latency_from_partner_offset = own_fpp_onset - partner_ipu_offset if has_event else np.nan
+        if has_event:
+            event_phase = "during_partner_ipu" if own_fpp_onset < partner_ipu_offset else "post_partner_ipu"
+            assigned_event_ids.append(int(event_row["source_event_id"]))
+        else:
+            event_phase = "censored"
+        episode = {
+            "episode_id": f"{dyad_id}|run-{run}|{partner_speaker}|ipu-{str(ipu_row['partner_ipu_id']).split('|')[-1]}",
+            "dyad_id": dyad_id,
+            "run": run,
+            "partner_speaker": partner_speaker,
+            "participant_speaker": participant_speaker,
+            "partner_ipu_id": str(ipu_row["partner_ipu_id"]),
+            "partner_ipu_onset": episode_start,
+            "partner_ipu_offset": partner_ipu_offset,
+            "partner_ipu_duration": float(ipu_row["partner_ipu_duration"]),
+            "next_partner_ipu_onset": float(next_partner_ipu_onset) if np.isfinite(next_partner_ipu_onset) else np.nan,
+            "episode_start": episode_start,
+            "episode_end": float(window_end),
+            "censor_time": float(censor_time),
+            "episode_has_event": bool(has_event),
+            "own_fpp_onset": own_fpp_onset,
+            "own_fpp_offset": own_fpp_offset,
+            "own_fpp_label": own_fpp_label,
+            "event_latency_from_partner_onset_s": event_latency_from_partner_onset,
+            "event_latency_from_partner_offset_s": event_latency_from_partner_offset,
+            "event_phase": event_phase,
+            "episode_duration_s": float(censor_time - episode_start),
+            "censor_reason": "event" if has_event else censor_reason,
+            "anchor_source": str(ipu_row["anchor_source"]),
+            "partner_ipu_class": str(ipu_row.get("partner_ipu_class", DEFAULT_PARTNER_IPU_CLASS)),
+            "partner_role": "partner",
+            "episode_kind": "event_positive" if has_event else "censored",
+            "event_observed": int(has_event),
+        }
+        episodes.append(episode)
+        event_rows_debug.append(
+            {
+                "partner_ipu_id": episode["partner_ipu_id"],
+                "episode_id": episode["episode_id"],
+                "dyad_id": dyad_id,
+                "run": run,
+                "partner_speaker": partner_speaker,
+                "participant_speaker": participant_speaker,
+                "episode_start": episode_start,
+                "episode_end": float(window_end),
+                "assigned_source_event_id": int(event_row["source_event_id"]) if event_row is not None else np.nan,
+                "assigned_fpp_onset": own_fpp_onset,
+                "assigned_fpp_label": own_fpp_label,
+                "episode_has_event": bool(has_event),
+                "censor_reason": "event" if has_event else censor_reason,
+            }
+        )
+
+    episodes_table = pd.DataFrame(episodes).sort_values(["dyad_id", "run", "partner_ipu_onset"], kind="mergesort").reset_index(drop=True)
+    if not config.include_censored:
+        episodes_table = episodes_table.loc[episodes_table["episode_has_event"]].reset_index(drop=True)
+    excluded = pd.DataFrame(columns=["episode_id", "invalid_reason"])
+    event_rows_debug_table = pd.DataFrame(event_rows_debug)
+    anchor_qc = compute_partner_ipu_anchor_qc(
+        partner_ipu_table=partner_ipu_table,
+        episodes_table=episodes_table,
+        fpp_events=fpp_events,
+        assigned_event_ids=assigned_event_ids,
+        config=config,
+    )
+    validate_partner_ipu_episodes(
+        episodes_table,
+        fpp_events=fpp_events,
+        assigned_event_ids=assigned_event_ids,
+    )
+    if anchor_qc["n_fpp_events_unassigned"] > 0:
+        warnings.append(
+            f"{anchor_qc['n_fpp_events_unassigned']} FPP events were not assigned to any partner-IPU episode."
+        )
+    return EpisodeBuildResult(
+        episodes=episodes_table,
+        candidate_episodes=episodes_table.copy(),
+        excluded_episodes=excluded,
+        validation_qc=anchor_qc,
+        warnings=warnings,
+        used_partner_anchor="partner_ipu_tokens",
+        partner_ipu_table=partner_ipu_table,
+        event_rows_debug=event_rows_debug_table,
+    )
+
+
+def compute_partner_ipu_anchor_qc(
+    *,
+    partner_ipu_table: pd.DataFrame,
+    episodes_table: pd.DataFrame,
+    fpp_events: pd.DataFrame,
+    assigned_event_ids: list[int],
+    config: BehaviourHazardConfig,
+) -> dict[str, object]:
+    """Compute anchor QC for partner-IPU episodes."""
+
+    event_positive = episodes_table.loc[episodes_table["episode_has_event"]].copy()
+    latencies_onset = pd.to_numeric(event_positive["event_latency_from_partner_onset_s"], errors="coerce")
+    latencies_offset = pd.to_numeric(event_positive["event_latency_from_partner_offset_s"], errors="coerce")
+    assigned_unique = len(set(assigned_event_ids))
+    events_by_pair = {
+        f"{str(index[0])}|run-{str(index[1])}": int(value)
+        for index, value in fpp_events.groupby(["dyad_id", "run"], sort=False).size().items()
+    }
+    tokens_by_pair = {
+        f"{str(index[0])}|run-{str(index[1])}": int(value)
+        for index, value in partner_ipu_table.groupby(["dyad_id", "run"], sort=False).size().items()
+    }
+    event_pairs = set(events_by_pair)
+    token_pairs = set(tokens_by_pair)
+    return {
+        "n_partner_ipus": int(len(partner_ipu_table)),
+        "n_episodes": int(len(episodes_table)),
+        "n_event_positive_episodes": int(event_positive.shape[0]),
+        "n_censored_episodes": int((~episodes_table["episode_has_event"]).sum()),
+        "proportion_event_positive": _safe_proportion(int(event_positive.shape[0]), int(len(episodes_table))),
+        "n_fpp_events_total": int(len(fpp_events)),
+        "n_fpp_events_assigned_to_episode": int(assigned_unique),
+        "n_fpp_events_unassigned": int(len(fpp_events) - assigned_unique),
+        "proportion_fpp_events_assigned": _safe_proportion(int(assigned_unique), int(len(fpp_events))),
+        "n_episodes_censored_by_next_partner_ipu": int((episodes_table["censor_reason"] == "next_partner_ipu").sum()),
+        "n_episodes_censored_by_max_followup": int((episodes_table["censor_reason"] == "max_followup").sum()),
+        "n_episodes_censored_by_run_end": int((episodes_table["censor_reason"] == "run_end").sum()),
+        "median_partner_ipu_duration_s": _maybe_float(partner_ipu_table["partner_ipu_duration"].median()),
+        "p95_partner_ipu_duration_s": _maybe_float(partner_ipu_table["partner_ipu_duration"].quantile(0.95)),
+        "max_partner_ipu_duration_s": _maybe_float(partner_ipu_table["partner_ipu_duration"].max()),
+        "median_event_latency_from_partner_onset_s": _maybe_float(latencies_onset.median()),
+        "p95_event_latency_from_partner_onset_s": _maybe_float(latencies_onset.quantile(0.95)),
+        "median_event_latency_from_partner_offset_s": _maybe_float(latencies_offset.median()),
+        "proportion_events_during_partner_ipu": _safe_proportion(
+            int((event_positive["event_phase"] == "during_partner_ipu").sum()),
+            int(event_positive.shape[0]),
+        ),
+        "proportion_events_post_partner_ipu": _safe_proportion(
+            int((event_positive["event_phase"] == "post_partner_ipu").sum()),
+            int(event_positive.shape[0]),
+        ),
+        "max_followup_s": float(config.max_followup_s),
+        "ipu_gap_threshold_s": float(config.ipu_gap_threshold_s),
+        "bin_size_s": float(config.bin_size_s),
+        "n_events_by_dyad_run": events_by_pair,
+        "n_tokens_by_dyad_run": tokens_by_pair,
+        "dyad_run_pairs_in_events_not_tokens": sorted(event_pairs - token_pairs),
+        "dyad_run_pairs_in_tokens_not_events": sorted(token_pairs - event_pairs),
+    }
+
+
+def validate_partner_ipu_episodes(
+    episodes_table: pd.DataFrame,
+    *,
+    fpp_events: pd.DataFrame,
+    assigned_event_ids: list[int],
+) -> None:
+    """Validate structural invariants for partner-IPU episodes."""
+
+    if episodes_table.empty:
+        raise ValueError("No partner-IPU episodes were constructed.")
+    if episodes_table["partner_ipu_onset"].isna().any() or episodes_table["partner_ipu_offset"].isna().any():
+        raise ValueError("Every partner-IPU-anchored episode must include partner_ipu_onset and partner_ipu_offset.")
+    if not (episodes_table["partner_ipu_onset"] < episodes_table["partner_ipu_offset"]).all():
+        raise ValueError("Each partner-IPU-anchored episode must satisfy partner_ipu_onset < partner_ipu_offset.")
+    if not np.allclose(
+        pd.to_numeric(episodes_table["episode_start"], errors="coerce"),
+        pd.to_numeric(episodes_table["partner_ipu_onset"], errors="coerce"),
+    ):
+        raise ValueError("Each partner-IPU-anchored episode must satisfy episode_start == partner_ipu_onset.")
+    if not (pd.to_numeric(episodes_table["episode_end"], errors="coerce") > pd.to_numeric(episodes_table["episode_start"], errors="coerce")).all():
+        raise ValueError("Each partner-IPU-anchored episode must satisfy episode_end > episode_start.")
+
+    event_positive = episodes_table.loc[episodes_table["episode_has_event"]]
+    if not event_positive.empty:
+        if not (
+            pd.to_numeric(event_positive["own_fpp_onset"], errors="coerce")
+            >= pd.to_numeric(event_positive["episode_start"], errors="coerce")
+        ).all():
+            raise ValueError("Event-positive partner-IPU episodes must satisfy own_fpp_onset >= episode_start.")
+        if not (
+            pd.to_numeric(event_positive["own_fpp_onset"], errors="coerce")
+            < pd.to_numeric(event_positive["episode_end"], errors="coerce")
+        ).all():
+            raise ValueError("Event-positive partner-IPU episodes must satisfy own_fpp_onset < episode_end.")
+    duplicated_assignments = len(assigned_event_ids) != len(set(assigned_event_ids))
+    if duplicated_assignments:
+        raise ValueError("No FPP event may be assigned to more than one partner-IPU episode.")
+    missing_assigned = set(assigned_event_ids) - set(pd.to_numeric(fpp_events["source_event_id"], errors="coerce").astype(int))
+    if missing_assigned:
+        raise ValueError(f"Assigned event ids were not found in extracted FPP events: {sorted(missing_assigned)}")
 
 
 def build_event_positive_episodes(
@@ -71,17 +427,24 @@ def build_event_positive_episodes(
 ) -> EpisodeBuildResult:
     """Build and validate event-positive episodes anchored at preceding partner speech."""
 
+    if config.episode_anchor == "partner_ipu":
+        return build_partner_ipu_anchored_episodes(
+            events_table=events_table,
+            surprisal_table=surprisal_table,
+            config=config,
+        )
+
     warnings: list[str] = []
     working = events_table.copy()
-    working["dyad_id"] = working["dyad_id"].astype(str)
-    working["run"] = working["run"].astype(str)
-    working["participant_speaker"] = working["participant_speaker"].astype(str)
+    working["dyad_id"] = working["dyad_id"].map(_normalize_dyad_id)
+    working["run"] = working["run"].map(_normalize_run_label)
+    working["participant_speaker"] = working["participant_speaker"].map(_normalize_speaker_label)
     working["fpp_onset"] = pd.to_numeric(working["fpp_onset"], errors="coerce")
     if "partner_speaker" not in working.columns:
         working["partner_speaker"] = working["participant_speaker"].map(infer_partner_speaker)
         warnings.append("Partner speaker was inferred from participant speaker labels.")
     else:
-        working["partner_speaker"] = working["partner_speaker"].astype(str)
+        working["partner_speaker"] = working["partner_speaker"].map(_normalize_speaker_label)
 
     used_partner_anchor = "events.spp_onset"
     if (
@@ -119,6 +482,8 @@ def build_event_positive_episodes(
         validation_qc=validation_qc,
         warnings=warnings,
         used_partner_anchor=used_partner_anchor,
+        partner_ipu_table=pd.DataFrame(),
+        event_rows_debug=pd.DataFrame(),
     )
 
 
@@ -131,6 +496,8 @@ def build_censored_episodes(
 ) -> pd.DataFrame:
     """Build optional censored episodes from partner IPUs not followed by own FPP."""
 
+    if config.episode_anchor == "partner_ipu":
+        return pd.DataFrame()
     if not config.include_censored:
         return pd.DataFrame()
 
@@ -148,16 +515,15 @@ def build_censored_episodes(
     if candidate_ipus.empty:
         return pd.DataFrame()
 
-    fpp_rows = events_table.loc[:, ["dyad_id", "run", "participant_speaker", "fpp_onset"]].copy()
-    fpp_rows["fpp_onset"] = pd.to_numeric(fpp_rows["fpp_onset"], errors="coerce")
+    fpp_rows = extract_fpp_events(events_table, config, token_speakers=set(ipu_table["speaker"].astype(str).unique()))
     episodes: list[dict[str, object]] = []
     for _, ipu_row in candidate_ipus.iterrows():
         partner_speaker = str(ipu_row["partner_speaker"])
         participant_speaker = infer_partner_speaker(partner_speaker)
         matching_events = fpp_rows.loc[
-            (fpp_rows["dyad_id"].astype(str) == str(ipu_row["dyad_id"]))
-            & (fpp_rows["run"].astype(str) == str(ipu_row["run"]))
-            & (fpp_rows["participant_speaker"].astype(str) == participant_speaker)
+            (fpp_rows["dyad_id"] == str(ipu_row["dyad_id"]))
+            & (fpp_rows["run"] == str(ipu_row["run"]))
+            & (fpp_rows["fpp_speaker"] == participant_speaker)
             & (fpp_rows["fpp_onset"] > float(ipu_row["partner_ipu_onset"]))
             & (fpp_rows["fpp_onset"] <= float(ipu_row["partner_ipu_offset"]) + config.max_followup_s)
         ]
@@ -210,17 +576,20 @@ def infer_previous_partner_ipu_from_tokens(
         description="Inferring partner IPUs",
         enabled=LOGGER.isEnabledFor(logging.INFO),
     ):
-        dyad_id = str(event_row["dyad_id"])
-        run = str(event_row["run"])
-        participant_speaker = str(event_row["participant_speaker"])
-        partner_speaker = str(event_row["partner_speaker"])
+        dyad_id = _normalize_dyad_id(event_row["dyad_id"])
+        run = _normalize_run_label(event_row["run"])
+        participant_speaker = _normalize_speaker_label(event_row["participant_speaker"])
+        partner_speaker = _normalize_speaker_label(event_row["partner_speaker"])
         fpp_onset = float(event_row["fpp_onset"])
         partner_tokens = surprisal_table.loc[
-            (surprisal_table["dyad_id"].astype(str) == dyad_id)
-            & (surprisal_table["run"].astype(str) == run)
-            & (surprisal_table["speaker"].astype(str) == partner_speaker)
+            (surprisal_table["dyad_id"].map(_normalize_dyad_id) == dyad_id)
+            & (surprisal_table["run"].map(_normalize_run_label) == run)
+            & (surprisal_table["speaker"].map(_normalize_speaker_label) == partner_speaker)
             & (pd.to_numeric(surprisal_table["onset"], errors="coerce") < fpp_onset)
         ].copy()
+        partner_tokens["dyad_id"] = partner_tokens["dyad_id"].map(_normalize_dyad_id)
+        partner_tokens["run"] = partner_tokens["run"].map(_normalize_run_label)
+        partner_tokens["speaker"] = partner_tokens["speaker"].map(_normalize_speaker_label)
         partner_tokens = partner_tokens.sort_values(["onset", "offset"], kind="mergesort").reset_index(drop=True)
         local_ipus = _build_ipu_rows_from_tokens(
             sorted_tokens=partner_tokens,
@@ -257,7 +626,7 @@ def compute_episode_validation_qc(
     *,
     config: BehaviourHazardConfig,
 ) -> dict[str, object]:
-    """Compute summary QC metrics for episode validation."""
+    """Compute summary QC metrics for legacy episode validation."""
 
     candidate_latencies = pd.to_numeric(candidate_episodes["latency_from_partner_offset_s"], errors="coerce")
     valid_latencies = pd.to_numeric(valid_episodes["latency_from_partner_offset_s"], errors="coerce")
@@ -636,6 +1005,80 @@ def _finish_ipu_row(
         "partner_ipu_class": str(first_row.get("source_interval_id", DEFAULT_PARTNER_IPU_CLASS)),
         "n_tokens_total": int(len(token_slice)),
     }
+
+
+def _compute_episode_window_end(
+    *,
+    episode_start: float,
+    next_partner_ipu_onset: float | None,
+    run_end: float | None,
+    config: BehaviourHazardConfig,
+) -> tuple[float, str]:
+    candidates = [(episode_start + config.max_followup_s, "max_followup")]
+    if next_partner_ipu_onset is not None and np.isfinite(next_partner_ipu_onset):
+        candidates.append((float(next_partner_ipu_onset), "next_partner_ipu"))
+    if run_end is not None and np.isfinite(run_end):
+        candidates.append((float(run_end), "run_end"))
+    window_end, reason = min(candidates, key=lambda item: item[0])
+    if window_end <= episode_start:
+        raise ValueError(f"Episode window end must be after episode start, found {window_end} <= {episode_start}.")
+    return float(window_end), reason
+
+
+def _resolve_fpp_speaker_column(events_table: pd.DataFrame) -> str:
+    for candidate in ("participant_speaker", "fpp_speaker", "speaker"):
+        if candidate in events_table.columns:
+            return candidate
+    available = ", ".join(sorted(str(column) for column in events_table.columns))
+    raise ValueError(f"Could not resolve FPP speaker column from events table. Available columns: {available}")
+
+
+def _normalize_speaker_label(
+    value: object,
+    *,
+    event_speakers: set[str] | None = None,
+    token_speakers: set[str] | None = None,
+    dyad_run_example: str | None = None,
+) -> str:
+    speaker = str(value).strip().upper()
+    if speaker in SUPPORTED_SPEAKERS:
+        return speaker
+    if event_speakers is not None and token_speakers is not None:
+        raise ValueError(
+            "speaker labels could not be mapped onto A/B speakers for behavioural hazard episodes. "
+            f"Unique event speaker labels: {sorted(event_speakers)}. "
+            f"Unique token speaker labels: {sorted(token_speakers)}. "
+            f"Example dyad/run: {dyad_run_example or 'unknown'}. "
+            "If events use subject ids rather than A/B labels, a speaker-mapping option is required."
+        )
+    raise ValueError(f"Expected speaker label A or B, found {value!r}.")
+
+
+def _normalize_run_label(value: object) -> str:
+    text = str(value).strip()
+    match = re.fullmatch(r"(?:run[-_ ]*)?(\d+)", text, flags=re.IGNORECASE)
+    if match:
+        return str(int(match.group(1)))
+    return text
+
+
+def _normalize_dyad_id(value: object) -> str:
+    text = str(value).strip()
+    match = re.fullmatch(r"(?:dyad[-_ ]*)?(\d+)", text, flags=re.IGNORECASE)
+    if match:
+        return f"dyad-{int(match.group(1)):03d}"
+    return text
+
+
+def _first_dyad_run_example(table: pd.DataFrame) -> str:
+    if table.empty:
+        return "unknown"
+    row = table.iloc[0]
+    return f"{row.get('dyad_id', 'unknown')}|run-{row.get('run', 'unknown')}"
+
+
+def _maybe_float(value: object) -> float | None:
+    return float(value) if value is not None and pd.notna(value) else None
 
 
 def _safe_proportion(numerator: int, denominator: int) -> float | None:

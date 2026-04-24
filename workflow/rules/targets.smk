@@ -183,6 +183,13 @@ rule hazard_behavior_all:
         *HAZARD_BEHAVIOR_MAIN_FIGURES
 
 
+rule hazard_behavior_primary_all:
+    input:
+        *HAZARD_BEHAVIOR_PRIMARY_MODEL_OUTPUTS,
+        *HAZARD_BEHAVIOR_PRIMARY_STATS_OUTPUTS,
+        *HAZARD_BEHAVIOR_PRIMARY_FIGURES
+
+
 rule figures_lmeeeg_all:
     input:
         LMEEEG_FIGURE_MANIFEST,
