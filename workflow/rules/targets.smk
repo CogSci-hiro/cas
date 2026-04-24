@@ -175,6 +175,14 @@ rule tde_hmm_all:
         GLHMM_FIT_SUMMARY_OUTPUT
 
 
+rule hazard_behavior_all:
+    input:
+        HAZARD_BEHAVIOR_RISKSET_OUTPUT,
+        HAZARD_BEHAVIOR_MODEL_COMPARISON_OUTPUT,
+        HAZARD_BEHAVIOR_FIT_METRICS_OUTPUT,
+        *HAZARD_BEHAVIOR_MAIN_FIGURES
+
+
 rule figures_lmeeeg_all:
     input:
         LMEEEG_FIGURE_MANIFEST,

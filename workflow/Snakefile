@@ -200,6 +200,7 @@ include: "rules/trf.smk"
 include: "rules/action_models.smk"
 include: "rules/erp.smk"
 include: "rules/glhmm.smk"
+include: "rules/hazard_behavior.smk"
 include: "rules/neural_state.smk"
 include: "rules/stats.smk"
 include: "rules/figures.smk"
@@ -239,7 +240,8 @@ rule confirmatory_core:
 
 rule exploratory:
     input:
-        GLHMM_FIT_SUMMARY_OUTPUT
+        GLHMM_FIT_SUMMARY_OUTPUT,
+        rules.hazard_behavior_all.input
 
 
 # -----------------------------------------------------------------------------
