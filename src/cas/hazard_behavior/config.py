@@ -111,6 +111,21 @@ class BehaviourHazardConfig:
     run_primary_leave_one_cluster: bool = False
     primary_information_rate_lag_ms: int = 0
     primary_prop_expected_lag_ms: int = 300
+    fit_neural_lowlevel_models: bool = False
+    neural_features: tuple[Path, ...] = ()
+    neural_time_column: str = "time"
+    neural_speaker_column: str = "speaker"
+    neural_window_s: float = 0.500
+    neural_guard_s: float = 0.100
+    neural_feature_prefixes: tuple[str, ...] = ("amp_", "alpha_", "beta_")
+    neural_include_amplitude: bool = True
+    neural_include_alpha: bool = True
+    neural_include_beta: bool = True
+    neural_pca_variance_threshold: float = 0.90
+    neural_pca_max_components: int = 10
+    neural_pca_min_components: int = 1
+    neural_standardize_features: bool = True
+    neural_cluster_column: str | None = None
     primary_model_baseline_spline_df: int = 6
     primary_model_baseline_spline_degree: int = 3
     fit_lagged_models: bool = True
@@ -122,6 +137,7 @@ class BehaviourHazardConfig:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "surprisal_paths", tuple(Path(path) for path in self.surprisal_paths))
+        object.__setattr__(self, "neural_features", tuple(Path(path) for path in self.neural_features))
         object.__setattr__(self, "drop_unmatched_surprisal", self.unmatched_surprisal_strategy == "drop")
         self.validate()
 
@@ -167,6 +183,26 @@ class BehaviourHazardConfig:
             raise ValueError("`primary_information_rate_lag_ms` must be non-negative.")
         if self.primary_prop_expected_lag_ms < 0:
             raise ValueError("`primary_prop_expected_lag_ms` must be non-negative.")
+        if self.neural_window_s <= 0.0:
+            raise ValueError("`neural_window_s` must be positive.")
+        if self.neural_guard_s < 0.0:
+            raise ValueError("`neural_guard_s` must be non-negative.")
+        if self.neural_guard_s >= self.neural_window_s:
+            raise ValueError("`neural_guard_s` must be smaller than `neural_window_s`.")
+        if not self.neural_time_column:
+            raise ValueError("`neural_time_column` must be non-empty.")
+        if not self.neural_speaker_column:
+            raise ValueError("`neural_speaker_column` must be non-empty.")
+        if not self.neural_feature_prefixes:
+            raise ValueError("`neural_feature_prefixes` must contain at least one prefix.")
+        if self.neural_pca_variance_threshold <= 0.0 or self.neural_pca_variance_threshold > 1.0:
+            raise ValueError("`neural_pca_variance_threshold` must be in the interval (0, 1].")
+        if self.neural_pca_max_components < 1:
+            raise ValueError("`neural_pca_max_components` must be at least 1.")
+        if self.neural_pca_min_components < 1:
+            raise ValueError("`neural_pca_min_components` must be at least 1.")
+        if self.neural_pca_min_components > self.neural_pca_max_components:
+            raise ValueError("`neural_pca_min_components` must be <= `neural_pca_max_components`.")
         if self.primary_model_baseline_spline_df < 3:
             raise ValueError("`primary_model_baseline_spline_df` must be at least 3.")
         if self.primary_model_baseline_spline_degree < 1:
@@ -189,6 +225,7 @@ class BehaviourHazardConfig:
         payload = asdict(self)
         payload["events_path"] = str(self.events_path)
         payload["surprisal_paths"] = [str(path) for path in self.surprisal_paths]
+        payload["neural_features"] = [str(path) for path in self.neural_features]
         payload["out_dir"] = str(self.out_dir)
         return payload
 

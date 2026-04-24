@@ -7,6 +7,7 @@ from pathlib import Path
 
 from cas.hazard_behavior.config import BehaviourHazardConfig
 from cas.hazard_behavior.io import resolve_surprisal_paths
+from cas.hazard_behavior.neural_io import resolve_neural_feature_paths
 from cas.hazard_behavior.pipeline import run_behaviour_hazard_pipeline
 
 
@@ -120,6 +121,33 @@ def add_hazard_behavior_fpp_parser(
     parser.set_defaults(fit_primary_behaviour_models=True)
     parser.add_argument("--primary-information-rate-lag-ms", type=int, default=0)
     parser.add_argument("--primary-prop-expected-lag-ms", type=int, default=300)
+    parser.add_argument(
+        "--fit-neural-lowlevel-models",
+        dest="fit_neural_lowlevel_models",
+        action="store_true",
+    )
+    parser.add_argument(
+        "--no-fit-neural-lowlevel-models",
+        dest="fit_neural_lowlevel_models",
+        action="store_false",
+    )
+    parser.set_defaults(fit_neural_lowlevel_models=False)
+    parser.add_argument(
+        "--neural-features",
+        action="append",
+        default=[],
+        help="Path, directory, or glob for low-level neural TSV/CSV feature files. Repeatable.",
+    )
+    parser.add_argument("--neural-window-s", type=float, default=0.500)
+    parser.add_argument("--neural-guard-s", type=float, default=0.100)
+    parser.add_argument("--neural-pca-variance-threshold", type=float, default=0.90)
+    parser.add_argument("--neural-pca-max-components", type=int, default=10)
+    parser.add_argument(
+        "--neural-feature-prefix",
+        action="append",
+        default=[],
+        help="Repeatable prefix used to select neural feature columns, e.g. amp_, alpha_, beta_.",
+    )
     parser.add_argument("--save-lagged-feature-table", dest="save_lagged_feature_table", action="store_true")
     parser.add_argument("--no-save-lagged-feature-table", dest="save_lagged_feature_table", action="store_false")
     parser.set_defaults(save_lagged_feature_table=False)
@@ -129,6 +157,7 @@ def run_hazard_behavior_fpp_command(args: argparse.Namespace) -> int:
     """Run the behavioural hazard command."""
 
     surprisal_paths = resolve_surprisal_paths(args.surprisal)
+    neural_paths = resolve_neural_feature_paths(tuple(args.neural_features)) if args.neural_features else ()
     config = BehaviourHazardConfig(
         events_path=Path(args.events),
         surprisal_paths=tuple(surprisal_paths),
@@ -158,6 +187,13 @@ def run_hazard_behavior_fpp_command(args: argparse.Namespace) -> int:
         run_primary_leave_one_cluster=bool(args.run_primary_leave_one_cluster),
         primary_information_rate_lag_ms=int(args.primary_information_rate_lag_ms),
         primary_prop_expected_lag_ms=int(args.primary_prop_expected_lag_ms),
+        fit_neural_lowlevel_models=bool(args.fit_neural_lowlevel_models),
+        neural_features=tuple(neural_paths),
+        neural_window_s=float(args.neural_window_s),
+        neural_guard_s=float(args.neural_guard_s),
+        neural_pca_variance_threshold=float(args.neural_pca_variance_threshold),
+        neural_pca_max_components=int(args.neural_pca_max_components),
+        neural_feature_prefixes=tuple(args.neural_feature_prefix or ["amp_", "alpha_", "beta_"]),
         fit_lagged_models=bool(args.fit_lagged_models),
         save_lagged_feature_table=bool(args.save_lagged_feature_table),
     )

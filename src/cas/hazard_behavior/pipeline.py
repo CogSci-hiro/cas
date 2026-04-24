@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 import logging
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
@@ -24,6 +25,15 @@ from cas.hazard_behavior.io import (
     save_config_and_warnings,
     write_json,
     write_table,
+)
+from cas.hazard_behavior.neural_features import add_lowlevel_neural_features_to_riskset
+from cas.hazard_behavior.neural_io import read_neural_feature_tables, select_neural_feature_columns
+from cas.hazard_behavior.neural_model import NeuralLowLevelModelResult, fit_neural_lowlevel_models
+from cas.hazard_behavior.neural_plots import (
+    plot_neural_lowlevel_coefficients,
+    plot_neural_lowlevel_feature_missingness,
+    plot_neural_lowlevel_model_comparison,
+    plot_neural_lowlevel_pca_variance,
 )
 from cas.hazard_behavior.model import (
     build_primary_effects_payload,
@@ -180,10 +190,48 @@ def run_behaviour_hazard_pipeline(config: BehaviourHazardConfig) -> BehaviourHaz
     zscore_result = zscore_predictors(riskset_with_lagged_features)
     riskset_table = zscore_result.table
     warnings_list.extend(zscore_result.warnings)
-    if config.fit_primary_behaviour_models:
+    if config.fit_primary_behaviour_models or config.fit_neural_lowlevel_models:
         riskset_table, primary_scaling = ensure_primary_predictors_available(riskset_table, config=config)
     else:
         primary_scaling = {}
+
+    neural_fit_result: NeuralLowLevelModelResult | None = None
+    neural_qc_payload: dict[str, object] | None = None
+    if config.fit_neural_lowlevel_models:
+        if not config.neural_features:
+            raise ValueError(
+                "Neural low-level model fitting was requested but no `neural_features` paths were provided."
+            )
+        LOGGER.info("Loading %d neural feature file(s).", len(config.neural_features))
+        neural_table = read_neural_feature_tables(
+            config.neural_features,
+            time_column=config.neural_time_column,
+            speaker_column=config.neural_speaker_column,
+        )
+        neural_feature_columns = select_neural_feature_columns(
+            neural_table,
+            feature_prefixes=config.neural_feature_prefixes,
+            include_amplitude=config.neural_include_amplitude,
+            include_alpha=config.neural_include_alpha,
+            include_beta=config.neural_include_beta,
+        )
+        LOGGER.info("Adding low-level neural features to the risk set.")
+        neural_augmentation = add_lowlevel_neural_features_to_riskset(
+            riskset_table,
+            neural_table,
+            neural_feature_columns=neural_feature_columns,
+            neural_window_s=config.neural_window_s,
+            neural_guard_s=config.neural_guard_s,
+        )
+        riskset_table = neural_augmentation.riskset_table
+        neural_qc_payload = neural_augmentation.qc
+        LOGGER.info("Fitting low-level neural hazard models.")
+        neural_fit_result = fit_neural_lowlevel_models(
+            riskset_table,
+            neural_feature_columns=neural_augmentation.neural_feature_columns,
+            config=config,
+        )
+        warnings_list.extend(neural_fit_result.warnings)
 
     primary_fitted_models: dict[str, object] = {}
     primary_model_summary_path = None
@@ -339,6 +387,12 @@ def run_behaviour_hazard_pipeline(config: BehaviourHazardConfig) -> BehaviourHaz
         lagged_feature_qc,
         output_dirs["riskset"] / "lagged_feature_qc.json",
     )
+    neural_feature_qc_path = None
+    if neural_qc_payload is not None:
+        neural_feature_qc_path = write_json(
+            neural_qc_payload,
+            output_dirs["riskset"] / "neural_feature_qc.json",
+        )
 
     riskset_path = None
     if config.save_riskset:
@@ -346,6 +400,11 @@ def run_behaviour_hazard_pipeline(config: BehaviourHazardConfig) -> BehaviourHaz
             riskset_table,
             output_dirs["riskset"] / "hazard_behavior_riskset.tsv",
         )
+        if neural_qc_payload is not None:
+            write_table(
+                riskset_table,
+                output_dirs["riskset"] / "hazard_behavior_riskset_with_neural.tsv",
+            )
     lagged_feature_table_path = None
     if config.save_lagged_feature_table:
         lagged_feature_table_path = write_table(
@@ -476,6 +535,69 @@ def run_behaviour_hazard_pipeline(config: BehaviourHazardConfig) -> BehaviourHaz
         output_dirs["riskset"] / "event_rate_by_prop_actual_saturation.csv",
         sep=",",
     )
+    neural_warnings_path = None
+    if neural_fit_result is not None:
+        write_table(
+            neural_fit_result.summary_table,
+            output_dirs["models"] / "neural_lowlevel_model_summary.csv",
+            sep=",",
+        )
+        write_table(
+            neural_fit_result.comparison_table,
+            output_dirs["models"] / "neural_lowlevel_model_comparison.csv",
+            sep=",",
+        )
+        write_json(
+            neural_fit_result.fit_metrics_payload,
+            output_dirs["models"] / "neural_lowlevel_fit_metrics.json",
+        )
+        write_json(
+            neural_fit_result.effects_payload,
+            output_dirs["models"] / "neural_lowlevel_effects.json",
+        )
+        write_table(
+            neural_fit_result.pca_result.pca_summary,
+            output_dirs["models"] / "neural_lowlevel_pca_summary.csv",
+            sep=",",
+        )
+        write_table(
+            neural_fit_result.pca_result.loadings,
+            output_dirs["models"] / "neural_lowlevel_pca_loadings.csv",
+            sep=",",
+        )
+        plot_neural_lowlevel_pca_variance(
+            neural_fit_result.pca_result.pca_summary,
+            variance_threshold=config.neural_pca_variance_threshold,
+            output_path=output_dirs["figures"] / "neural_lowlevel_pca_variance.png",
+        )
+        plot_neural_lowlevel_model_comparison(
+            neural_fit_result.comparison_table,
+            output_dirs["figures"] / "neural_lowlevel_model_comparison.png",
+        )
+        plot_neural_lowlevel_coefficients(
+            neural_fit_result.summary_table,
+            output_dirs["figures"] / "neural_lowlevel_coefficients.png",
+        )
+        if neural_qc_payload is not None:
+            plot_neural_lowlevel_feature_missingness(
+                neural_qc_payload,
+                output_dirs["figures"] / "neural_lowlevel_feature_missingness.png",
+            )
+        neural_pc1_grid = _build_neural_pc1_prediction_grid(neural_fit_result, config=config)
+        write_table(
+            neural_pc1_grid,
+            output_dirs["figures"] / "neural_lowlevel_predicted_hazard_pc1.csv",
+            sep=",",
+        )
+        _plot_neural_pc1_prediction_curve(
+            neural_pc1_grid,
+            output_dirs["figures"] / "neural_lowlevel_predicted_hazard_pc1.png",
+        )
+        neural_warnings_path = output_dirs["logs"] / "neural_lowlevel_warnings.txt"
+        neural_warnings_path.write_text(
+            "\n".join(neural_fit_result.warnings).rstrip() + ("\n" if neural_fit_result.warnings else ""),
+            encoding="utf-8",
+        )
 
     config_json_path, warnings_path = save_config_and_warnings(
         config=config,
@@ -491,6 +613,7 @@ def run_behaviour_hazard_pipeline(config: BehaviourHazardConfig) -> BehaviourHaz
     del lagged_feature_scaling_path, primary_model_summary_path, primary_model_comparison_path, primary_effects_path
     del primary_fit_metrics_path, primary_stat_tests_path, primary_stat_tests_json_path
     del primary_publication_table_path, primary_interpretation_path
+    del neural_feature_qc_path, neural_warnings_path
     return BehaviourHazardPipelineResult(
         out_dir=output_dirs["root"],
         riskset_path=riskset_path,
@@ -530,3 +653,42 @@ def _validate_final_positive_episode_latencies(
             "Negative partner-offset-to-FPP latencies remain after episode validation. "
             "This indicates invalid partner IPU assignment."
         )
+
+
+def _build_neural_pc1_prediction_grid(
+    neural_fit_result: NeuralLowLevelModelResult,
+    *,
+    config: BehaviourHazardConfig,
+) -> pd.DataFrame:
+    model_table = neural_fit_result.model_table
+    if "neural_pc1" not in model_table.columns:
+        raise ValueError("Cannot create PC1 prediction grid because `neural_pc1` is unavailable.")
+    base_row = {
+        "time_from_partner_onset": float(pd.to_numeric(model_table["time_from_partner_onset"], errors="coerce").median()),
+        f"z_information_rate_lag_{int(config.primary_information_rate_lag_ms)}ms": 0.0,
+        f"z_prop_expected_cumulative_info_lag_{int(config.primary_prop_expected_lag_ms)}ms": 0.0,
+    }
+    for pc_column in neural_fit_result.pca_result.pc_columns:
+        base_row[pc_column] = 0.0
+    pc1_values = np.linspace(
+        float(pd.to_numeric(model_table["neural_pc1"], errors="coerce").quantile(0.05)),
+        float(pd.to_numeric(model_table["neural_pc1"], errors="coerce").quantile(0.95)),
+        num=100,
+    )
+    prediction_grid = pd.DataFrame([{**base_row, "neural_pc1": float(value)} for value in pc1_values])
+    prediction_grid["predicted_hazard"] = np.asarray(
+        neural_fit_result.child_model.result.predict(prediction_grid),
+        dtype=float,
+    )
+    return prediction_grid
+
+
+def _plot_neural_pc1_prediction_curve(prediction_table: pd.DataFrame, output_path: Path) -> None:
+    figure, axis = plt.subplots(figsize=(7.0, 4.5))
+    axis.plot(prediction_table["neural_pc1"], prediction_table["predicted_hazard"], color="#1f4e79", linewidth=2.2)
+    axis.set_xlabel("Neural PC1")
+    axis.set_ylabel("Predicted hazard")
+    axis.set_title("Predicted hazard as neural PC1 varies")
+    figure.tight_layout()
+    figure.savefig(output_path, dpi=200)
+    plt.close(figure)

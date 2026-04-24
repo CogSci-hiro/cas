@@ -95,3 +95,74 @@ def test_cli_creates_key_outputs(tmp_path: Path, monkeypatch) -> None:
 
     payload = json.loads((out_dir / "models" / "model_fit_metrics.json").read_text(encoding="utf-8"))
     assert "models" in payload
+
+
+def test_cli_creates_neural_lowlevel_outputs(tmp_path: Path, monkeypatch) -> None:
+    events_path = tmp_path / "events.csv"
+    surprisal_path = tmp_path / "toy_desc-lmSurprisal_features.tsv"
+    neural_path = tmp_path / "toy_desc-lowlevelNeural_features.tsv"
+    out_dir = tmp_path / "results_neural"
+
+    events_path.write_text(
+        "\n".join(
+            [
+                "dyad_id,run,speaker,fpp_onset,fpp_offset,fpp_label",
+                "dyad-001,1,B,1.20,1.50,FPP_RFC_TAG",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    surprisal_path.write_text(
+        "\n".join(
+            [
+                "dyad_id\trun\tspeaker\tonset\tduration\tword\tsurprisal\talignment_status",
+                "dyad-001\t1\tA\t0.00\t0.10\toui\t1.0\tok",
+                "dyad-001\t1\tA\t0.30\t0.10\talors\t2.0\tok",
+                "dyad-001\t1\tA\t0.70\t0.10\trouge\t3.0\tok",
+                "dyad-001\t1\tB\t1.20\t0.10\tok\t1.5\tok",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    neural_path.write_text(
+        "\n".join(
+            [
+                "dyad_id\trun\tspeaker\ttime\tamp_cz\talpha_parietal\tbeta_frontal",
+                "dyad-001\t1\tB\t0.50\t0.1\t0.2\t0.3",
+                "dyad-001\t1\tB\t0.70\t0.2\t0.3\t0.4",
+                "dyad-001\t1\tB\t0.85\t0.3\t0.4\t0.5",
+                "dyad-001\t1\tB\t0.95\t0.4\t0.5\t0.6",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "cas",
+            "hazard-behavior-fpp",
+            "--events",
+            str(events_path),
+            "--surprisal",
+            str(surprisal_path),
+            "--neural-features",
+            str(neural_path),
+            "--fit-neural-lowlevel-models",
+            "--out-dir",
+            str(out_dir),
+            "--event-positive-only",
+            "--overwrite",
+        ],
+    )
+
+    assert main() == 0
+    assert (out_dir / "models" / "neural_lowlevel_model_summary.csv").exists()
+    assert (out_dir / "models" / "neural_lowlevel_model_comparison.csv").exists()
+    assert (out_dir / "models" / "neural_lowlevel_effects.json").exists()
+    assert (out_dir / "figures" / "neural_lowlevel_pca_variance.png").exists()
+    assert (out_dir / "figures" / "neural_lowlevel_model_comparison.png").exists()
