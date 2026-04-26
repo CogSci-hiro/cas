@@ -1,0 +1,6 @@
+output:
+  behaviour_output_dir: "reports/hazard_behavior_fpp"
+  neural_output_dir: "reports/hazard_neural_fpp"
+
+timing_control:
+  fit_models: true

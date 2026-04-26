@@ -11,6 +11,7 @@ UnmatchedSurprisalStrategy = Literal["drop", "zero", "keep_nan"]
 TokenAvailability = Literal["onset", "offset"]
 ExpectedInfoGroup = Literal["partner_ipu_class", "partner_role", "global"]
 EpisodeAnchor = Literal["partner_ipu", "legacy_fpp_previous_partner"]
+NeuralPcaMode = Literal["by_family", "combined"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,9 +107,12 @@ class BehaviourHazardConfig:
     primary_lagged_predictor: str = "information_rate"
     lagged_feature_fill_value: float = 0.0
     fit_primary_behaviour_models: bool = True
+    fit_timing_control_models: bool = False
+    select_lags_with_timing_controls: bool = False
     fit_primary_stat_tests: bool = True
     make_primary_publication_figures: bool = True
     run_primary_leave_one_cluster: bool = False
+    run_behaviour_model_suite: bool = True
     primary_information_rate_lag_ms: int = 0
     primary_prop_expected_lag_ms: int = 300
     fit_neural_lowlevel_models: bool = False
@@ -124,6 +128,7 @@ class BehaviourHazardConfig:
     neural_pca_variance_threshold: float = 0.90
     neural_pca_max_components: int = 10
     neural_pca_min_components: int = 1
+    neural_pca_mode: NeuralPcaMode = "by_family"
     neural_standardize_features: bool = True
     neural_cluster_column: str | None = None
     primary_model_baseline_spline_df: int = 6
@@ -203,6 +208,8 @@ class BehaviourHazardConfig:
             raise ValueError("`neural_pca_min_components` must be at least 1.")
         if self.neural_pca_min_components > self.neural_pca_max_components:
             raise ValueError("`neural_pca_min_components` must be <= `neural_pca_max_components`.")
+        if self.neural_pca_mode not in {"by_family", "combined"}:
+            raise ValueError("`neural_pca_mode` must be one of by_family, combined.")
         if self.primary_model_baseline_spline_df < 3:
             raise ValueError("`primary_model_baseline_spline_df` must be at least 3.")
         if self.primary_model_baseline_spline_degree < 1:

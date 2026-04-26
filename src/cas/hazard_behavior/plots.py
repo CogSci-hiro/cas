@@ -1009,6 +1009,69 @@ def plot_model_delta_aic_by_lag(
     _save_figure(figure, output_path)
 
 
+def plot_behaviour_timing_control_delta_aic_by_lag(
+    comparison_table: pd.DataFrame,
+    output_path: Path,
+) -> None:
+    """Plot timing-controlled delta AIC by lag for the two behavioural predictor families."""
+
+    figure, axis = plt.subplots(figsize=(7, 4.5))
+    if comparison_table.empty:
+        _draw_placeholder_panel(
+            axis,
+            title="Timing-control delta AIC by lag",
+            message="No timing-control lag-selection rows available.",
+        )
+        _save_figure(figure, output_path)
+        return
+
+    working = comparison_table.copy()
+    working["lag_ms"] = pd.to_numeric(working.get("lag_ms"), errors="coerce")
+    working["delta_aic"] = pd.to_numeric(working.get("delta_aic"), errors="coerce")
+    working = working.loc[np.isfinite(working["lag_ms"]) & np.isfinite(working["delta_aic"])].copy()
+    if working.empty:
+        _draw_placeholder_panel(
+            axis,
+            title="Timing-control delta AIC by lag",
+            message="No finite timing-control lag rows available.",
+        )
+        _save_figure(figure, output_path)
+        return
+
+    color_map = {
+        "information_rate": "#1f77b4",
+        "prop_expected_cumulative_info": "#ff7f0e",
+    }
+    label_map = {
+        "information_rate": "information_rate",
+        "prop_expected_cumulative_info": "prop_expected_cumulative_info",
+    }
+    for family_name, family_rows in working.groupby("predictor_family", sort=False):
+        family_rows = family_rows.sort_values("lag_ms").reset_index(drop=True)
+        axis.plot(
+            family_rows["lag_ms"],
+            family_rows["delta_aic"],
+            marker="o",
+            linewidth=2.0,
+            label=label_map.get(str(family_name), str(family_name)),
+            color=color_map.get(str(family_name)),
+        )
+        best_row = family_rows.sort_values(["delta_aic", "lag_ms"], ascending=[True, True]).iloc[0]
+        axis.scatter(
+            [best_row["lag_ms"]],
+            [best_row["delta_aic"]],
+            color=color_map.get(str(family_name)),
+            s=50,
+            zorder=3,
+        )
+    axis.axhline(0.0, color="#666666", linestyle="--", linewidth=1.0)
+    axis.set_xlabel("Lag (ms)")
+    axis.set_ylabel("Delta AIC (child - parent)")
+    axis.set_title("Timing-control delta AIC by lag")
+    axis.legend(frameon=False)
+    _save_figure(figure, output_path)
+
+
 def plot_information_timing_summary(
     information_timing_summary: pd.DataFrame,
     output_path: Path,

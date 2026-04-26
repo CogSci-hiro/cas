@@ -119,6 +119,48 @@ def add_hazard_behavior_fpp_parser(
         action="store_false",
     )
     parser.set_defaults(fit_primary_behaviour_models=True)
+    parser.add_argument(
+        "--run-behaviour-model-suite",
+        dest="run_behaviour_model_suite",
+        action="store_true",
+        help="Fit the broader behavioural model and figure suite in addition to any neural outputs.",
+    )
+    parser.add_argument(
+        "--no-run-behaviour-model-suite",
+        dest="run_behaviour_model_suite",
+        action="store_false",
+    )
+    parser.set_defaults(run_behaviour_model_suite=True)
+    parser.add_argument(
+        "--fit-timing-control-models",
+        dest="fit_timing_control_models",
+        action="store_true",
+        help=(
+            "Fit partner-IPU anchored timing-control models that add a spline over "
+            "`time_from_partner_offset` alongside the existing onset-time spline."
+        ),
+    )
+    parser.add_argument(
+        "--no-fit-timing-control-models",
+        dest="fit_timing_control_models",
+        action="store_false",
+    )
+    parser.set_defaults(fit_timing_control_models=False)
+    parser.add_argument(
+        "--select-lags-with-timing-controls",
+        dest="select_lags_with_timing_controls",
+        action="store_true",
+        help=(
+            "Re-run behavioural lag selection against timing-controlled parent models and fit the "
+            "resulting timing-controlled final model sequence."
+        ),
+    )
+    parser.add_argument(
+        "--no-select-lags-with-timing-controls",
+        dest="select_lags_with_timing_controls",
+        action="store_false",
+    )
+    parser.set_defaults(select_lags_with_timing_controls=False)
     parser.add_argument("--primary-information-rate-lag-ms", type=int, default=0)
     parser.add_argument("--primary-prop-expected-lag-ms", type=int, default=300)
     parser.add_argument(
@@ -140,6 +182,7 @@ def add_hazard_behavior_fpp_parser(
     )
     parser.add_argument("--neural-window-s", type=float, default=0.500)
     parser.add_argument("--neural-guard-s", type=float, default=0.100)
+    parser.add_argument("--neural-pca-mode", choices=["by_family", "combined"], default="by_family")
     parser.add_argument("--neural-pca-variance-threshold", type=float, default=0.90)
     parser.add_argument("--neural-pca-max-components", type=int, default=10)
     parser.add_argument(
@@ -182,6 +225,9 @@ def run_hazard_behavior_fpp_command(args: argparse.Namespace) -> int:
         save_riskset=bool(args.save_riskset),
         lag_grid_ms=_parse_lag_grid_ms(args.lag_grid_ms),
         fit_primary_behaviour_models=bool(args.fit_primary_behaviour_models),
+        run_behaviour_model_suite=bool(args.run_behaviour_model_suite),
+        fit_timing_control_models=bool(args.fit_timing_control_models or args.select_lags_with_timing_controls),
+        select_lags_with_timing_controls=bool(args.select_lags_with_timing_controls),
         fit_primary_stat_tests=bool(args.fit_primary_stat_tests),
         make_primary_publication_figures=bool(args.make_primary_publication_figures),
         run_primary_leave_one_cluster=bool(args.run_primary_leave_one_cluster),
@@ -191,6 +237,7 @@ def run_hazard_behavior_fpp_command(args: argparse.Namespace) -> int:
         neural_features=tuple(neural_paths),
         neural_window_s=float(args.neural_window_s),
         neural_guard_s=float(args.neural_guard_s),
+        neural_pca_mode=str(args.neural_pca_mode),
         neural_pca_variance_threshold=float(args.neural_pca_variance_threshold),
         neural_pca_max_components=int(args.neural_pca_max_components),
         neural_feature_prefixes=tuple(args.neural_feature_prefix or ["amp_", "alpha_", "beta_"]),

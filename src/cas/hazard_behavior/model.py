@@ -13,9 +13,12 @@ import pandas as pd
 from scipy import stats
 from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
 import statsmodels.api as sm
+import statsmodels.genmod.generalized_linear_model as glm
 
 from cas.hazard_behavior.config import BehaviourHazardConfig
 from cas.hazard_behavior.features import zscore_predictors
+
+glm.SET_USE_BIC_LLF(True)
 
 MODEL_PREDICTOR_MAP = {
     "M0": [],
@@ -37,6 +40,7 @@ LAGGED_MODEL_FAMILY_NAMES = {
     "prop_expected": "M2c_prop_expected",
 }
 PRIMARY_MODEL_SEQUENCE = ("M0_time", "M1_rate", "M2_rate_prop_expected")
+TIMING_CONTROL_MODEL_SEQUENCE = ("M0_timing", "M1_rate_best_timing", "M2_expected_best_timing")
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +103,36 @@ def build_primary_model_formulas(config: BehaviourHazardConfig) -> dict[str, str
         "M1_rate": f"event ~ {spline} + {information_rate_term}",
         "M2_rate_prop_expected": f"event ~ {spline} + {information_rate_term} + {prop_expected_term}",
     }
+
+
+def build_timing_control_model_formulas(config: BehaviourHazardConfig) -> dict[str, str]:
+    """Build formulas for the onset-plus-offset timing-control models."""
+
+    baseline_terms = build_timing_control_baseline_terms(config)
+    information_rate_term = primary_z_column_name("information_rate", config.primary_information_rate_lag_ms)
+    prop_expected_term = primary_z_column_name(
+        "prop_expected_cumulative_info",
+        config.primary_prop_expected_lag_ms,
+    )
+    return {
+        "M0_timing": f"event ~ {baseline_terms}",
+        "M1_rate_best_timing": f"event ~ {baseline_terms} + {information_rate_term}",
+        "M2_expected_best_timing": f"event ~ {baseline_terms} + {information_rate_term} + {prop_expected_term}",
+    }
+
+
+def build_timing_control_baseline_terms(config: BehaviourHazardConfig) -> str:
+    """Return the onset-plus-offset timing-control spline block."""
+
+    onset_spline = (
+        f"bs(time_from_partner_onset, df={config.primary_model_baseline_spline_df}, "
+        f"degree={config.primary_model_baseline_spline_degree}, include_intercept=False)"
+    )
+    offset_spline = (
+        f"bs(time_from_partner_offset, df={config.primary_model_baseline_spline_df}, "
+        f"degree={config.primary_model_baseline_spline_degree}, include_intercept=False)"
+    )
+    return f"{onset_spline} + {offset_spline}"
 
 
 def primary_unscaled_column_name(feature_name: str, lag_ms: int) -> str:
@@ -279,6 +313,170 @@ def fit_primary_behaviour_models(
     return fitted_models
 
 
+def validate_timing_control_model_table(
+    riskset_table: pd.DataFrame,
+    *,
+    config: BehaviourHazardConfig,
+) -> pd.DataFrame:
+    """Validate the timing-control model dataset and retain signed offset timings."""
+
+    working = validate_primary_model_table(riskset_table, config=config)
+    if "time_from_partner_offset" not in working.columns:
+        raise ValueError("Timing-control behavioural model requires the `time_from_partner_offset` column.")
+    offset_values = pd.to_numeric(working["time_from_partner_offset"], errors="coerce")
+    if not np.isfinite(offset_values).all():
+        raise ValueError(
+            "Timing-control behavioural validation failed: `time_from_partner_offset` contains missing or non-finite values."
+        )
+    working = working.copy()
+    working["time_from_partner_offset"] = offset_values.astype(float)
+    return working
+
+
+def fit_timing_control_behaviour_models(
+    riskset_table: pd.DataFrame,
+    *,
+    config: BehaviourHazardConfig,
+) -> dict[str, FittedBehaviourModel]:
+    """Fit the onset-plus-offset timing-control behavioural model sequence."""
+
+    validated = validate_timing_control_model_table(riskset_table, config=config)
+    validated = _prepare_timing_control_model_table(validated, config=config)
+    formulas = build_timing_control_model_formulas(config)
+    fitted_models: dict[str, FittedBehaviourModel] = {}
+    for model_name in TIMING_CONTROL_MODEL_SEQUENCE:
+        formula = formulas[model_name]
+        fitted_models[model_name] = _fit_formula_model(
+            riskset_table=validated,
+            model_name=model_name,
+            formula=formula,
+            config=config,
+        )
+    return fitted_models
+
+
+def select_timing_control_best_lags(
+    riskset_table: pd.DataFrame,
+    *,
+    config: BehaviourHazardConfig,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Run timing-controlled lag selection against timing-controlled parent models."""
+
+    validated = validate_timing_control_model_table(riskset_table, config=config)
+    lag_grid = tuple(int(lag_ms) for lag_ms in config.lag_grid_ms)
+    lagged_predictors = [
+        primary_unscaled_column_name("information_rate", lag_ms) for lag_ms in lag_grid
+    ] + [
+        primary_unscaled_column_name("prop_expected_cumulative_info", lag_ms) for lag_ms in lag_grid
+    ]
+    validated = _ensure_z_predictors_available(validated, predictors=lagged_predictors)
+    baseline_terms = build_timing_control_baseline_terms(config)
+    baseline_columns = ["event", "episode_id", "time_from_partner_onset", "time_from_partner_offset"]
+
+    rate_terms = [primary_z_column_name("information_rate", lag_ms) for lag_ms in lag_grid]
+    rate_table = _shared_complete_case_subset(validated, required_columns=baseline_columns + rate_terms)
+    rate_parent_name = "M0_timing"
+    rate_parent_formula = f"event ~ {baseline_terms}"
+    rate_parent_model = _fit_formula_model(
+        riskset_table=rate_table,
+        model_name=rate_parent_name,
+        formula=rate_parent_formula,
+        config=config,
+    )
+    selection_rows: list[dict[str, Any]] = []
+    for lag_ms in lag_grid:
+        term = primary_z_column_name("information_rate", lag_ms)
+        child_name = f"M1_rate_lag_{int(lag_ms)}ms_timing"
+        child_model = _fit_formula_model(
+            riskset_table=rate_table,
+            model_name=child_name,
+            formula=f"{rate_parent_formula} + {term}",
+            config=config,
+        )
+        comparison = compare_nested_models(
+            {rate_parent_name: rate_parent_model, child_name: child_model},
+            comparisons=[(child_name, rate_parent_name)],
+        )
+        selection_rows.extend(
+            _timing_control_selection_rows(comparison, predictor_family="information_rate", lag_ms=lag_ms)
+        )
+
+    rate_selection = pd.DataFrame(selection_rows)
+    best_information_rate = select_best_timing_control_lag(rate_selection, predictor_family="information_rate")
+    best_information_rate_lag_ms = int(best_information_rate["lag_ms"])
+    best_information_rate_term = primary_z_column_name("information_rate", best_information_rate_lag_ms)
+
+    expected_terms = [primary_z_column_name("prop_expected_cumulative_info", lag_ms) for lag_ms in lag_grid]
+    expected_table = _shared_complete_case_subset(
+        validated,
+        required_columns=baseline_columns + [best_information_rate_term] + expected_terms,
+    )
+    expected_parent_name = "M1_rate_best_timing"
+    expected_parent_formula = f"event ~ {baseline_terms} + {best_information_rate_term}"
+    expected_parent_model = _fit_formula_model(
+        riskset_table=expected_table,
+        model_name=expected_parent_name,
+        formula=expected_parent_formula,
+        config=config,
+    )
+    for lag_ms in lag_grid:
+        term = primary_z_column_name("prop_expected_cumulative_info", lag_ms)
+        child_name = f"M2_expected_lag_{int(lag_ms)}ms_timing"
+        child_model = _fit_formula_model(
+            riskset_table=expected_table,
+            model_name=child_name,
+            formula=f"{expected_parent_formula} + {term}",
+            config=config,
+        )
+        comparison = compare_nested_models(
+            {expected_parent_name: expected_parent_model, child_name: child_model},
+            comparisons=[(child_name, expected_parent_name)],
+        )
+        selection_rows.extend(
+            _timing_control_selection_rows(
+                comparison,
+                predictor_family="prop_expected_cumulative_info",
+                lag_ms=lag_ms,
+            )
+        )
+
+    selection_table = pd.DataFrame(selection_rows)
+    best_expected = select_best_timing_control_lag(
+        selection_table,
+        predictor_family="prop_expected_cumulative_info",
+    )
+    selected_lags = {
+        "best_information_rate_lag_ms": best_information_rate_lag_ms,
+        "best_information_rate_delta_aic": float(best_information_rate["delta_aic"]),
+        "best_expected_cumulative_info_lag_ms": int(best_expected["lag_ms"]),
+        "best_expected_cumulative_info_delta_aic": float(best_expected["delta_aic"]),
+        "lag_selection_parent_for_information_rate": rate_parent_name,
+        "lag_selection_parent_for_expected_cumulative_info": expected_parent_name,
+        "delta_aic_convention": "child_aic - parent_aic; negative favours child",
+    }
+    return selection_table, selected_lags
+
+
+def select_best_timing_control_lag(
+    selection_table: pd.DataFrame,
+    *,
+    predictor_family: str,
+) -> pd.Series:
+    """Select the lag with the most negative delta AIC for a predictor family."""
+
+    family_rows = selection_table.loc[
+        selection_table["predictor_family"].astype(str) == str(predictor_family)
+    ].copy()
+    if family_rows.empty:
+        raise ValueError(f"No timing-control lag rows were found for predictor family `{predictor_family}`.")
+    family_rows["delta_aic"] = pd.to_numeric(family_rows["delta_aic"], errors="coerce")
+    family_rows["lag_ms"] = pd.to_numeric(family_rows["lag_ms"], errors="coerce")
+    family_rows = family_rows.loc[np.isfinite(family_rows["delta_aic"]) & np.isfinite(family_rows["lag_ms"])].copy()
+    if family_rows.empty:
+        raise ValueError(f"No finite timing-control delta AIC rows were found for `{predictor_family}`.")
+    return family_rows.sort_values(["delta_aic", "lag_ms"], ascending=[True, True]).reset_index(drop=True).iloc[0]
+
+
 def compare_primary_models(fitted_models: dict[str, FittedBehaviourModel]) -> pd.DataFrame:
     """Compare the compact primary behavioural models."""
 
@@ -327,6 +525,68 @@ def compare_primary_models(fitted_models: dict[str, FittedBehaviourModel]) -> pd
     ]
 
 
+def compare_timing_control_models(
+    fitted_models: dict[str, FittedBehaviourModel],
+) -> pd.DataFrame:
+    """Compare the final timing-controlled behavioural models."""
+
+    comparison = compare_nested_models(
+        fitted_models,
+        comparisons=[
+            ("M1_rate_best_timing", "M0_timing"),
+            ("M2_expected_best_timing", "M1_rate_best_timing"),
+        ],
+    )
+    if comparison.empty:
+        return pd.DataFrame(
+            columns=[
+                "parent_model",
+                "child_model",
+                "comparison",
+                "parent_aic",
+                "child_aic",
+                "delta_aic",
+                "parent_bic",
+                "child_bic",
+                "delta_bic",
+                "parent_log_likelihood",
+                "child_log_likelihood",
+                "lrt_statistic",
+                "df_difference",
+                "p_value",
+                "n_rows",
+                "n_events",
+                "log_loss_in_sample",
+                "brier_score_in_sample",
+                "auroc_in_sample",
+            ]
+        )
+    return comparison.loc[
+        :,
+        [
+            "parent_model",
+            "child_model",
+            "comparison",
+            "parent_aic",
+            "child_aic",
+            "delta_aic",
+            "parent_bic",
+            "child_bic",
+            "delta_bic",
+            "parent_log_likelihood",
+            "child_log_likelihood",
+            "lrt_statistic",
+            "df_difference",
+            "p_value",
+            "n_rows",
+            "n_events",
+            "log_loss_in_sample",
+            "brier_score_in_sample",
+            "auroc_in_sample",
+        ],
+    ]
+
+
 def summarize_primary_model_fit_metrics(
     fitted_models: dict[str, FittedBehaviourModel],
 ) -> list[dict[str, Any]]:
@@ -334,6 +594,36 @@ def summarize_primary_model_fit_metrics(
 
     rows: list[dict[str, Any]] = []
     for model_name in PRIMARY_MODEL_SEQUENCE:
+        fitted_model = fitted_models[model_name]
+        fit_metrics = fitted_model.fit_metrics
+        rows.append(
+            {
+                "model_name": model_name,
+                "formula": fitted_model.formula,
+                "n_rows": fit_metrics.get("n_rows"),
+                "n_events": fit_metrics.get("n_events"),
+                "log_likelihood": fit_metrics.get("log_likelihood"),
+                "aic": fit_metrics.get("aic"),
+                "bic": fit_metrics.get("bic"),
+                "log_loss_in_sample": fit_metrics.get("log_loss_in_sample"),
+                "brier_score_in_sample": fit_metrics.get("brier_score_in_sample"),
+                "auroc_in_sample": fit_metrics.get("auroc_in_sample"),
+                "converged": fit_metrics.get("converged"),
+                "warnings": list(fitted_model.warnings),
+                "cluster_column": fit_metrics.get("cluster_variable"),
+                "robust_covariance_used": fit_metrics.get("robust_covariance_used"),
+            }
+        )
+    return rows
+
+
+def summarize_timing_control_fit_metrics(
+    fitted_models: dict[str, FittedBehaviourModel],
+) -> list[dict[str, Any]]:
+    """Collect fit metrics for the timing-control models."""
+
+    rows: list[dict[str, Any]] = []
+    for model_name in TIMING_CONTROL_MODEL_SEQUENCE:
         fitted_model = fitted_models[model_name]
         fit_metrics = fitted_model.fit_metrics
         rows.append(
@@ -553,6 +843,8 @@ def compare_nested_models(
                 "reduced_model": reduced_name,
                 "child_aic": _maybe_float(getattr(full, "aic", None)),
                 "parent_aic": _maybe_float(getattr(reduced, "aic", None)),
+                "child_bic": _maybe_float(getattr(full, "bic", None)),
+                "parent_bic": _maybe_float(getattr(reduced, "bic", None)),
                 "child_log_likelihood": _maybe_float(getattr(full, "llf", None)),
                 "parent_log_likelihood": _maybe_float(getattr(reduced, "llf", None)),
                 "lrt_statistic": lr_stat,
@@ -745,6 +1037,150 @@ def summarize_best_lag_by_aic(
             }
         )
     return pd.DataFrame(family_rows)
+
+
+def _fit_formula_model(
+    *,
+    riskset_table: pd.DataFrame,
+    model_name: str,
+    formula: str,
+    config: BehaviourHazardConfig,
+) -> FittedBehaviourModel:
+    """Fit one behavioural GLM from an explicit formula."""
+
+    cluster_column = _resolve_cluster_column(riskset_table, config.cluster_column)
+    warnings_list: list[str] = []
+    robust_covariance_used = True
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        glm_model = sm.GLM.from_formula(formula, data=riskset_table, family=sm.families.Binomial())
+        try:
+            fitted = glm_model.fit(cov_type="cluster", cov_kwds={"groups": riskset_table[cluster_column]})
+        except Exception as error:  # pragma: no cover - fallback path
+            fitted = glm_model.fit()
+            robust_covariance_used = False
+            warnings_list.append(
+                f"Cluster-robust covariance failed for {model_name}; fell back to non-robust covariance: {error}"
+            )
+        warnings_list.extend(str(item.message) for item in caught)
+    return FittedBehaviourModel(
+        model_name=model_name,
+        formula=formula,
+        result=fitted,
+        summary_table=extract_model_summary(fitted_result=fitted, model_name=model_name),
+        fit_metrics=compute_fit_metrics(
+            fitted_result=fitted,
+            riskset_table=riskset_table,
+            model_name=model_name,
+            formula=formula,
+            cluster_column=cluster_column,
+            robust_covariance_used=robust_covariance_used,
+            warnings_list=warnings_list,
+        ),
+        robust_covariance_used=robust_covariance_used,
+        warnings=warnings_list,
+    )
+
+
+def _prepare_timing_control_model_table(
+    riskset_table: pd.DataFrame,
+    *,
+    config: BehaviourHazardConfig,
+) -> pd.DataFrame:
+    """Use a shared complete-case subset for fair final timing-control comparisons."""
+
+    required_columns = [
+        "event",
+        "episode_id",
+        "time_from_partner_onset",
+        "time_from_partner_offset",
+        primary_z_column_name("information_rate", config.primary_information_rate_lag_ms),
+        primary_z_column_name("prop_expected_cumulative_info", config.primary_prop_expected_lag_ms),
+    ]
+    return _shared_complete_case_subset(riskset_table, required_columns=required_columns)
+
+
+def _ensure_z_predictors_available(
+    riskset_table: pd.DataFrame,
+    *,
+    predictors: list[str],
+) -> pd.DataFrame:
+    """Create z-scored variants for any required lagged predictors that are still unscaled only."""
+
+    missing_unscaled = [column_name for column_name in predictors if column_name not in riskset_table.columns]
+    if missing_unscaled:
+        raise ValueError("Required lagged predictor columns are missing: " + ", ".join(sorted(missing_unscaled)))
+    missing_z = [f"z_{column_name}" for column_name in predictors if f"z_{column_name}" not in riskset_table.columns]
+    if not missing_z:
+        return riskset_table
+    return zscore_predictors(riskset_table, predictors=predictors).table
+
+
+def _shared_complete_case_subset(
+    riskset_table: pd.DataFrame,
+    *,
+    required_columns: list[str],
+) -> pd.DataFrame:
+    """Return the shared complete-case subset across a required predictor set."""
+
+    missing = [column_name for column_name in required_columns if column_name not in riskset_table.columns]
+    if missing:
+        raise ValueError("Required columns are missing from the model table: " + ", ".join(sorted(missing)))
+    working = riskset_table.copy()
+    for column_name in required_columns:
+        if column_name != "episode_id":
+            working[column_name] = pd.to_numeric(working[column_name], errors="coerce")
+    mask = np.ones(len(working), dtype=bool)
+    for column_name in required_columns:
+        if column_name == "episode_id":
+            mask &= working[column_name].notna().to_numpy()
+        else:
+            mask &= np.isfinite(working[column_name].to_numpy(dtype=float))
+    subset = working.loc[mask].copy()
+    if subset.empty:
+        raise ValueError("Shared complete-case subsetting removed all rows from the timing-control model table.")
+    subset["event"] = subset["event"].astype(int)
+    return subset
+
+
+def _timing_control_selection_rows(
+    comparison: pd.DataFrame,
+    *,
+    predictor_family: str,
+    lag_ms: int,
+) -> list[dict[str, Any]]:
+    """Attach timing-control lag-selection metadata to comparison rows."""
+
+    if comparison.empty:
+        return []
+    working = comparison.copy()
+    working["predictor_family"] = predictor_family
+    working["lag_ms"] = int(lag_ms)
+    return working.loc[
+        :,
+        [
+            "predictor_family",
+            "lag_ms",
+            "parent_model",
+            "child_model",
+            "parent_aic",
+            "child_aic",
+            "delta_aic",
+            "parent_bic",
+            "child_bic",
+            "delta_bic",
+            "parent_log_likelihood",
+            "child_log_likelihood",
+            "lrt_statistic",
+            "df_difference",
+            "p_value",
+            "n_rows",
+            "n_events",
+            "log_loss_in_sample",
+            "brier_score_in_sample",
+            "auroc_in_sample",
+        ],
+    ].to_dict(orient="records")
 
 
 def _resolve_cluster_column(riskset_table: pd.DataFrame, preferred_column: str | None) -> str:

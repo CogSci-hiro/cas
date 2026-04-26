@@ -14,10 +14,10 @@ NEURAL_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     "speaker": ("speaker", "participant_speaker", "subject", "subject_id"),
     "time": ("time", "timestamp", "sample_time", "onset"),
 }
-FEATURE_FAMILY_PREFIXES = {
-    "amplitude": "amp_",
-    "alpha": "alpha_",
-    "beta": "beta_",
+FEATURE_FAMILY_PREFIXES: dict[str, tuple[str, ...]] = {
+    "amplitude": ("amp_", "amplitude_"),
+    "alpha": ("alpha_",),
+    "beta": ("beta_",),
 }
 
 
@@ -114,11 +114,17 @@ def select_neural_feature_columns(
     allowed_prefixes: list[str] = []
     prefix_set = tuple(feature_prefixes)
     if include_amplitude:
-        allowed_prefixes.extend(prefix for prefix in prefix_set if prefix.startswith(FEATURE_FAMILY_PREFIXES["amplitude"]))
+        allowed_prefixes.extend(
+            prefix for prefix in prefix_set if any(prefix.startswith(candidate) for candidate in FEATURE_FAMILY_PREFIXES["amplitude"])
+        )
     if include_alpha:
-        allowed_prefixes.extend(prefix for prefix in prefix_set if prefix.startswith(FEATURE_FAMILY_PREFIXES["alpha"]))
+        allowed_prefixes.extend(
+            prefix for prefix in prefix_set if any(prefix.startswith(candidate) for candidate in FEATURE_FAMILY_PREFIXES["alpha"])
+        )
     if include_beta:
-        allowed_prefixes.extend(prefix for prefix in prefix_set if prefix.startswith(FEATURE_FAMILY_PREFIXES["beta"]))
+        allowed_prefixes.extend(
+            prefix for prefix in prefix_set if any(prefix.startswith(candidate) for candidate in FEATURE_FAMILY_PREFIXES["beta"])
+        )
     if not allowed_prefixes:
         raise ValueError("No neural feature prefixes are enabled. Enable at least one of amplitude, alpha, or beta.")
     feature_columns = [
@@ -133,6 +139,23 @@ def select_neural_feature_columns(
             + ", ".join(sorted(allowed_prefixes))
         )
     return sorted(feature_columns)
+
+
+def group_neural_feature_columns_by_family(feature_columns: tuple[str, ...] | list[str]) -> dict[str, tuple[str, ...]]:
+    """Group selected neural feature columns into interpretable families."""
+
+    grouped: dict[str, list[str]] = {"amplitude": [], "alpha": [], "beta": []}
+    for column in feature_columns:
+        column_name = str(column)
+        for family_name, prefixes in FEATURE_FAMILY_PREFIXES.items():
+            if any(column_name.startswith(prefix) or column_name.startswith(f"neural_{prefix}") for prefix in prefixes):
+                grouped[family_name].append(column_name)
+                break
+    return {
+        family_name: tuple(columns)
+        for family_name, columns in grouped.items()
+        if columns
+    }
 
 
 def _find_neural_column(table: pd.DataFrame, canonical_name: str, *, explicit_name: str | None = None) -> str | None:

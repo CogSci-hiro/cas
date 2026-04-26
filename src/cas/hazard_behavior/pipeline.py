@@ -39,17 +39,22 @@ from cas.hazard_behavior.model import (
     build_primary_effects_payload,
     build_lagged_model_specs,
     compare_primary_models,
+    compare_timing_control_models,
     compare_nested_models,
     ensure_primary_predictors_available,
     fit_binomial_glm,
     fit_primary_behaviour_models,
+    fit_timing_control_behaviour_models,
     generate_prediction_grids,
+    select_timing_control_best_lags,
     summarize_primary_model_fit_metrics,
+    summarize_timing_control_fit_metrics,
     summarize_best_lag_by_aic,
     summarize_lagged_model_coefficients,
     summarize_lagged_model_fit,
 )
 from cas.hazard_behavior.plots import (
+    plot_behaviour_timing_control_delta_aic_by_lag,
     plot_primary_coefficients,
     plot_primary_model_comparison,
     safe_make_plots,
@@ -70,8 +75,8 @@ class BehaviourHazardPipelineResult:
     feature_qc_path: Path
     episode_validation_qc_path: Path
     excluded_episodes_path: Path
-    model_comparison_csv_path: Path
-    model_fit_metrics_json_path: Path
+    model_comparison_csv_path: Path | None
+    model_fit_metrics_json_path: Path | None
     config_json_path: Path
     warnings_path: Path
 
@@ -174,7 +179,7 @@ def run_behaviour_hazard_pipeline(config: BehaviourHazardConfig) -> BehaviourHaz
     )
     LOGGER.info("Adding lagged information features.")
     lagged_feature_config = config
-    if config.fit_primary_behaviour_models:
+    if config.fit_primary_behaviour_models or config.fit_timing_control_models:
         required_lags = {
             int(config.primary_information_rate_lag_ms),
             int(config.primary_prop_expected_lag_ms),
@@ -238,6 +243,11 @@ def run_behaviour_hazard_pipeline(config: BehaviourHazardConfig) -> BehaviourHaz
     primary_model_comparison_path = None
     primary_effects_path = None
     primary_fit_metrics_path = None
+    timing_control_lag_selection_path = None
+    timing_control_selected_lags_path = None
+    timing_control_summary_path = None
+    timing_control_comparison_path = None
+    timing_control_fit_metrics_path = None
     primary_stat_tests_path = None
     primary_stat_tests_json_path = None
     primary_publication_table_path = None
@@ -294,81 +304,193 @@ def run_behaviour_hazard_pipeline(config: BehaviourHazardConfig) -> BehaviourHaz
         except Exception as error:  # pragma: no cover - plotting fallback
             warnings_list.append(f"Failed to create figure behaviour_primary_model_comparison.png: {error}")
 
-    LOGGER.info("Fitting behavioural hazard models.")
-    fitted_models = {}
-    for model_name in ["M0", "M1", "M2a", "M2b", "M2c"]:
-        LOGGER.info("Fitting model %s.", model_name)
-        fitted_models[model_name] = fit_binomial_glm(riskset_table, model_name=model_name, config=config)
-        LOGGER.info(
-            "Finished model %s: n_rows=%d, n_events=%d, aic=%s",
-            model_name,
-            fitted_models[model_name].fit_metrics["n_rows"],
-            fitted_models[model_name].fit_metrics["n_events"],
-            fitted_models[model_name].fit_metrics["aic"],
+    if config.fit_timing_control_models:
+        LOGGER.info("Fitting behavioural timing-control models.")
+        timing_control_selected_lags: dict[str, object] | None = None
+        timing_control_lag_selection = pd.DataFrame()
+        timing_control_config = config
+        if config.select_lags_with_timing_controls:
+            LOGGER.info("Selecting behavioural lags against timing-controlled parent models.")
+            timing_control_lag_selection, timing_control_selected_lags = select_timing_control_best_lags(
+                riskset_table,
+                config=config,
+            )
+            timing_control_lag_selection_path = write_table(
+                timing_control_lag_selection,
+                output_dirs["models"] / "behaviour_timing_control_lag_selection.csv",
+                sep=",",
+            )
+            timing_control_selected_lags_path = write_json(
+                timing_control_selected_lags,
+                output_dirs["models"] / "behaviour_timing_control_selected_lags.json",
+            )
+            timing_control_config = replace(
+                config,
+                primary_information_rate_lag_ms=int(timing_control_selected_lags["best_information_rate_lag_ms"]),
+                primary_prop_expected_lag_ms=int(timing_control_selected_lags["best_expected_cumulative_info_lag_ms"]),
+            )
+        timing_control_fitted_models = fit_timing_control_behaviour_models(riskset_table, config=timing_control_config)
+        timing_control_summary = pd.concat(
+            [
+                timing_control_fitted_models[model_name].summary_table
+                for model_name in ["M0_timing", "M1_rate_best_timing", "M2_expected_best_timing"]
+            ],
+            ignore_index=True,
+            sort=False,
+        )
+        timing_control_comparison = compare_timing_control_models(timing_control_fitted_models)
+        timing_control_fit_metrics = {
+            "models": summarize_timing_control_fit_metrics(timing_control_fitted_models),
+            "selected_lags": timing_control_selected_lags
+            or {
+                "best_information_rate_lag_ms": int(timing_control_config.primary_information_rate_lag_ms),
+                "best_expected_cumulative_info_lag_ms": int(timing_control_config.primary_prop_expected_lag_ms),
+                "delta_aic_convention": "child_aic - parent_aic; negative favours child",
+            },
+        }
+        if timing_control_selected_lags is None:
+            timing_control_selected_lags = dict(timing_control_fit_metrics["selected_lags"])
+            timing_control_selected_lags.setdefault("best_information_rate_delta_aic", None)
+            timing_control_selected_lags.setdefault("best_expected_cumulative_info_delta_aic", None)
+            timing_control_selected_lags.setdefault("lag_selection_parent_for_information_rate", "M0_timing")
+            timing_control_selected_lags.setdefault(
+                "lag_selection_parent_for_expected_cumulative_info",
+                "M1_rate_best_timing",
+            )
+        if timing_control_selected_lags_path is None:
+            timing_control_selected_lags_path = write_json(
+                timing_control_selected_lags,
+                output_dirs["models"] / "behaviour_timing_control_selected_lags.json",
+            )
+        timing_control_summary_path = write_table(
+            timing_control_summary,
+            output_dirs["models"] / "behaviour_timing_control_model_summary.csv",
+            sep=",",
+        )
+        timing_control_comparison_path = write_table(
+            timing_control_comparison,
+            output_dirs["models"] / "behaviour_timing_control_model_comparison.csv",
+            sep=",",
+        )
+        timing_control_fit_metrics_path = write_json(
+            timing_control_fit_metrics,
+            output_dirs["models"] / "behaviour_timing_control_fit_metrics.json",
+        )
+        try:
+            plot_primary_coefficients(
+                timing_control_summary,
+                output_dirs["figures"] / "behaviour_timing_control_coefficients.png",
+            )
+        except Exception as error:  # pragma: no cover - plotting fallback
+            warnings_list.append(f"Failed to create figure behaviour_timing_control_coefficients.png: {error}")
+        try:
+            plot_primary_model_comparison(
+                timing_control_comparison,
+                output_dirs["figures"] / "behaviour_timing_control_model_comparison.png",
+            )
+        except Exception as error:  # pragma: no cover - plotting fallback
+            warnings_list.append(f"Failed to create figure behaviour_timing_control_model_comparison.png: {error}")
+        if not timing_control_lag_selection.empty:
+            try:
+                plot_behaviour_timing_control_delta_aic_by_lag(
+                    timing_control_lag_selection,
+                    output_dirs["figures"] / "behaviour_timing_control_delta_aic_by_lag.png",
+                )
+            except Exception as error:  # pragma: no cover - plotting fallback
+                warnings_list.append(f"Failed to create figure behaviour_timing_control_delta_aic_by_lag.png: {error}")
+
+    fitted_models: dict[str, object] = {}
+    lagged_fitted_models: dict[str, object] = {}
+    all_fitted_models: dict[str, object] = {}
+    model_comparison = pd.DataFrame()
+    lagged_model_comparison = pd.DataFrame()
+    lagged_coefficients = pd.DataFrame()
+    baseline_summary_path = None
+    information_rate_summary_path = None
+    cumulative_summary_path = None
+    model_comparison_csv_path = None
+    model_comparison_json_path = None
+    model_fit_metrics_json_path = None
+    lagged_model_comparison_csv_path = None
+    lagged_model_comparison_json_path = None
+    coefficient_by_lag_path = None
+    model_fit_by_lag_path = None
+    best_lag_by_aic_path = None
+    lagged_feature_scaling_path = None
+    if config.run_behaviour_model_suite:
+        LOGGER.info("Fitting behavioural hazard models.")
+        for model_name in ["M0", "M1", "M2a", "M2b", "M2c"]:
+            LOGGER.info("Fitting model %s.", model_name)
+            fitted_models[model_name] = fit_binomial_glm(riskset_table, model_name=model_name, config=config)
+            LOGGER.info(
+                "Finished model %s: n_rows=%d, n_events=%d, aic=%s",
+                model_name,
+                fitted_models[model_name].fit_metrics["n_rows"],
+                fitted_models[model_name].fit_metrics["n_events"],
+                fitted_models[model_name].fit_metrics["aic"],
+            )
+
+        if config.fit_lagged_models:
+            LOGGER.info("Fitting lagged behavioural hazard model families.")
+            for model_name, _predictors, lag_ms, _family_name in build_lagged_model_specs(config):
+                try:
+                    lagged_fitted_models[model_name] = fit_binomial_glm(riskset_table, model_name=model_name, config=config)
+                    LOGGER.info("Finished lagged model %s (lag=%d ms).", model_name, lag_ms)
+                except Exception as error:  # pragma: no cover - resilient pipeline path
+                    warning = f"Failed to fit lagged model {model_name}: {error}"
+                    LOGGER.warning(warning)
+                    warnings_list.append(warning)
+        all_fitted_models = {**fitted_models, **lagged_fitted_models}
+
+        LOGGER.info("Writing model summaries and comparison tables.")
+        baseline_summary_path = write_table(
+            fitted_models["M0"].summary_table,
+            output_dirs["models"] / "hazard_baseline_gam_summary.csv",
+            sep=",",
+        )
+        information_rate_summary_path = write_table(
+            fitted_models["M1"].summary_table,
+            output_dirs["models"] / "hazard_information_rate_summary.csv",
+            sep=",",
+        )
+        cumulative_models_summary = pd.concat(
+            [
+                fitted_models["M2a"].summary_table,
+                fitted_models["M2b"].summary_table,
+                fitted_models["M2c"].summary_table,
+            ],
+            ignore_index=True,
+            sort=False,
+        )
+        cumulative_summary_path = write_table(
+            cumulative_models_summary,
+            output_dirs["models"] / "hazard_cumulative_info_models.csv",
+            sep=",",
         )
 
-    lagged_fitted_models: dict[str, object] = {}
-    if config.fit_lagged_models:
-        LOGGER.info("Fitting lagged behavioural hazard model families.")
-        for model_name, _predictors, lag_ms, _family_name in build_lagged_model_specs(config):
-            try:
-                lagged_fitted_models[model_name] = fit_binomial_glm(riskset_table, model_name=model_name, config=config)
-                LOGGER.info("Finished lagged model %s (lag=%d ms).", model_name, lag_ms)
-            except Exception as error:  # pragma: no cover - resilient pipeline path
-                warning = f"Failed to fit lagged model {model_name}: {error}"
-                LOGGER.warning(warning)
-                warnings_list.append(warning)
-    all_fitted_models = {**fitted_models, **lagged_fitted_models}
+        model_comparison = compare_nested_models(fitted_models)
+        model_comparison_csv_path = write_table(
+            model_comparison,
+            output_dirs["models"] / "model_comparison_behaviour.csv",
+            sep=",",
+        )
+        model_comparison_json_path = write_json(
+            {"rows": model_comparison.to_dict(orient="records")},
+            output_dirs["models"] / "model_comparison_behaviour.json",
+        )
 
-    LOGGER.info("Writing model summaries and comparison tables.")
-    baseline_summary_path = write_table(
-        fitted_models["M0"].summary_table,
-        output_dirs["models"] / "hazard_baseline_gam_summary.csv",
-        sep=",",
-    )
-    information_rate_summary_path = write_table(
-        fitted_models["M1"].summary_table,
-        output_dirs["models"] / "hazard_information_rate_summary.csv",
-        sep=",",
-    )
-    cumulative_models_summary = pd.concat(
-        [
-            fitted_models["M2a"].summary_table,
-            fitted_models["M2b"].summary_table,
-            fitted_models["M2c"].summary_table,
-        ],
-        ignore_index=True,
-        sort=False,
-    )
-    cumulative_summary_path = write_table(
-        cumulative_models_summary,
-        output_dirs["models"] / "hazard_cumulative_info_models.csv",
-        sep=",",
-    )
-
-    model_comparison = compare_nested_models(fitted_models)
-    model_comparison_csv_path = write_table(
-        model_comparison,
-        output_dirs["models"] / "model_comparison_behaviour.csv",
-        sep=",",
-    )
-    model_comparison_json_path = write_json(
-        {"rows": model_comparison.to_dict(orient="records")},
-        output_dirs["models"] / "model_comparison_behaviour.json",
-    )
-
-    model_fit_metrics = {
-        "models": {name: fitted_model.fit_metrics for name, fitted_model in all_fitted_models.items()},
-        "scaling": zscore_result.scaling,
-        "primary_scaling": primary_scaling,
-        "expected_total_info_by_group": expected_total_info_by_group,
-        "used_partner_anchor": positive_result.used_partner_anchor,
-        "full_data_expected_information": True,
-    }
-    model_fit_metrics_json_path = write_json(
-        model_fit_metrics,
-        output_dirs["models"] / "model_fit_metrics.json",
-    )
+        model_fit_metrics = {
+            "models": {name: fitted_model.fit_metrics for name, fitted_model in all_fitted_models.items()},
+            "scaling": zscore_result.scaling,
+            "primary_scaling": primary_scaling,
+            "expected_total_info_by_group": expected_total_info_by_group,
+            "used_partner_anchor": positive_result.used_partner_anchor,
+            "full_data_expected_information": True,
+        }
+        model_fit_metrics_json_path = write_json(
+            model_fit_metrics,
+            output_dirs["models"] / "model_fit_metrics.json",
+        )
 
     feature_qc_payload = {
         "n_rows": int(len(riskset_table)),
@@ -400,6 +522,11 @@ def run_behaviour_hazard_pipeline(config: BehaviourHazardConfig) -> BehaviourHaz
             riskset_table,
             output_dirs["riskset"] / "hazard_behavior_riskset.tsv",
         )
+        if config.fit_timing_control_models:
+            write_table(
+                riskset_table,
+                output_dirs["riskset"] / "hazard_behavior_riskset_with_timing_controls.tsv",
+            )
         if neural_qc_payload is not None:
             write_table(
                 riskset_table,
@@ -435,46 +562,47 @@ def run_behaviour_hazard_pipeline(config: BehaviourHazardConfig) -> BehaviourHaz
         output_dirs["riskset"] / "riskset_event_qc.json",
     )
 
-    lagged_model_comparison = compare_nested_models(all_fitted_models)
-    lagged_model_comparison_csv_path = write_table(
-        lagged_model_comparison,
-        output_dirs["models"] / "model_comparison_lagged_behaviour.csv",
-        sep=",",
-    )
-    lagged_model_comparison_json_path = write_json(
-        {"rows": lagged_model_comparison.to_dict(orient="records")},
-        output_dirs["models"] / "model_comparison_lagged_behaviour.json",
-    )
-    lagged_coefficients = summarize_lagged_model_coefficients(all_fitted_models)
-    coefficient_by_lag_path = write_table(
-        lagged_coefficients,
-        output_dirs["models"] / "coefficient_by_lag.csv",
-        sep=",",
-    )
-    lagged_fit_summary = summarize_lagged_model_fit(all_fitted_models)
-    model_fit_by_lag_path = write_table(
-        lagged_fit_summary,
-        output_dirs["models"] / "model_fit_by_lag.csv",
-        sep=",",
-    )
-    best_lag_by_aic = summarize_best_lag_by_aic(all_fitted_models)
-    best_lag_by_aic_path = write_table(
-        best_lag_by_aic,
-        output_dirs["models"] / "best_lag_by_aic.csv",
-        sep=",",
-    )
-    lagged_scaling = {
-        predictor: stats
-        for predictor, stats in zscore_result.scaling.items()
-        if "_lag_" in predictor
-    }
-    lagged_feature_scaling_path = write_json(
-        {
-            "scaling": lagged_scaling,
-            "warnings": zscore_result.warnings,
-        },
-        output_dirs["models"] / "lagged_feature_scaling.json",
-    )
+    if config.run_behaviour_model_suite:
+        lagged_model_comparison = compare_nested_models(all_fitted_models)
+        lagged_model_comparison_csv_path = write_table(
+            lagged_model_comparison,
+            output_dirs["models"] / "model_comparison_lagged_behaviour.csv",
+            sep=",",
+        )
+        lagged_model_comparison_json_path = write_json(
+            {"rows": lagged_model_comparison.to_dict(orient="records")},
+            output_dirs["models"] / "model_comparison_lagged_behaviour.json",
+        )
+        lagged_coefficients = summarize_lagged_model_coefficients(all_fitted_models)
+        coefficient_by_lag_path = write_table(
+            lagged_coefficients,
+            output_dirs["models"] / "coefficient_by_lag.csv",
+            sep=",",
+        )
+        lagged_fit_summary = summarize_lagged_model_fit(all_fitted_models)
+        model_fit_by_lag_path = write_table(
+            lagged_fit_summary,
+            output_dirs["models"] / "model_fit_by_lag.csv",
+            sep=",",
+        )
+        best_lag_by_aic = summarize_best_lag_by_aic(all_fitted_models)
+        best_lag_by_aic_path = write_table(
+            best_lag_by_aic,
+            output_dirs["models"] / "best_lag_by_aic.csv",
+            sep=",",
+        )
+        lagged_scaling = {
+            predictor: stats
+            for predictor, stats in zscore_result.scaling.items()
+            if "_lag_" in predictor
+        }
+        lagged_feature_scaling_path = write_json(
+            {
+                "scaling": lagged_scaling,
+                "warnings": zscore_result.warnings,
+            },
+            output_dirs["models"] / "lagged_feature_scaling.json",
+        )
 
     if config.fit_primary_behaviour_models and config.fit_primary_stat_tests:
         LOGGER.info("Writing compact primary behavioural statistical reporting layer.")
@@ -493,48 +621,49 @@ def run_behaviour_hazard_pipeline(config: BehaviourHazardConfig) -> BehaviourHaz
         primary_interpretation_path = output_dirs["models"] / "behaviour_primary_interpretation.txt"
         del primary_reporting
 
-    LOGGER.info("Generating prediction grids and figures.")
-    prediction_grids = generate_prediction_grids(
-        riskset_table=riskset_table,
-        fitted_models=fitted_models,
-        config=config,
-    )
-    for grid_name, grid_table in prediction_grids.items():
-        write_table(grid_table, output_dirs["models"] / f"{grid_name}.csv", sep=",")
-    plot_outputs = safe_make_plots(
-        riskset_table=riskset_table,
-        episodes_table=episode_summary,
-        prediction_grids=prediction_grids,
-        figures_dir=output_dirs["figures"],
-        warnings_list=warnings_list,
-        candidate_episode_table=positive_result.candidate_episodes,
-        lagged_model_comparison=lagged_model_comparison,
-        lagged_coefficients=lagged_coefficients,
-        information_timing_summary=information_timing_summary,
-    )
-    write_json(
-        plot_outputs["prop_actual_saturation_qc"],
-        output_dirs["riskset"] / "prop_actual_saturation_qc.json",
-    )
-    write_json(
-        plot_outputs["observed_event_rate_plot_qc"],
-        output_dirs["riskset"] / "observed_event_rate_plot_qc.json",
-    )
-    write_table(
-        plot_outputs["observed_event_rate_by_time_bin"],
-        output_dirs["riskset"] / "observed_event_rate_by_time_bin.csv",
-        sep=",",
-    )
-    write_table(
-        plot_outputs["observed_event_rate_nonzero_bins"],
-        output_dirs["riskset"] / "observed_event_rate_nonzero_bins.csv",
-        sep=",",
-    )
-    write_table(
-        plot_outputs["event_rate_by_prop_actual_saturation"],
-        output_dirs["riskset"] / "event_rate_by_prop_actual_saturation.csv",
-        sep=",",
-    )
+    if config.run_behaviour_model_suite:
+        LOGGER.info("Generating prediction grids and figures.")
+        prediction_grids = generate_prediction_grids(
+            riskset_table=riskset_table,
+            fitted_models=fitted_models,
+            config=config,
+        )
+        for grid_name, grid_table in prediction_grids.items():
+            write_table(grid_table, output_dirs["models"] / f"{grid_name}.csv", sep=",")
+        plot_outputs = safe_make_plots(
+            riskset_table=riskset_table,
+            episodes_table=episode_summary,
+            prediction_grids=prediction_grids,
+            figures_dir=output_dirs["figures"],
+            warnings_list=warnings_list,
+            candidate_episode_table=positive_result.candidate_episodes,
+            lagged_model_comparison=lagged_model_comparison,
+            lagged_coefficients=lagged_coefficients,
+            information_timing_summary=information_timing_summary,
+        )
+        write_json(
+            plot_outputs["prop_actual_saturation_qc"],
+            output_dirs["riskset"] / "prop_actual_saturation_qc.json",
+        )
+        write_json(
+            plot_outputs["observed_event_rate_plot_qc"],
+            output_dirs["riskset"] / "observed_event_rate_plot_qc.json",
+        )
+        write_table(
+            plot_outputs["observed_event_rate_by_time_bin"],
+            output_dirs["riskset"] / "observed_event_rate_by_time_bin.csv",
+            sep=",",
+        )
+        write_table(
+            plot_outputs["observed_event_rate_nonzero_bins"],
+            output_dirs["riskset"] / "observed_event_rate_nonzero_bins.csv",
+            sep=",",
+        )
+        write_table(
+            plot_outputs["event_rate_by_prop_actual_saturation"],
+            output_dirs["riskset"] / "event_rate_by_prop_actual_saturation.csv",
+            sep=",",
+        )
     neural_warnings_path = None
     if neural_fit_result is not None:
         write_table(
@@ -547,6 +676,11 @@ def run_behaviour_hazard_pipeline(config: BehaviourHazardConfig) -> BehaviourHaz
             output_dirs["models"] / "neural_lowlevel_model_comparison.csv",
             sep=",",
         )
+        write_table(
+            neural_fit_result.family_comparison_table,
+            output_dirs["models"] / "neural_lowlevel_family_model_comparison.csv",
+            sep=",",
+        )
         write_json(
             neural_fit_result.fit_metrics_payload,
             output_dirs["models"] / "neural_lowlevel_fit_metrics.json",
@@ -555,23 +689,47 @@ def run_behaviour_hazard_pipeline(config: BehaviourHazardConfig) -> BehaviourHaz
             neural_fit_result.effects_payload,
             output_dirs["models"] / "neural_lowlevel_effects.json",
         )
-        write_table(
-            neural_fit_result.pca_result.pca_summary,
-            output_dirs["models"] / "neural_lowlevel_pca_summary.csv",
-            sep=",",
-        )
-        write_table(
-            neural_fit_result.pca_result.loadings,
-            output_dirs["models"] / "neural_lowlevel_pca_loadings.csv",
-            sep=",",
-        )
+        for family_name in ["amplitude", "alpha", "beta"]:
+            family_result = neural_fit_result.pca_results.get(family_name)
+            if family_result is None:
+                empty_summary = pd.DataFrame(
+                    columns=[
+                        "family",
+                        "component",
+                        "explained_variance_ratio",
+                        "cumulative_explained_variance",
+                        "selected_for_model",
+                    ]
+                )
+                empty_loadings = pd.DataFrame(columns=["feature", "family"])
+                write_table(
+                    empty_summary,
+                    output_dirs["models"] / f"neural_lowlevel_pca_summary_{family_name}.csv",
+                    sep=",",
+                )
+                write_table(
+                    empty_loadings,
+                    output_dirs["models"] / f"neural_lowlevel_pca_loadings_{family_name}.csv",
+                    sep=",",
+                )
+                continue
+            write_table(
+                family_result.pca_summary,
+                output_dirs["models"] / f"neural_lowlevel_pca_summary_{family_name}.csv",
+                sep=",",
+            )
+            write_table(
+                family_result.loadings,
+                output_dirs["models"] / f"neural_lowlevel_pca_loadings_{family_name}.csv",
+                sep=",",
+            )
         plot_neural_lowlevel_pca_variance(
-            neural_fit_result.pca_result.pca_summary,
+            {family_name: result.pca_summary for family_name, result in neural_fit_result.pca_results.items()},
             variance_threshold=config.neural_pca_variance_threshold,
             output_path=output_dirs["figures"] / "neural_lowlevel_pca_variance.png",
         )
         plot_neural_lowlevel_model_comparison(
-            neural_fit_result.comparison_table,
+            neural_fit_result.family_comparison_table,
             output_dirs["figures"] / "neural_lowlevel_model_comparison.png",
         )
         plot_neural_lowlevel_coefficients(
@@ -605,15 +763,6 @@ def run_behaviour_hazard_pipeline(config: BehaviourHazardConfig) -> BehaviourHaz
         logs_dir=output_dirs["logs"],
     )
     LOGGER.info("Behavioural hazard pipeline finished. Outputs written to %s", output_dirs["root"])
-
-    del baseline_summary_path, information_rate_summary_path, cumulative_summary_path, model_comparison_json_path
-    del partner_ipu_table_path, partner_ipu_episode_summary_path, partner_ipu_anchor_qc_path, event_rows_debug_path
-    del lagged_feature_qc_path, lagged_feature_table_path, information_timing_summary_path, lagged_model_comparison_csv_path
-    del lagged_model_comparison_json_path, coefficient_by_lag_path, model_fit_by_lag_path, best_lag_by_aic_path
-    del lagged_feature_scaling_path, primary_model_summary_path, primary_model_comparison_path, primary_effects_path
-    del primary_fit_metrics_path, primary_stat_tests_path, primary_stat_tests_json_path
-    del primary_publication_table_path, primary_interpretation_path
-    del neural_feature_qc_path, neural_warnings_path
     return BehaviourHazardPipelineResult(
         out_dir=output_dirs["root"],
         riskset_path=riskset_path,
@@ -661,34 +810,43 @@ def _build_neural_pc1_prediction_grid(
     config: BehaviourHazardConfig,
 ) -> pd.DataFrame:
     model_table = neural_fit_result.model_table
-    if "neural_pc1" not in model_table.columns:
-        raise ValueError("Cannot create PC1 prediction grid because `neural_pc1` is unavailable.")
+    family_name = neural_fit_result.best_family_for_pc1
+    if family_name is None:
+        raise ValueError("Cannot create PC1 prediction grid because no neural family PCs are available.")
+    family_prefix = {"amplitude": "amp", "alpha": "alpha", "beta": "beta", "combined": "neural"}[family_name]
+    pc1_column = f"{family_prefix}_pc1"
+    if pc1_column not in model_table.columns:
+        raise ValueError(f"Cannot create PC1 prediction grid because `{pc1_column}` is unavailable.")
     base_row = {
         "time_from_partner_onset": float(pd.to_numeric(model_table["time_from_partner_onset"], errors="coerce").median()),
         f"z_information_rate_lag_{int(config.primary_information_rate_lag_ms)}ms": 0.0,
         f"z_prop_expected_cumulative_info_lag_{int(config.primary_prop_expected_lag_ms)}ms": 0.0,
     }
-    for pc_column in neural_fit_result.pca_result.pc_columns:
+    for pc_column in neural_fit_result.full_pc_columns:
         base_row[pc_column] = 0.0
     pc1_values = np.linspace(
-        float(pd.to_numeric(model_table["neural_pc1"], errors="coerce").quantile(0.05)),
-        float(pd.to_numeric(model_table["neural_pc1"], errors="coerce").quantile(0.95)),
+        float(pd.to_numeric(model_table[pc1_column], errors="coerce").quantile(0.05)),
+        float(pd.to_numeric(model_table[pc1_column], errors="coerce").quantile(0.95)),
         num=100,
     )
-    prediction_grid = pd.DataFrame([{**base_row, "neural_pc1": float(value)} for value in pc1_values])
+    prediction_grid = pd.DataFrame([{**base_row, pc1_column: float(value)} for value in pc1_values])
     prediction_grid["predicted_hazard"] = np.asarray(
         neural_fit_result.child_model.result.predict(prediction_grid),
         dtype=float,
     )
+    prediction_grid["pc1_column"] = pc1_column
+    prediction_grid["family"] = family_name
     return prediction_grid
 
 
 def _plot_neural_pc1_prediction_curve(prediction_table: pd.DataFrame, output_path: Path) -> None:
     figure, axis = plt.subplots(figsize=(7.0, 4.5))
-    axis.plot(prediction_table["neural_pc1"], prediction_table["predicted_hazard"], color="#1f4e79", linewidth=2.2)
-    axis.set_xlabel("Neural PC1")
+    pc1_column = str(prediction_table["pc1_column"].iloc[0])
+    family_name = str(prediction_table["family"].iloc[0])
+    axis.plot(prediction_table[pc1_column], prediction_table["predicted_hazard"], color="#1f4e79", linewidth=2.2)
+    axis.set_xlabel(pc1_column)
     axis.set_ylabel("Predicted hazard")
-    axis.set_title("Predicted hazard as neural PC1 varies")
+    axis.set_title(f"Predicted hazard as {family_name} PC1 varies")
     figure.tight_layout()
     figure.savefig(output_path, dpi=200)
     plt.close(figure)

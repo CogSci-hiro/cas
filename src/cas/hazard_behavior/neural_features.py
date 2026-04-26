@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 
 import numpy as np
 import pandas as pd
+
+from cas.hazard_behavior.progress import progress_iterable
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,14 +49,25 @@ def add_lowlevel_neural_features_to_riskset(
 
     table = riskset_table.copy()
     renamed_feature_columns = [f"neural_{column}" for column in neural_feature_columns]
-    for renamed_column in renamed_feature_columns:
-        table[renamed_column] = np.nan
+    if renamed_feature_columns:
+        neural_defaults = pd.DataFrame(
+            np.nan,
+            index=table.index,
+            columns=renamed_feature_columns,
+        )
+        table = pd.concat([table, neural_defaults], axis=1)
 
     grouped_neural = {
         key: group.sort_values("time", kind="mergesort").reset_index(drop=True)
         for key, group in neural_table.groupby(["dyad_id", "run", "speaker"], sort=False)
     }
-    for row_index, row in table.iterrows():
+    row_items = list(table.iterrows())
+    for row_index, row in progress_iterable(
+        row_items,
+        total=len(row_items),
+        description="Neural windows",
+        enabled=LOGGER.isEnabledFor(logging.INFO) and len(row_items) > 250,
+    ):
         key = (str(row["dyad_id"]), str(row["run"]), str(row["participant_speaker"]))
         speaker_neural = grouped_neural.get(key)
         if speaker_neural is None or speaker_neural.empty:
