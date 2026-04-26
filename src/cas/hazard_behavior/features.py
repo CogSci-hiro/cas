@@ -13,10 +13,8 @@ from cas.hazard_behavior.progress import progress_iterable
 
 EPSILON = 1.0e-12
 LOGGER = logging.getLogger(__name__)
-BASE_INFORMATION_FEATURES = (
+ACTIVE_LAGGED_INFORMATION_FEATURES = (
     "information_rate",
-    "cumulative_info",
-    "prop_actual_cumulative_info",
     "prop_expected_cumulative_info",
 )
 INFORMATION_TIMING_THRESHOLD_MAP = {
@@ -87,11 +85,9 @@ def compute_information_features_for_episode(
     rows["n_tokens_observed"] = observed_token_counts
     rows["n_tokens_total"] = n_tokens_total
     rows["alignment_ok_fraction"] = alignment_ok_fraction
-    rows["prop_actual_cumulative_info"] = _safe_ratio(rows["cumulative_info"], actual_total_info)
     rows["prop_expected_cumulative_info"] = _safe_ratio(rows["cumulative_info"], expected_total_info)
     if config.clip_proportions:
         low, high = config.clip_range
-        rows["prop_actual_cumulative_info"] = rows["prop_actual_cumulative_info"].clip(low, high)
         rows["prop_expected_cumulative_info"] = rows["prop_expected_cumulative_info"].clip(low, high)
     rows["expected_info_group_value"] = group_value
     rows["feature_missing_actual_total"] = bool(not np.isfinite(actual_total_info) or actual_total_info <= 0.0)
@@ -135,7 +131,13 @@ def compute_expected_total_information(
 ) -> dict[str, float]:
     """Estimate expected total information by configurable group."""
 
-    episode_ipus = episodes_table.loc[
+    episodes_with_defaults = episodes_table.copy()
+    if "partner_ipu_class" not in episodes_with_defaults.columns:
+        episodes_with_defaults["partner_ipu_class"] = "unknown"
+    if "partner_role" not in episodes_with_defaults.columns:
+        episodes_with_defaults["partner_role"] = "partner"
+
+    episode_ipus = episodes_with_defaults.loc[
         :,
         ["dyad_id", "run", "partner_speaker", "partner_ipu_onset", "partner_ipu_offset", "partner_ipu_class", "partner_role"],
     ].drop_duplicates()
@@ -177,7 +179,7 @@ def compute_expected_total_information(
         return result
 
     group_column = config.expected_info_group
-    if group_column not in episodes_table.columns:
+    if group_column not in episodes_with_defaults.columns:
         return result
     grouped = ipu_totals_table.groupby(group_column, dropna=False)["actual_total_info"].mean()
     for group_value, mean_value in grouped.items():
@@ -243,7 +245,7 @@ def add_lagged_information_features(
     warnings_list: list[str] = []
     feature_names_created = [
         compute_lagged_feature_name(feature_name, lag_ms)
-        for feature_name in BASE_INFORMATION_FEATURES
+        for feature_name in ACTIVE_LAGGED_INFORMATION_FEATURES
         for lag_ms in config.lag_grid_ms
     ]
     for feature_name in feature_names_created:
@@ -254,7 +256,7 @@ def add_lagged_information_features(
         episode_rows = episode_rows.sort_values(["time_from_partner_onset", "bin_index"], kind="mergesort")
         episode_index = episode_rows.index
         times = pd.to_numeric(episode_rows["time_from_partner_onset"], errors="coerce").to_numpy(dtype=float)
-        for base_feature in BASE_INFORMATION_FEATURES:
+        for base_feature in ACTIVE_LAGGED_INFORMATION_FEATURES:
             values = pd.to_numeric(episode_rows[base_feature], errors="coerce").to_numpy(dtype=float)
             for lag_ms in config.lag_grid_ms:
                 lagged_values = _compute_episode_lagged_values(
@@ -302,12 +304,12 @@ def build_lagged_feature_qc(
     warnings_payload = list(warnings_list or [])
     feature_names_created = [
         compute_lagged_feature_name(feature_name, lag_ms)
-        for feature_name in BASE_INFORMATION_FEATURES
+        for feature_name in ACTIVE_LAGGED_INFORMATION_FEATURES
         for lag_ms in config.lag_grid_ms
         if compute_lagged_feature_name(feature_name, lag_ms) in riskset_table.columns
     ]
     max_abs_difference_lag0_vs_unlagged: dict[str, float | None] = {}
-    for feature_name in BASE_INFORMATION_FEATURES:
+    for feature_name in ACTIVE_LAGGED_INFORMATION_FEATURES:
         lagged_feature = compute_lagged_feature_name(feature_name, 0)
         if lagged_feature not in riskset_table.columns:
             max_abs_difference_lag0_vs_unlagged[feature_name] = None
@@ -400,11 +402,16 @@ def _compute_alignment_ok_fraction(tokens: pd.DataFrame) -> float:
 
 
 def _discover_predictors_for_zscoring(riskset_table: pd.DataFrame) -> tuple[str, ...]:
-    predictors = [feature_name for feature_name in BASE_INFORMATION_FEATURES if feature_name in riskset_table.columns]
+    predictors = [
+        feature_name for feature_name in ACTIVE_LAGGED_INFORMATION_FEATURES if feature_name in riskset_table.columns
+    ]
     predictors.extend(
         column_name
         for column_name in riskset_table.columns
-        if any(column_name.startswith(f"{feature_name}_lag_") for feature_name in BASE_INFORMATION_FEATURES)
+        if any(
+            column_name.startswith(f"{feature_name}_lag_")
+            for feature_name in ACTIVE_LAGGED_INFORMATION_FEATURES
+        )
     )
     return tuple(dict.fromkeys(predictors))
 

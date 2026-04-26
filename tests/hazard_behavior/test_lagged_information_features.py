@@ -7,36 +7,45 @@ import pandas as pd
 
 from cas.hazard_behavior.config import BehaviourHazardConfig
 from cas.hazard_behavior.features import (
+    ACTIVE_LAGGED_INFORMATION_FEATURES,
     add_lagged_information_features,
+    build_lagged_feature_qc,
     compute_information_timing_summaries,
 )
 
 
-def test_lag_0_equals_unlagged() -> None:
+def test_active_lag_0_equals_unlagged() -> None:
     config = _config()
     riskset = _toy_riskset_single_episode()
 
     lagged, _ = add_lagged_information_features(riskset, config=config)
 
-    assert np.allclose(lagged["information_rate_lag_0ms"], lagged["information_rate"])
-    assert np.allclose(lagged["cumulative_info_lag_0ms"], lagged["cumulative_info"])
-    assert np.allclose(
-        lagged["prop_actual_cumulative_info_lag_0ms"],
-        lagged["prop_actual_cumulative_info"],
+    assert ACTIVE_LAGGED_INFORMATION_FEATURES == (
+        "information_rate",
+        "prop_expected_cumulative_info",
     )
+    assert np.allclose(lagged["information_rate_lag_0ms"], lagged["information_rate"])
+    assert np.allclose(
+        lagged["prop_expected_cumulative_info_lag_0ms"],
+        lagged["prop_expected_cumulative_info"],
+    )
+    assert "cumulative_info_lag_0ms" not in lagged.columns
 
 
-def test_positive_lag_uses_past_values() -> None:
+def test_active_positive_lag_uses_past_values() -> None:
     config = _config(lag_grid_ms=(100,))
     riskset = _toy_riskset_single_episode()
-    riskset["cumulative_info"] = [0.0, 1.0, 2.0, 3.0, 4.0]
+    riskset["prop_expected_cumulative_info"] = [0.0, 0.1, 0.2, 0.3, 0.4]
 
     lagged, _ = add_lagged_information_features(riskset, config=config)
 
-    assert np.allclose(lagged["cumulative_info_lag_100ms"], [0.0, 0.0, 0.0, 1.0, 2.0])
+    assert np.allclose(
+        lagged["prop_expected_cumulative_info_lag_100ms"],
+        [0.0, 0.0, 0.0, 0.1, 0.2],
+    )
 
 
-def test_lag_is_computed_within_episode() -> None:
+def test_active_lag_is_computed_within_episode() -> None:
     config = _config(lag_grid_ms=(100,))
     riskset = pd.concat(
         [
@@ -45,24 +54,28 @@ def test_lag_is_computed_within_episode() -> None:
         ],
         ignore_index=True,
     )
-    riskset.loc[riskset["episode_id"] == "ep-1", "cumulative_info"] = [0, 1, 2, 3, 4]
-    riskset.loc[riskset["episode_id"] == "ep-2", "cumulative_info"] = [10, 11, 12, 13, 14]
 
     lagged, _ = add_lagged_information_features(riskset, config=config)
 
-    ep1 = lagged.loc[lagged["episode_id"] == "ep-1", "cumulative_info_lag_100ms"].to_list()
-    ep2 = lagged.loc[lagged["episode_id"] == "ep-2", "cumulative_info_lag_100ms"].to_list()
+    ep1 = lagged.loc[lagged["episode_id"] == "ep-1", "information_rate_lag_100ms"].to_list()
+    ep2 = lagged.loc[lagged["episode_id"] == "ep-2", "information_rate_lag_100ms"].to_list()
     assert ep1 == [0.0, 0.0, 0.0, 1.0, 2.0]
     assert ep2 == [0.0, 0.0, 10.0, 11.0, 12.0]
 
 
-def test_negative_query_times_use_fill_value() -> None:
-    config = _config(lag_grid_ms=(200,), lagged_feature_fill_value=0.0)
+def test_lagged_feature_qc_lists_only_active_families() -> None:
+    config = _config(lag_grid_ms=(0, 100))
     riskset = _toy_riskset_single_episode()
-
     lagged, _ = add_lagged_information_features(riskset, config=config)
 
-    assert np.allclose(lagged.loc[:3, "information_rate_lag_200ms"], [0.0, 0.0, 0.0, 0.0])
+    qc = build_lagged_feature_qc(lagged, config=config)
+
+    assert set(qc["feature_names_created"]) == {
+        "information_rate_lag_0ms",
+        "information_rate_lag_100ms",
+        "prop_expected_cumulative_info_lag_0ms",
+        "prop_expected_cumulative_info_lag_100ms",
+    }
 
 
 def test_information_timing_summaries() -> None:
@@ -125,7 +138,6 @@ def _toy_riskset_single_episode(episode_id: str = "ep-1", offset: float = 0.0) -
             "time_from_partner_onset": times,
             "information_rate": offset + np.array([0.0, 1.0, 2.0, 3.0, 4.0]),
             "cumulative_info": offset + np.array([0.0, 1.0, 2.0, 3.0, 4.0]),
-            "prop_actual_cumulative_info": np.array([0.0, 0.25, 0.50, 0.75, 1.0]),
             "prop_expected_cumulative_info": np.array([0.0, 0.20, 0.40, 0.60, 0.80]),
         }
     )

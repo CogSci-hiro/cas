@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 import warnings
 from dataclasses import dataclass
 from typing import Any
@@ -10,7 +11,9 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
+from statsmodels.genmod.generalized_linear_model import GLMResults
 
+from cas.hazard.config import NeuralHazardConfig
 DEFAULT_FULL_TERMS = ("intercept", "tau_seconds", "entropy_z")
 DEFAULT_BASELINE_TERMS = ("intercept", "tau_seconds")
 QUADRATIC_TIME_TERM = "tau_seconds_sq"
@@ -392,3 +395,213 @@ def _maybe_float(value: Any) -> float | None:
     if not math.isfinite(numeric_value):
         return None
     return numeric_value
+
+
+@dataclass(frozen=True, slots=True)
+class FittedNeuralFormulaModel:
+    """One fitted low-level neural hazard formula model."""
+
+    model_name: str
+    formula: str
+    result: GLMResults
+    n_rows_used: int
+    warnings: list[str]
+
+
+@dataclass(frozen=True, slots=True)
+class NeuralModelFamilyResult:
+    """Fitted baseline and neural child models for one event family."""
+
+    comparison_table: pd.DataFrame
+    coefficients_table: pd.DataFrame
+    backend_used: str
+    warnings: list[str]
+
+
+def fit_neural_hazard_model_family(
+    riskset_table: pd.DataFrame,
+    *,
+    event_type: str,
+    neural_config: NeuralHazardConfig,
+) -> NeuralModelFamilyResult:
+    """Fit behavioural baseline and alpha/beta neural child models.
+
+    Usage example
+    -------------
+    >>> result = fit_neural_hazard_model_family(table, event_type="fpp", neural_config=config.neural)
+    >>> result.comparison_table.shape[0]
+    3
+    """
+
+    event_text = str(event_type).lower()
+    if event_text not in {"fpp", "spp"}:
+        raise ValueError("`event_type` must be one of fpp or spp.")
+    event_column = f"event_{event_text}"
+    if event_column not in riskset_table.columns:
+        raise ValueError(f"Risk set is missing required event column `{event_column}`.")
+
+    baseline_formula = _build_neural_baseline_formula(event_column=event_column, neural_config=neural_config)
+    alpha_terms = _discover_band_pc_terms(riskset_table, band_name="alpha")
+    beta_terms = _discover_band_pc_terms(riskset_table, band_name="beta")
+    suffix = event_text.upper()
+    formulas = {
+        f"M_behaviour_{suffix}": baseline_formula,
+        f"M_alpha_{suffix}": _append_terms(baseline_formula, alpha_terms),
+        f"M_beta_{suffix}": _append_terms(baseline_formula, beta_terms),
+        f"M_alpha_beta_{suffix}": _append_terms(baseline_formula, alpha_terms + beta_terms),
+    }
+
+    warnings_list: list[str] = []
+    backend_used = str(neural_config.model.fitting_backend)
+    if backend_used != "python_glm":
+        warnings_list.append(
+            f"Requested backend `{backend_used}` is not wired in Python; falling back to `python_glm`."
+        )
+        backend_used = "python_glm"
+
+    fitted_models: dict[str, FittedNeuralFormulaModel] = {}
+    for model_name, formula in formulas.items():
+        fitted = _fit_neural_formula_model(
+            riskset_table,
+            model_name=model_name,
+            formula=formula,
+            event_column=event_column,
+        )
+        fitted_models[model_name] = fitted
+        warnings_list.extend(fitted.warnings)
+
+    parent_name = f"M_behaviour_{suffix}"
+    child_names = [f"M_alpha_{suffix}", f"M_beta_{suffix}", f"M_alpha_beta_{suffix}"]
+    comparison_rows: list[dict[str, object]] = []
+    for child_name in child_names:
+        child = fitted_models[child_name]
+        parent = fitted_models[parent_name]
+        parent_aic = _as_float_or_nan(getattr(parent.result, "aic", np.nan))
+        child_aic = _as_float_or_nan(getattr(child.result, "aic", np.nan))
+        parent_bic = _as_float_or_nan(getattr(parent.result, "bic", np.nan))
+        child_bic = _as_float_or_nan(getattr(child.result, "bic", np.nan))
+        comparison_rows.append(
+            {
+                "event_type": event_text,
+                "parent_model": parent_name,
+                "child_model": child_name,
+                "parent_aic": parent_aic,
+                "child_aic": child_aic,
+                "delta_aic": child_aic - parent_aic,
+                "parent_bic": parent_bic,
+                "child_bic": child_bic,
+                "delta_bic": child_bic - parent_bic,
+                "n_rows_parent": int(parent.n_rows_used),
+                "n_rows_child": int(child.n_rows_used),
+            }
+        )
+
+    coefficient_frames: list[pd.DataFrame] = []
+    for model_name, fitted in fitted_models.items():
+        confidence_intervals = fitted.result.conf_int()
+        frame = pd.DataFrame(
+            {
+                "event_type": event_text,
+                "model_name": model_name,
+                "term": fitted.result.params.index.astype(str),
+                "estimate": np.asarray(fitted.result.params, dtype=float),
+                "std_error": np.asarray(fitted.result.bse, dtype=float),
+                "z_value": np.asarray(fitted.result.tvalues, dtype=float),
+                "p_value": np.asarray(fitted.result.pvalues, dtype=float),
+                "conf_low": np.asarray(confidence_intervals.iloc[:, 0], dtype=float),
+                "conf_high": np.asarray(confidence_intervals.iloc[:, 1], dtype=float),
+                "odds_ratio": np.exp(np.asarray(fitted.result.params, dtype=float)),
+            }
+        )
+        coefficient_frames.append(frame)
+
+    return NeuralModelFamilyResult(
+        comparison_table=pd.DataFrame(comparison_rows),
+        coefficients_table=pd.concat(coefficient_frames, ignore_index=True, sort=False),
+        backend_used=backend_used,
+        warnings=warnings_list,
+    )
+
+
+def _build_neural_baseline_formula(*, event_column: str, neural_config: NeuralHazardConfig) -> str:
+    onset_spline = (
+        f"bs(time_from_partner_onset, df={neural_config.model.baseline_spline_df}, "
+        f"degree={neural_config.model.baseline_spline_degree}, include_intercept=False)"
+    )
+    offset_spline = (
+        f"bs(time_from_partner_offset, df={neural_config.model.baseline_spline_df}, "
+        f"degree={neural_config.model.baseline_spline_degree}, include_intercept=False)"
+    )
+    information_rate = f"z_information_rate_lag_{int(neural_config.model.information_rate_lag_ms)}ms"
+    prop_expected = f"z_prop_expected_cumulative_info_lag_{int(neural_config.model.prop_expected_lag_ms)}ms"
+    return f"{event_column} ~ {onset_spline} + {offset_spline} + {information_rate} + {prop_expected}"
+
+
+def _discover_band_pc_terms(riskset_table: pd.DataFrame, *, band_name: str) -> list[str]:
+    prefix = f"z_{band_name}_pc"
+    terms = sorted(
+        column_name for column_name in riskset_table.columns if str(column_name).startswith(prefix)
+    )
+    if not terms:
+        raise ValueError(f"No PCA predictors were found for `{band_name}`.")
+    return terms
+
+
+def _append_terms(formula: str, terms: list[str]) -> str:
+    if not terms:
+        return formula
+    lhs, rhs = formula.split("~", 1)
+    return f"{lhs.strip()} ~ {rhs.strip()} + " + " + ".join(terms)
+
+
+def _fit_neural_formula_model(
+    riskset_table: pd.DataFrame,
+    *,
+    model_name: str,
+    formula: str,
+    event_column: str,
+) -> FittedNeuralFormulaModel:
+    required_columns = _extract_formula_columns(formula, event_column=event_column)
+    model_frame = riskset_table.dropna(subset=required_columns).copy()
+    model_frame[event_column] = pd.to_numeric(model_frame[event_column], errors="raise").astype(int)
+    if model_frame.empty:
+        raise ValueError(f"No complete-case rows were available for `{model_name}`.")
+    if not model_frame[event_column].isin([0, 1]).all():
+        raise ValueError(f"`{model_name}` requires binary `{event_column}`.")
+    if int(model_frame[event_column].sum()) <= 0:
+        raise ValueError(f"`{model_name}` requires at least one event row.")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        result = sm.GLM.from_formula(
+            formula=formula,
+            data=model_frame,
+            family=sm.families.Binomial(),
+        ).fit()
+    return FittedNeuralFormulaModel(
+        model_name=model_name,
+        formula=formula,
+        result=result,
+        n_rows_used=int(len(model_frame)),
+        warnings=[str(item.message) for item in caught],
+    )
+
+
+def _extract_formula_columns(formula: str, *, event_column: str) -> list[str]:
+    columns = {
+        event_column,
+        "time_from_partner_onset",
+        "time_from_partner_offset",
+        "dyad_id",
+        "participant_id",
+    }
+    for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", str(formula)):
+        if token.startswith("z_"):
+            columns.add(token)
+    return sorted(columns)
+
+
+def _as_float_or_nan(value: Any) -> float:
+    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if np.isfinite(numeric):
+        return float(numeric)
+    return np.nan

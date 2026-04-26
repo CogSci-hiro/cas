@@ -4,3 +4,11 @@ output:
 
 timing_control:
   fit_models: true
+  run_r_glmm_lag_sweep: true
+  r_glmm_lag_grid_ms: [0, 50, 100, 150, 200, 300, 500, 700, 1000]
+  r_glmm_onset_spline_df: 5
+  r_glmm_offset_spline_df: 4
+  r_glmm_backend: "glmmTMB"
+  r_glmm_include_run_random_effect: false
+  r_glmm_prop_expected_mode: "after_best_rate"
+  r_glmm_include_prop_expected_in_final: false

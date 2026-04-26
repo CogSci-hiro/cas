@@ -37,7 +37,7 @@ def test_observed_event_rate_handles_bool_event_column(tmp_path: Path) -> None:
 def test_observed_event_rate_does_not_drop_events_for_nan_feature_columns() -> None:
     riskset = _base_riskset(event_values=[0, 0, 1, 0]).assign(
         information_rate=np.nan,
-        prop_actual_cumulative_info=np.nan,
+        prop_expected_cumulative_info=np.nan,
     )
 
     summary, qc = summarize_observed_event_rate_by_time_bin(riskset)

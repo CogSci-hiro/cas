@@ -14,7 +14,7 @@ from cas.hazard_behavior.io import read_surprisal_tables
 from cas.hazard_behavior.riskset import build_discrete_time_riskset
 
 
-def test_information_features_match_toy_expectations(tmp_path: Path) -> None:
+def test_information_features_match_active_expectations(tmp_path: Path) -> None:
     surprisal_path = tmp_path / "toy.tsv"
     surprisal_path.write_text(
         "\n".join(
@@ -67,32 +67,59 @@ def test_information_features_match_toy_expectations(tmp_path: Path) -> None:
     assert np.isclose(row_035["cumulative_info"], 3.0)
     assert np.isclose(row_075["cumulative_info"], 6.0)
     assert np.isclose(row_075["actual_total_info"], 6.0)
-    assert np.isclose(row_075["prop_actual_cumulative_info"], 1.0)
     assert np.isclose(row_075["information_rate"], 10.0)
     assert np.isclose(expected["global"], 6.0)
     assert np.isclose(row_075["prop_expected_cumulative_info"], 1.0)
+    assert {
+        "information_rate",
+        "cumulative_info",
+        "prop_expected_cumulative_info",
+    } <= set(riskset_with_features.columns)
 
 
-def test_unmatched_surprisal_strategies_behave_as_expected(tmp_path: Path) -> None:
-    path = tmp_path / "toy.tsv"
-    path.write_text(
+def test_expected_total_information_uses_active_grouping(tmp_path: Path) -> None:
+    surprisal_path = tmp_path / "toy.tsv"
+    surprisal_path.write_text(
         "\n".join(
             [
-                "dyad_id\trun\tspeaker\tonset\tduration\tsurprisal\talignment_status",
-                "dyad-001\t1\tA\t0.00\t0.10\t1.0\tok",
-                "dyad-001\t1\tA\t0.30\t0.10\t\tunmatched",
+                "dyad_id\trun\tspeaker\tonset\tduration\tword\tsurprisal",
+                "dyad-001\t1\tA\t0.00\t0.10\tone\t1.0",
+                "dyad-001\t1\tA\t0.20\t0.10\ttwo\t1.0",
+                "dyad-001\t1\tA\t1.00\t0.10\tthree\t2.0",
+                "dyad-001\t1\tA\t1.20\t0.10\tfour\t2.0",
             ]
         )
         + "\n",
         encoding="utf-8",
     )
+    surprisal_table, _ = read_surprisal_tables((surprisal_path,), unmatched_surprisal_strategy="drop")
+    config = BehaviourHazardConfig(
+        events_path=Path("unused.csv"),
+        surprisal_paths=(surprisal_path,),
+        out_dir=tmp_path / "out",
+        include_censored=False,
+        expected_info_group="partner_ipu_class",
+    )
+    episodes = pd.DataFrame(
+        {
+            "dyad_id": ["dyad-001", "dyad-001"],
+            "run": ["1", "1"],
+            "participant_speaker": ["B", "B"],
+            "partner_speaker": ["A", "A"],
+            "episode_id": ["ep-1", "ep-2"],
+            "partner_ipu_onset": [0.0, 1.0],
+            "partner_ipu_offset": [0.4, 1.4],
+            "partner_ipu_class": ["short", "long"],
+            "partner_role": ["partner", "partner"],
+        }
+    )
 
-    dropped, _ = read_surprisal_tables((path,), unmatched_surprisal_strategy="drop")
-    zeroed, _ = read_surprisal_tables((path,), unmatched_surprisal_strategy="zero")
-    kept, _ = read_surprisal_tables((path,), unmatched_surprisal_strategy="keep_nan")
+    expected = compute_expected_total_information(
+        surprisal_table=surprisal_table,
+        episodes_table=episodes,
+        config=config,
+    )
 
-    assert len(dropped) == 1
-    assert len(zeroed) == 2
-    assert float(zeroed.iloc[1]["surprisal"]) == 0.0
-    assert len(kept) == 2
-    assert kept["surprisal"].isna().sum() == 1
+    assert np.isclose(expected["global"], 3.0)
+    assert np.isclose(expected["short"], 2.0)
+    assert np.isclose(expected["long"], 4.0)

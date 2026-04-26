@@ -5,16 +5,21 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
-from cas.hazard.config import HazardAnalysisConfig
+from cas.hazard.config import HazardAnalysisConfig, NeuralHazardConfig
+from cas.hazard_behavior.config import BehaviourHazardConfig
+from cas.hazard_behavior.episodes import build_partner_ipus_from_tokens, infer_participant_speaker
+from cas.hazard_behavior.riskset import RiskSetResult, build_discrete_time_riskset
 
 LOGGER = logging.getLogger(__name__)
 DYAD_NUMBER_PATTERN = re.compile(r"dyad-(?P<number>\d+)$")
 ACTION_TIER_SPEAKER_PATTERN = re.compile(r"action\s+(?P<speaker>[AB])$", re.IGNORECASE)
+EPSILON = 1.0e-9
 
 
 @dataclass(frozen=True, slots=True)
@@ -546,3 +551,241 @@ def _infer_opposite_speaker_from_action_tier(action_tier_label: str) -> str | No
         return None
     partner_speaker = str(match.group("speaker")).upper()
     return "B" if partner_speaker == "A" else "A"
+
+
+@dataclass(frozen=True, slots=True)
+class NeuralRiskSetBuildResult:
+    """Partner-IPU-anchored low-level neural risk sets."""
+
+    risksets_by_event: dict[str, pd.DataFrame]
+    episode_summaries_by_event: dict[str, pd.DataFrame]
+    event_qc_by_event: dict[str, dict[str, object]]
+    warnings: list[str]
+
+
+def build_neural_partner_ipu_risksets(
+    *,
+    events_table: pd.DataFrame,
+    surprisal_table: pd.DataFrame,
+    neural_config: NeuralHazardConfig,
+) -> NeuralRiskSetBuildResult:
+    """Build partner-IPU anchored risk sets for FPP and SPP neural hazards.
+
+    Usage example
+    -------------
+    >>> result = build_neural_partner_ipu_risksets(
+    ...     events_table=events_table,
+    ...     surprisal_table=surprisal_table,
+    ...     neural_config=config.neural,
+    ... )
+    >>> sorted(result.risksets_by_event)
+    ['fpp', 'spp']
+    """
+
+    warnings: list[str] = []
+    ipu_table = build_partner_ipus_from_tokens(
+        surprisal_table,
+        gap_threshold_s=neural_config.episode.ipu_gap_threshold_s,
+    )
+    if ipu_table.empty:
+        raise ValueError("No partner IPUs were available for neural hazard episode construction.")
+    risksets_by_event: dict[str, pd.DataFrame] = {}
+    summaries_by_event: dict[str, pd.DataFrame] = {}
+    qc_by_event: dict[str, dict[str, object]] = {}
+
+    for event_type in neural_config.event_types:
+        episodes = _build_neural_episodes_for_event_type(
+            events_table=events_table,
+            ipu_table=ipu_table,
+            event_type=str(event_type),
+            neural_config=neural_config,
+        )
+        riskset_result = _build_neural_discrete_time_riskset(
+            episodes,
+            event_type=str(event_type),
+            bin_size_s=neural_config.bin_size_s,
+        )
+        risksets_by_event[str(event_type)] = riskset_result.riskset_table
+        summaries_by_event[str(event_type)] = riskset_result.episode_summary
+        qc_by_event[str(event_type)] = riskset_result.event_qc
+        warnings.extend(riskset_result.warnings)
+
+    return NeuralRiskSetBuildResult(
+        risksets_by_event=risksets_by_event,
+        episode_summaries_by_event=summaries_by_event,
+        event_qc_by_event=qc_by_event,
+        warnings=warnings,
+    )
+
+
+def _build_neural_episodes_for_event_type(
+    *,
+    events_table: pd.DataFrame,
+    ipu_table: pd.DataFrame,
+    event_type: str,
+    neural_config: NeuralHazardConfig,
+) -> pd.DataFrame:
+    target_events = _extract_target_events(events_table, event_type=event_type)
+    episode_rows: list[dict[str, object]] = []
+    for ipu_row in ipu_table.to_dict("records"):
+        dyad_id = str(ipu_row["dyad_id"])
+        run = str(ipu_row["run"])
+        partner_speaker = str(ipu_row["speaker"])
+        participant_speaker = infer_participant_speaker(partner_speaker)
+        episode_start = float(ipu_row["partner_ipu_onset"])
+        next_partner_ipu_onset = pd.to_numeric(
+            pd.Series([ipu_row.get("next_partner_ipu_onset")]),
+            errors="coerce",
+        ).iloc[0]
+        candidates = [(episode_start + neural_config.episode.max_followup_s, "max_followup")]
+        if np.isfinite(next_partner_ipu_onset):
+            candidates.append((float(next_partner_ipu_onset), "next_partner_ipu"))
+        episode_end, censor_reason = min(candidates, key=lambda value: float(value[0]))
+        if episode_end <= episode_start:
+            raise ValueError(f"Episode end must be after start; found {episode_end} <= {episode_start}.")
+
+        matches = target_events.loc[
+            (target_events["dyad_id"] == dyad_id)
+            & (target_events["run"] == run)
+            & (target_events["event_speaker"] == participant_speaker)
+            & (target_events["event_onset"] >= episode_start)
+            & (target_events["event_onset"] < float(episode_end))
+        ].sort_values(["event_onset", "source_event_id"], kind="mergesort")
+        event_row = matches.iloc[0] if not matches.empty else None
+        has_event = event_row is not None
+        event_onset = float(event_row["event_onset"]) if event_row is not None else np.nan
+        partner_ipu_offset = float(ipu_row["partner_ipu_offset"])
+        latency_from_offset = event_onset - partner_ipu_offset if has_event else np.nan
+        event_phase = "during_partner_ipu" if has_event and latency_from_offset < 0.0 else ("post_partner_ipu" if has_event else "censored")
+        episode_id = (
+            f"{dyad_id}|run-{run}|event-{event_type}|{partner_speaker}|"
+            f"ipu-{str(ipu_row['partner_ipu_id']).split('|')[-1]}"
+        )
+        episode_rows.append(
+            {
+                "episode_id": episode_id,
+                "dyad_id": dyad_id,
+                "run": run,
+                "partner_speaker": partner_speaker,
+                "participant_speaker": participant_speaker,
+                "partner_ipu_class": str(ipu_row.get("partner_ipu_class", "unknown")),
+                "partner_role": "partner",
+                "partner_ipu_id": str(ipu_row["partner_ipu_id"]),
+                "partner_ipu_onset": episode_start,
+                "partner_ipu_offset": partner_ipu_offset,
+                "partner_ipu_duration": float(ipu_row["partner_ipu_duration"]),
+                "next_partner_ipu_onset": float(next_partner_ipu_onset) if np.isfinite(next_partner_ipu_onset) else np.nan,
+                "episode_start": episode_start,
+                "episode_end": float(event_onset if has_event else episode_end),
+                "episode_has_event": bool(has_event),
+                "own_fpp_onset": float(event_onset) if has_event else np.nan,
+                "own_fpp_offset": np.nan,
+                "own_fpp_label": "" if event_row is None else str(event_row["event_label"]),
+                "event_latency_from_partner_onset_s": float(event_onset - episode_start) if has_event else np.nan,
+                "event_latency_from_partner_offset_s": float(latency_from_offset) if has_event else np.nan,
+                "event_phase": event_phase,
+                "censor_time": float(event_onset if has_event else episode_end),
+                "episode_duration_s": float((event_onset if has_event else episode_end) - episode_start),
+                "episode_kind": "event_positive" if has_event else "censored",
+                "censor_reason": "event" if has_event else str(censor_reason),
+                "anchor_source": str(ipu_row.get("anchor_source", "partner_ipu_tokens")),
+                "target_event_type": event_type,
+                "event_onset": float(event_onset) if has_event else np.nan,
+            }
+        )
+    episodes = pd.DataFrame(episode_rows)
+    if not neural_config.episode.include_censored:
+        episodes = episodes.loc[episodes["episode_has_event"]].copy()
+    episodes = episodes.sort_values(["dyad_id", "run", "partner_ipu_onset"], kind="mergesort").reset_index(drop=True)
+    return episodes
+
+
+def _build_neural_discrete_time_riskset(
+    episodes_table: pd.DataFrame,
+    *,
+    event_type: str,
+    bin_size_s: float,
+) -> RiskSetResult:
+    behaviour_like_config = BehaviourHazardConfig(
+        events_path=Path("."),
+        surprisal_paths=tuple(),
+        out_dir=Path("."),
+        bin_size_s=float(bin_size_s),
+    )
+    result = build_discrete_time_riskset(episodes_table, config=behaviour_like_config)
+    riskset = result.riskset_table.copy()
+    event_column = f"event_{event_type.lower()}"
+    riskset[event_column] = pd.to_numeric(riskset["event"], errors="coerce").fillna(0).astype(int)
+    riskset["event_type"] = str(event_type).lower()
+    if "participant_id" not in riskset.columns:
+        riskset["participant_id"] = riskset["dyad_id"].astype(str) + "_" + riskset["participant_speaker"].astype(str)
+    _validate_neural_riskset_event_timing(riskset, event_column=event_column)
+    return RiskSetResult(
+        riskset_table=riskset,
+        episode_summary=result.episode_summary,
+        warnings=result.warnings,
+        event_qc=result.event_qc,
+    )
+
+
+def _validate_neural_riskset_event_timing(riskset_table: pd.DataFrame, *, event_column: str) -> None:
+    event_rows = riskset_table.loc[pd.to_numeric(riskset_table[event_column], errors="coerce") == 1].copy()
+    if event_rows.empty:
+        return
+    onset_column = "event_onset" if "event_onset" in event_rows.columns else "own_fpp_onset"
+    if not (
+        pd.to_numeric(event_rows[onset_column], errors="coerce")
+        < pd.to_numeric(event_rows["censor_time"], errors="coerce") + EPSILON
+    ).all():
+        raise ValueError("Event rows must occur at or before censoring.")
+    if not (
+        pd.to_numeric(event_rows[onset_column], errors="coerce")
+        >= pd.to_numeric(event_rows["bin_start"], errors="coerce") - EPSILON
+    ).all():
+        raise ValueError("Event rows must fall within their event bins (left edge).")
+    if not (
+        pd.to_numeric(event_rows[onset_column], errors="coerce")
+        < pd.to_numeric(event_rows["bin_end"], errors="coerce") + EPSILON
+    ).all():
+        raise ValueError("Event rows must fall within their event bins (right edge).")
+
+
+def _extract_target_events(events_table: pd.DataFrame, *, event_type: str) -> pd.DataFrame:
+    working = events_table.copy()
+    working["dyad_id"] = working["dyad_id"].astype(str)
+    working["run"] = working["run"].astype(str).str.replace(r"^run[-_ ]*", "", regex=True)
+    normalized_event_type = str(event_type).lower()
+    if normalized_event_type == "fpp":
+        onset_column = "fpp_onset"
+        label_column = "fpp_label" if "fpp_label" in working.columns else None
+        speaker_column = _resolve_speaker_column(working, ("participant_speaker", "speaker_fpp", "fpp_speaker", "speaker"))
+    elif normalized_event_type == "spp":
+        onset_column = "spp_onset"
+        label_column = "spp_label" if "spp_label" in working.columns else None
+        speaker_column = _resolve_speaker_column(working, ("partner_speaker", "speaker_spp", "spp_speaker"))
+    else:
+        raise ValueError(f"Unsupported event type: {event_type}")
+    working["event_onset"] = pd.to_numeric(working[onset_column], errors="coerce")
+    working["event_speaker"] = working[speaker_column].astype(str).str.upper().str.strip()
+    if label_column is not None:
+        working["event_label"] = working[label_column].astype(str)
+    else:
+        working["event_label"] = ""
+    if normalized_event_type == "fpp" and label_column is not None:
+        working = working.loc[working["event_label"].str.startswith("FPP_")].copy()
+    if normalized_event_type == "spp" and label_column is not None:
+        working = working.loc[working["event_label"].str.startswith("SPP_")].copy()
+    extracted = working.loc[
+        working["event_onset"].notna() & working["event_speaker"].isin({"A", "B"}),
+        ["dyad_id", "run", "event_speaker", "event_onset", "event_label"],
+    ].copy()
+    extracted["source_event_id"] = np.arange(len(extracted), dtype=int)
+    return extracted.reset_index(drop=True)
+
+
+def _resolve_speaker_column(events_table: pd.DataFrame, candidates: tuple[str, ...]) -> str:
+    for column_name in candidates:
+        if column_name in events_table.columns:
+            return column_name
+    available = ", ".join(sorted(str(column) for column in events_table.columns))
+    raise ValueError(f"Could not find speaker column among {candidates}; available: {available}")

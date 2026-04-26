@@ -14,9 +14,17 @@ import yaml
 from scipy.io import wavfile
 
 from cas.cli.commands.annotations import add_annotations_parser, run_annotations_command
+from cas.cli.commands.diagnose_behaviour_latency_regime import (
+    add_diagnose_behaviour_latency_regime_parser,
+    run_diagnose_behaviour_latency_regime_command,
+)
 from cas.cli.commands.export_behaviour_glmm_data import (
     add_export_behaviour_glmm_data_parser,
     run_export_behaviour_glmm_data_command,
+)
+from cas.cli.commands.export_behaviour_latency_regime_data import (
+    add_export_behaviour_latency_regime_data_parser,
+    run_export_behaviour_latency_regime_data_command,
 )
 from cas.cli.commands.fit_tde_hmm import add_fit_tde_hmm_parser, run_fit_tde_hmm_command
 from cas.cli.commands.hazard_behavior_fpp import (
@@ -30,6 +38,10 @@ from cas.cli.commands.hazard_fpp_tde_hmm import (
 from cas.cli.commands.plot_behaviour_glmm_results import (
     add_plot_behaviour_glmm_results_parser,
     run_plot_behaviour_glmm_results_command,
+)
+from cas.cli.commands.plot_behaviour_latency_regime_results import (
+    add_plot_behaviour_latency_regime_results_parser,
+    run_plot_behaviour_latency_regime_results_command,
 )
 from cas.cli.commands.plot_tde_hmm_qc import (
     add_plot_tde_hmm_qc_parser,
@@ -164,11 +176,14 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="cas", description="CAS command line interface.")
     subparsers = parser.add_subparsers(dest="command", required=True)
     add_annotations_parser(subparsers)
+    add_diagnose_behaviour_latency_regime_parser(subparsers)
     add_export_behaviour_glmm_data_parser(subparsers)
+    add_export_behaviour_latency_regime_data_parser(subparsers)
     add_fit_tde_hmm_parser(subparsers)
     add_hazard_behavior_fpp_parser(subparsers)
     add_hazard_fpp_tde_hmm_parser(subparsers)
     add_plot_behaviour_glmm_results_parser(subparsers)
+    add_plot_behaviour_latency_regime_results_parser(subparsers)
     add_plot_tde_hmm_qc_parser(subparsers)
 
     trf_parser = subparsers.add_parser("trf", help="Run TRF nested CV from run-wise arrays.")
@@ -1296,16 +1311,22 @@ def main() -> int:
     args = parser.parse_args()
     if args.command == "annotations":
         return run_annotations_command(args)
+    if args.command == "diagnose-behaviour-latency-regime":
+        return run_diagnose_behaviour_latency_regime_command(args)
     if args.command == "export-behaviour-glmm-data":
         return run_export_behaviour_glmm_data_command(args)
+    if args.command == "export-behaviour-latency-regime-data":
+        return run_export_behaviour_latency_regime_data_command(args)
     if args.command == "fit-tde-hmm":
         return run_fit_tde_hmm_command(args)
     if args.command == "hazard-behavior-fpp":
         return run_hazard_behavior_fpp_command(args)
     if args.command == "hazard-fpp-tde-hmm":
         return run_hazard_fpp_tde_hmm_command(args)
-    if args.command == "plot-behaviour-glmm-results":
+    if args.command in {"plot-behaviour-glmm-results", "plot-behaviour-hazard-results"}:
         return run_plot_behaviour_glmm_results_command(args)
+    if args.command == "plot-behaviour-latency-regime-results":
+        return run_plot_behaviour_latency_regime_results_command(args)
     if args.command == "plot-tde-hmm-qc":
         return run_plot_tde_hmm_qc_command(args)
     if args.command == "trf":

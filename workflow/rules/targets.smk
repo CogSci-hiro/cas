@@ -178,20 +178,10 @@ rule tde_hmm_all:
 rule hazard_behavior_all:
     input:
         HAZARD_BEHAVIOR_RISKSET_OUTPUT,
-        HAZARD_BEHAVIOR_MODEL_COMPARISON_OUTPUT,
-        HAZARD_BEHAVIOR_FIT_METRICS_OUTPUT,
-        *HAZARD_BEHAVIOR_MAIN_FIGURES,
         *HAZARD_BEHAVIOR_TIMING_CONTROL_OUTPUTS,
         *HAZARD_BEHAVIOR_GLMM_EXPORT_OUTPUTS,
         *HAZARD_BEHAVIOR_GLMM_MODEL_OUTPUTS,
         *HAZARD_BEHAVIOR_GLMM_FIGURES
-
-
-rule hazard_behavior_primary_all:
-    input:
-        *HAZARD_BEHAVIOR_PRIMARY_MODEL_OUTPUTS,
-        *HAZARD_BEHAVIOR_PRIMARY_STATS_OUTPUTS,
-        *HAZARD_BEHAVIOR_PRIMARY_FIGURES
 
 
 rule hazard_behavior_timing_control_all:
@@ -206,14 +196,31 @@ rule hazard_behavior_glmm_all:
         *HAZARD_BEHAVIOR_GLMM_FIGURES
 
 
-rule lowlevel_neural_features_all:
+rule hazard_behavior_latency_regime_all:
     input:
-        LOWLEVEL_NEURAL_FEATURE_OUTPUTS
+        *HAZARD_BEHAVIOR_LATENCY_REGIME_EXPORT_OUTPUTS,
+        *HAZARD_BEHAVIOR_LATENCY_REGIME_MODEL_OUTPUTS,
+        *HAZARD_BEHAVIOR_LATENCY_REGIME_FIGURES
 
 
-rule hazard_behavior_neural_all:
+rule hazard_neural_all:
     input:
-        *HAZARD_BEHAVIOR_NEURAL_OUTPUTS
+        *HAZARD_NEURAL_ALL_OUTPUTS
+
+
+rule hazard_neural_riskset_all:
+    input:
+        *HAZARD_NEURAL_RISKSET_OUTPUTS
+
+
+rule hazard_neural_models_all:
+    input:
+        *HAZARD_NEURAL_MODEL_OUTPUTS
+
+
+rule hazard_neural_figures_all:
+    input:
+        *HAZARD_NEURAL_FIGURES
 
 
 rule figures_lmeeeg_all:

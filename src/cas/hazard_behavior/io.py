@@ -100,7 +100,12 @@ def ensure_output_directories(config: BehaviourHazardConfig) -> dict[str, Path]:
         "root": root,
         "riskset": root / "riskset",
         "models": root / "models",
+        "models_exports": root / "models" / "exports",
+        "models_lag_selection": root / "models" / "lag_selection",
+        "models_predictions": root / "models" / "predictions",
         "figures": root / "figures",
+        "qc_plots": root / "qc_plots",
+        "qc_plots_lag_selection": root / "qc_plots" / "lag_selection",
         "logs": root / "logs",
     }
     for path in directories.values():

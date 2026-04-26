@@ -1,293 +1,110 @@
 from __future__ import annotations
 
-import json
-import sys
 from pathlib import Path
+import sys
+
+import pandas as pd
+import pytest
 
 from cas.cli.main import main
 
 
-def test_cli_creates_key_outputs(tmp_path: Path, monkeypatch) -> None:
-    events_path = tmp_path / "events.csv"
-    surprisal_path = tmp_path / "toy_desc-lmSurprisal_features.tsv"
-    out_dir = tmp_path / "results"
+def test_plot_behaviour_hazard_results_command_creates_minimal_suite(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    r_results_dir = tmp_path / "models"
+    models_dir = r_results_dir / "lag_selection"
+    predictions_dir = r_results_dir / "predictions"
+    figures_dir = tmp_path / "figures"
+    qc_dir = tmp_path / "qc_plots" / "lag_selection"
+    r_results_dir.mkdir()
+    models_dir.mkdir(parents=True)
+    predictions_dir.mkdir(parents=True)
 
-    events_path.write_text(
-        "\n".join(
-            [
-                "dyad_id,run,speaker,fpp_onset,fpp_offset,fpp_label",
-                "dyad-001,1,B,1.20,1.50,FPP_RFC_TAG",
-            ]
-        )
-        + "\n",
+    pd.DataFrame(
+        {
+            "predictor_family": ["information_rate", "prop_expected_cumulative_info"],
+            "lag_ms": [0, 300],
+            "delta_bic": [-2.0, -3.0],
+        }
+    ).to_csv(models_dir / "behaviour_timing_control_lag_selection.csv", index=False)
+    pd.DataFrame(
+        {
+            "predictor_family": ["information_rate", "prop_expected"],
+            "lag_ms": [100, 300],
+            "child_BIC": [120.0, 118.0],
+            "delta_BIC": [-4.0, -2.0],
+            "beta": [0.2, 0.1],
+            "conf_low": [0.1, 0.02],
+            "conf_high": [0.3, 0.18],
+            "odds_ratio": [1.22, 1.11],
+            "odds_ratio_conf_low": [1.10, 1.02],
+            "odds_ratio_conf_high": [1.35, 1.20],
+            "converged": [True, True],
+        }
+    ).to_csv(r_results_dir / "r_glmm_information_rate_lag_sweep.csv", index=False)
+    pd.DataFrame(
+        {
+            "predictor_family": ["prop_expected"],
+            "lag_ms": [300],
+            "child_BIC": [117.0],
+            "delta_BIC": [-1.0],
+            "beta": [0.15],
+            "conf_low": [0.05],
+            "conf_high": [0.25],
+            "odds_ratio": [1.16],
+            "odds_ratio_conf_low": [1.05],
+            "odds_ratio_conf_high": [1.28],
+            "converged": [True],
+        }
+    ).to_csv(r_results_dir / "r_glmm_prop_expected_lag_sweep.csv", index=False)
+    (r_results_dir / "r_glmm_selected_behaviour_lags.json").write_text(
+        '{"best_information_rate_lag_ms": 100, "best_prop_expected_lag_ms": 300}',
         encoding="utf-8",
     )
-    surprisal_path.write_text(
-        "\n".join(
-            [
-                "dyad_id\trun\tspeaker\tonset\tduration\tword\tsurprisal\talignment_status",
-                "dyad-001\t1\tA\t0.00\t0.10\toui\t1.0\tok",
-                "dyad-001\t1\tA\t0.30\t0.10\talors\t2.0\tok",
-                "dyad-001\t1\tA\t0.70\t0.10\trouge\t3.0\tok",
-                "dyad-001\t1\tB\t1.20\t0.10\tok\t1.5\tok",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
+    pd.DataFrame(
+        {
+            "child_model": ["M_final_glmm"],
+            "delta_BIC": [-4.0],
+            "delta_AIC": [-5.0],
+        }
+    ).to_csv(r_results_dir / "r_glmm_final_behaviour_model_comparison.csv", index=False)
+    pd.DataFrame(
+        {
+            "predictor": ["z_information_rate_lag_100ms"] * 3,
+            "predictor_value": [-1, 0, 1],
+            "predicted_probability": [0.1, 0.15, 0.2],
+            "conf_low": [0.08, 0.12, 0.17],
+            "conf_high": [0.12, 0.18, 0.24],
+            "fixed_effect_only": [True, True, True],
+        }
+    ).to_csv(predictions_dir / "behaviour_r_glmm_final_predicted_hazard_information_rate.csv", index=False)
 
     monkeypatch.setattr(
         sys,
         "argv",
         [
             "cas",
-            "hazard-behavior-fpp",
-            "--events",
-            str(events_path),
-            "--surprisal",
-            str(surprisal_path),
-            "--out-dir",
-            str(out_dir),
-            "--event-positive-only",
-            "--overwrite",
+            "plot-behaviour-hazard-results",
+            "--r-results-dir",
+            str(r_results_dir),
+            "--timing-control-models-dir",
+            str(models_dir),
+            "--qc-output-dir",
+            str(qc_dir),
+            "--output-dir",
+            str(figures_dir),
         ],
     )
 
     assert main() == 0
-    assert (out_dir / "riskset" / "hazard_behavior_riskset.tsv").exists()
-    assert (out_dir / "riskset" / "hazard_behavior_episode_summary.tsv").exists()
-    assert (out_dir / "riskset" / "partner_ipu_table.tsv").exists()
-    assert (out_dir / "riskset" / "partner_ipu_episode_summary.tsv").exists()
-    assert (out_dir / "riskset" / "partner_ipu_anchor_qc.json").exists()
-    assert (out_dir / "riskset" / "riskset_event_qc.json").exists()
-    assert (out_dir / "riskset" / "event_rows_debug.tsv").exists()
-    assert (out_dir / "riskset" / "episode_validation_qc.json").exists()
-    assert (out_dir / "riskset" / "excluded_episodes.tsv").exists()
-    assert (out_dir / "models" / "model_comparison_behaviour.csv").exists()
-    assert (out_dir / "models" / "model_fit_metrics.json").exists()
-    assert (out_dir / "models" / "behaviour_primary_model_summary.csv").exists()
-    assert (out_dir / "models" / "behaviour_primary_model_comparison.csv").exists()
-    assert (out_dir / "models" / "behaviour_primary_effects.json").exists()
-    assert (out_dir / "models" / "behaviour_primary_fit_metrics.json").exists()
-    assert (out_dir / "models" / "behaviour_primary_stat_tests.csv").exists()
-    assert (out_dir / "models" / "behaviour_primary_stat_tests.json").exists()
-    assert (out_dir / "models" / "behaviour_primary_publication_table.csv").exists()
-    assert (out_dir / "models" / "behaviour_primary_interpretation.txt").exists()
-    assert (out_dir / "riskset" / "prop_actual_saturation_qc.json").exists()
-    assert (out_dir / "riskset" / "event_rate_by_prop_actual_saturation.csv").exists()
-    assert (out_dir / "riskset" / "observed_event_rate_by_time_bin.csv").exists()
-    assert (out_dir / "riskset" / "observed_event_rate_nonzero_bins.csv").exists()
-    assert (out_dir / "riskset" / "observed_event_rate_plot_qc.json").exists()
-    assert (out_dir / "figures" / "prop_actual_by_time_from_partner_onset.png").exists()
-    assert (out_dir / "figures" / "prop_actual_saturation_by_time.png").exists()
-    assert (out_dir / "figures" / "event_rate_by_prop_actual_saturation.png").exists()
-    assert (out_dir / "figures" / "observed_event_rate_by_time_bin.png").exists()
-    assert (out_dir / "figures" / "event_time_from_partner_onset_distribution.png").exists()
-    assert (out_dir / "figures" / "episode_duration_distribution.png").exists()
-    assert (out_dir / "figures" / "fpp_latency_from_partner_offset_distribution.png").exists()
-    assert (out_dir / "figures" / "fpp_latency_from_partner_offset_before_exclusion.png").exists()
-    assert (out_dir / "figures" / "behaviour_primary_coefficients.png").exists()
-    assert (out_dir / "figures" / "behaviour_primary_model_comparison.png").exists()
-    assert (out_dir / "figures" / "behaviour_primary_predicted_hazard_prop_expected.png").exists()
-    assert (out_dir / "figures" / "behaviour_primary_predicted_hazard_information_rate.png").exists()
-    assert (out_dir / "figures" / "behaviour_primary_observed_event_rate.png").exists()
-    assert (out_dir / "figures" / "behaviour_primary_lag_sensitivity.png").exists()
-
-    payload = json.loads((out_dir / "models" / "model_fit_metrics.json").read_text(encoding="utf-8"))
-    assert "models" in payload
-
-
-def test_cli_creates_neural_lowlevel_outputs(tmp_path: Path, monkeypatch) -> None:
-    events_path = tmp_path / "events.csv"
-    surprisal_path = tmp_path / "toy_desc-lmSurprisal_features.tsv"
-    neural_path = tmp_path / "toy_desc-lowlevelNeural_features.tsv"
-    out_dir = tmp_path / "results_neural"
-
-    events_path.write_text(
-        "\n".join(
-            [
-                "dyad_id,run,speaker,fpp_onset,fpp_offset,fpp_label",
-                "dyad-001,1,B,1.20,1.50,FPP_RFC_TAG",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    surprisal_path.write_text(
-        "\n".join(
-            [
-                "dyad_id\trun\tspeaker\tonset\tduration\tword\tsurprisal\talignment_status",
-                "dyad-001\t1\tA\t0.00\t0.10\toui\t1.0\tok",
-                "dyad-001\t1\tA\t0.30\t0.10\talors\t2.0\tok",
-                "dyad-001\t1\tA\t0.70\t0.10\trouge\t3.0\tok",
-                "dyad-001\t1\tB\t1.20\t0.10\tok\t1.5\tok",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    neural_path.write_text(
-        "\n".join(
-            [
-                "dyad_id\trun\tspeaker\ttime\tamp_cz\talpha_parietal\tbeta_frontal",
-                "dyad-001\t1\tB\t0.50\t0.1\t0.2\t0.3",
-                "dyad-001\t1\tB\t0.70\t0.2\t0.3\t0.4",
-                "dyad-001\t1\tB\t0.85\t0.3\t0.4\t0.5",
-                "dyad-001\t1\tB\t0.95\t0.4\t0.5\t0.6",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "cas",
-            "hazard-behavior-fpp",
-            "--events",
-            str(events_path),
-            "--surprisal",
-            str(surprisal_path),
-            "--neural-features",
-            str(neural_path),
-            "--fit-neural-lowlevel-models",
-            "--no-run-behaviour-model-suite",
-            "--no-fit-primary-behaviour-models",
-            "--no-fit-primary-stat-tests",
-            "--no-make-primary-publication-figures",
-            "--out-dir",
-            str(out_dir),
-            "--event-positive-only",
-            "--overwrite",
-        ],
-    )
-
-    assert main() == 0
-    assert (out_dir / "models" / "neural_lowlevel_model_summary.csv").exists()
-    assert (out_dir / "models" / "neural_lowlevel_model_comparison.csv").exists()
-    assert (out_dir / "models" / "neural_lowlevel_family_model_comparison.csv").exists()
-    assert (out_dir / "models" / "neural_lowlevel_effects.json").exists()
-    assert (out_dir / "models" / "neural_lowlevel_pca_summary_amplitude.csv").exists()
-    assert (out_dir / "models" / "neural_lowlevel_pca_summary_alpha.csv").exists()
-    assert (out_dir / "models" / "neural_lowlevel_pca_summary_beta.csv").exists()
-    assert (out_dir / "figures" / "neural_lowlevel_pca_variance.png").exists()
-    assert (out_dir / "figures" / "neural_lowlevel_model_comparison.png").exists()
-    assert not (out_dir / "figures" / "behaviour_primary_coefficients.png").exists()
-    assert not (out_dir / "figures" / "observed_event_rate_by_time_bin.png").exists()
-
-
-def test_cli_creates_timing_control_outputs(tmp_path: Path, monkeypatch) -> None:
-    events_path = tmp_path / "events.csv"
-    surprisal_path = tmp_path / "toy_desc-lmSurprisal_features.tsv"
-    out_dir = tmp_path / "results_timing_control"
-
-    events_path.write_text(
-        "\n".join(
-            [
-                "dyad_id,run,speaker,fpp_onset,fpp_offset,fpp_label",
-                "dyad-001,1,B,1.20,1.50,FPP_RFC_TAG",
-                "dyad-001,1,A,3.20,3.40,FPP_RFC_TAG",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    surprisal_path.write_text(
-        "\n".join(
-            [
-                "dyad_id\trun\tspeaker\tonset\tduration\tword\tsurprisal\talignment_status",
-                "dyad-001\t1\tA\t0.00\t0.10\toui\t1.0\tok",
-                "dyad-001\t1\tA\t0.30\t0.10\talors\t2.0\tok",
-                "dyad-001\t1\tA\t0.70\t0.10\trouge\t3.0\tok",
-                "dyad-001\t1\tB\t2.00\t0.10\toui\t1.1\tok",
-                "dyad-001\t1\tB\t2.30\t0.10\talors\t1.3\tok",
-                "dyad-001\t1\tB\t2.70\t0.10\trouge\t1.7\tok",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "cas",
-            "hazard-behavior-fpp",
-            "--events",
-            str(events_path),
-            "--surprisal",
-            str(surprisal_path),
-            "--out-dir",
-            str(out_dir),
-            "--fit-timing-control-models",
-            "--overwrite",
-        ],
-    )
-
-    assert main() == 0
-    assert (out_dir / "models" / "behaviour_timing_control_model_summary.csv").exists()
-    assert (out_dir / "models" / "behaviour_timing_control_model_comparison.csv").exists()
-    assert (out_dir / "models" / "behaviour_timing_control_fit_metrics.json").exists()
-    assert (out_dir / "models" / "behaviour_timing_control_selected_lags.json").exists()
-    assert (out_dir / "riskset" / "hazard_behavior_riskset_with_timing_controls.tsv").exists()
-
-
-def test_cli_smoke_selects_timing_control_lags(tmp_path: Path, monkeypatch) -> None:
-    events_path = tmp_path / "events.csv"
-    surprisal_path = tmp_path / "toy_desc-lmSurprisal_features.tsv"
-    out_dir = tmp_path / "results_timing_selection"
-
-    events_path.write_text(
-        "\n".join(
-            [
-                "dyad_id,run,speaker,fpp_onset,fpp_offset,fpp_label",
-                "dyad-001,1,B,1.20,1.50,FPP_RFC_TAG",
-                "dyad-001,1,A,3.20,3.40,FPP_RFC_TAG",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    surprisal_path.write_text(
-        "\n".join(
-            [
-                "dyad_id\trun\tspeaker\tonset\tduration\tword\tsurprisal\talignment_status",
-                "dyad-001\t1\tA\t0.00\t0.10\toui\t1.0\tok",
-                "dyad-001\t1\tA\t0.30\t0.10\talors\t2.0\tok",
-                "dyad-001\t1\tA\t0.70\t0.10\trouge\t3.0\tok",
-                "dyad-001\t1\tB\t2.00\t0.10\toui\t1.1\tok",
-                "dyad-001\t1\tB\t2.30\t0.10\talors\t1.3\tok",
-                "dyad-001\t1\tB\t2.70\t0.10\trouge\t1.7\tok",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "cas",
-            "hazard-behavior-fpp",
-            "--events",
-            str(events_path),
-            "--surprisal",
-            str(surprisal_path),
-            "--out-dir",
-            str(out_dir),
-            "--fit-timing-control-models",
-            "--select-lags-with-timing-controls",
-            "--overwrite",
-        ],
-    )
-
-    assert main() == 0
-    assert (out_dir / "models" / "behaviour_timing_control_lag_selection.csv").exists()
-    assert (out_dir / "models" / "behaviour_timing_control_selected_lags.json").exists()
-    assert (out_dir / "models" / "behaviour_timing_control_model_summary.csv").exists()
-    assert (out_dir / "models" / "behaviour_timing_control_model_comparison.csv").exists()
-    assert (out_dir / "models" / "behaviour_timing_control_fit_metrics.json").exists()
+    assert {path.name for path in figures_dir.iterdir()} == {
+        "behaviour_r_glmm_delta_bic_by_lag.png",
+        "behaviour_r_glmm_coefficient_by_lag.png",
+        "behaviour_r_glmm_odds_ratio_by_lag.png",
+        "behaviour_r_glmm_final_model_comparison.png",
+        "behaviour_r_glmm_final_predicted_hazard_information_rate.png",
+        "data",
+    }
+    assert {path.name for path in qc_dir.iterdir()} == {"behaviour_pooled_delta_bic_by_lag.png"}

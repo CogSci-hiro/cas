@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 
@@ -128,6 +128,105 @@ class MiscConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class NeuralInputConfig:
+    """Inputs for low-level neural hazard analysis."""
+
+    surprisal_paths: tuple[Path, ...]
+    lowlevel_neural_paths: tuple[Path, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class NeuralEpisodeConfig:
+    """Partner-IPU episode construction options for neural hazard analyses."""
+
+    ipu_gap_threshold_s: float = 0.300
+    max_followup_s: float = 6.0
+    include_censored: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class NeuralWindowConfig:
+    """Causal neural-window settings."""
+
+    start_lag_s: float = 0.500
+    end_lag_s: float = 0.100
+    epsilon: float = 1.0e-12
+
+
+@dataclass(frozen=True, slots=True)
+class NeuralPcaConfig:
+    """Band-specific PCA configuration."""
+
+    mode: Literal["count", "variance"] = "variance"
+    n_components: int = 3
+    variance_threshold: float = 0.90
+
+
+@dataclass(frozen=True, slots=True)
+class NeuralModelConfig:
+    """Low-level neural model settings."""
+
+    fitting_backend: Literal["python_glm", "glmmTMB"] = "glmmTMB"
+    baseline_spline_df: int = 6
+    baseline_spline_degree: int = 3
+    information_rate_lag_ms: int = 150
+    prop_expected_lag_ms: int = 700
+
+
+@dataclass(frozen=True, slots=True)
+class NeuralHazardConfig:
+    """Neural low-level partner-IPU hazard analysis configuration."""
+
+    enabled: bool = False
+    event_types: tuple[Literal["fpp", "spp"], ...] = ("fpp", "spp")
+    bin_size_s: float = 0.050
+    events_path: Path | None = None
+    out_dir: Path | None = None
+    input: NeuralInputConfig | None = None
+    episode: NeuralEpisodeConfig = field(default_factory=NeuralEpisodeConfig)
+    window: NeuralWindowConfig = field(default_factory=NeuralWindowConfig)
+    pca: NeuralPcaConfig = field(default_factory=NeuralPcaConfig)
+    model: NeuralModelConfig = field(default_factory=NeuralModelConfig)
+
+    def validate(self) -> None:
+        if not self.enabled:
+            return
+        if self.events_path is None:
+            raise ValueError("Neural hazard mode requires `neural.events_path`.")
+        if self.out_dir is None:
+            raise ValueError("Neural hazard mode requires `neural.out_dir`.")
+        if self.input is None:
+            raise ValueError("Neural hazard mode requires `neural.input` paths.")
+        if not self.input.surprisal_paths:
+            raise ValueError("Neural hazard mode requires at least one surprisal file.")
+        if not self.input.lowlevel_neural_paths:
+            raise ValueError("Neural hazard mode requires at least one low-level neural table.")
+        if self.bin_size_s <= 0.0:
+            raise ValueError("`neural.bin_size_s` must be positive.")
+        if self.episode.max_followup_s <= 0.0:
+            raise ValueError("`neural.episode.max_followup_s` must be positive.")
+        if self.window.start_lag_s <= self.window.end_lag_s:
+            raise ValueError("Neural window requires start_lag_s > end_lag_s.")
+        if self.window.end_lag_s < 0.0:
+            raise ValueError("`neural.window.end_lag_s` must be non-negative.")
+        if self.pca.mode not in {"count", "variance"}:
+            raise ValueError("`neural.pca.mode` must be one of count or variance.")
+        if self.pca.n_components < 1:
+            raise ValueError("`neural.pca.n_components` must be at least 1.")
+        if not 0.0 < self.pca.variance_threshold <= 1.0:
+            raise ValueError("`neural.pca.variance_threshold` must be in (0, 1].")
+        if self.model.baseline_spline_df < 3:
+            raise ValueError("`neural.model.baseline_spline_df` must be at least 3.")
+        if self.model.baseline_spline_degree < 1:
+            raise ValueError("`neural.model.baseline_spline_degree` must be at least 1.")
+        if self.model.information_rate_lag_ms < 0 or self.model.prop_expected_lag_ms < 0:
+            raise ValueError("Neural behavioural-control lags must be non-negative.")
+        unsupported_events = sorted(set(self.event_types) - {"fpp", "spp"})
+        if unsupported_events:
+            raise ValueError(f"Unsupported neural event type(s): {unsupported_events}")
+
+
+@dataclass(frozen=True, slots=True)
 class HazardAnalysisConfig:
     """Full partner-onset hazard-analysis configuration."""
 
@@ -140,6 +239,8 @@ class HazardAnalysisConfig:
     qc: QcConfig
     plotting: PlottingConfig
     misc: MiscConfig
+    mode: Literal["legacy_entropy", "neural_lowlevel"] = "legacy_entropy"
+    neural: NeuralHazardConfig = field(default_factory=NeuralHazardConfig)
 
     def validate(self) -> None:
         """Validate the configuration for conservative first-pass use."""
@@ -170,6 +271,9 @@ class HazardAnalysisConfig:
             raise ValueError("`min_at_risk_per_bin` must be at least 1.")
         if self.plotting.smoothing_window_bins < 1:
             raise ValueError("`smoothing_window_bins` must be at least 1.")
+        if self.mode not in {"legacy_entropy", "neural_lowlevel"}:
+            raise ValueError("`mode` must be one of legacy_entropy or neural_lowlevel.")
+        self.neural.validate()
 
 
 def load_hazard_analysis_config(config_path: str | Path) -> HazardAnalysisConfig:
@@ -191,6 +295,12 @@ def load_hazard_analysis_config(config_path: str | Path) -> HazardAnalysisConfig
     qc_payload = dict(payload.get("qc") or {})
     plotting_payload = dict(payload.get("plotting") or {})
     misc_payload = dict(payload.get("misc") or {})
+    neural_payload = dict(payload.get("neural") or {})
+    neural_input_payload = dict(neural_payload.get("input") or {})
+    neural_episode_payload = dict(neural_payload.get("episode") or {})
+    neural_window_payload = dict(neural_payload.get("window") or {})
+    neural_pca_payload = dict(neural_payload.get("pca") or {})
+    neural_model_payload = dict(neural_payload.get("model") or {})
 
     events_table_path = _resolve_path(input_payload["events_table_path"], config_root=config_root)
     config = HazardAnalysisConfig(
@@ -285,6 +395,61 @@ def load_hazard_analysis_config(config_path: str | Path) -> HazardAnalysisConfig
         ),
         misc=MiscConfig(
             overwrite=bool(misc_payload.get("overwrite", False)),
+        ),
+        mode=str(payload.get("mode", "legacy_entropy")),
+        neural=NeuralHazardConfig(
+            enabled=bool(neural_payload.get("enabled", False)),
+            event_types=tuple(
+                str(value).lower()
+                for value in neural_payload.get("event_types", ("fpp", "spp"))
+            ),
+            bin_size_s=float(neural_payload.get("bin_size_s", 0.050)),
+            events_path=(
+                _resolve_path(neural_payload["events_path"], config_root=config_root)
+                if neural_payload.get("events_path")
+                else None
+            ),
+            out_dir=(
+                _resolve_path(neural_payload["out_dir"], config_root=config_root)
+                if neural_payload.get("out_dir")
+                else None
+            ),
+            input=(
+                NeuralInputConfig(
+                    surprisal_paths=tuple(
+                        _resolve_path(path_value, config_root=config_root)
+                        for path_value in neural_input_payload.get("surprisal_paths", [])
+                    ),
+                    lowlevel_neural_paths=tuple(
+                        _resolve_path(path_value, config_root=config_root)
+                        for path_value in neural_input_payload.get("lowlevel_neural_paths", [])
+                    ),
+                )
+                if neural_input_payload
+                else None
+            ),
+            episode=NeuralEpisodeConfig(
+                ipu_gap_threshold_s=float(neural_episode_payload.get("ipu_gap_threshold_s", 0.300)),
+                max_followup_s=float(neural_episode_payload.get("max_followup_s", 6.0)),
+                include_censored=bool(neural_episode_payload.get("include_censored", True)),
+            ),
+            window=NeuralWindowConfig(
+                start_lag_s=float(neural_window_payload.get("start_lag_s", 0.500)),
+                end_lag_s=float(neural_window_payload.get("end_lag_s", 0.100)),
+                epsilon=float(neural_window_payload.get("epsilon", 1.0e-12)),
+            ),
+            pca=NeuralPcaConfig(
+                mode=str(neural_pca_payload.get("mode", "variance")),
+                n_components=int(neural_pca_payload.get("n_components", 3)),
+                variance_threshold=float(neural_pca_payload.get("variance_threshold", 0.90)),
+            ),
+            model=NeuralModelConfig(
+                fitting_backend=str(neural_model_payload.get("fitting_backend", "glmmTMB")),
+                baseline_spline_df=int(neural_model_payload.get("baseline_spline_df", 6)),
+                baseline_spline_degree=int(neural_model_payload.get("baseline_spline_degree", 3)),
+                information_rate_lag_ms=int(neural_model_payload.get("information_rate_lag_ms", 150)),
+                prop_expected_lag_ms=int(neural_model_payload.get("prop_expected_lag_ms", 700)),
+            ),
         ),
     )
     config.validate()
@@ -388,4 +553,42 @@ def config_to_metadata_dict(config: HazardAnalysisConfig) -> dict[str, Any]:
             "smoothing_window_bins": config.plotting.smoothing_window_bins,
         },
         "misc": {"overwrite": config.misc.overwrite},
+        "mode": config.mode,
+        "neural": {
+            "enabled": config.neural.enabled,
+            "event_types": list(config.neural.event_types),
+            "bin_size_s": config.neural.bin_size_s,
+            "events_path": None if config.neural.events_path is None else str(config.neural.events_path),
+            "out_dir": None if config.neural.out_dir is None else str(config.neural.out_dir),
+            "input": (
+                None
+                if config.neural.input is None
+                else {
+                    "surprisal_paths": [str(path) for path in config.neural.input.surprisal_paths],
+                    "lowlevel_neural_paths": [str(path) for path in config.neural.input.lowlevel_neural_paths],
+                }
+            ),
+            "episode": {
+                "ipu_gap_threshold_s": config.neural.episode.ipu_gap_threshold_s,
+                "max_followup_s": config.neural.episode.max_followup_s,
+                "include_censored": config.neural.episode.include_censored,
+            },
+            "window": {
+                "start_lag_s": config.neural.window.start_lag_s,
+                "end_lag_s": config.neural.window.end_lag_s,
+                "epsilon": config.neural.window.epsilon,
+            },
+            "pca": {
+                "mode": config.neural.pca.mode,
+                "n_components": config.neural.pca.n_components,
+                "variance_threshold": config.neural.pca.variance_threshold,
+            },
+            "model": {
+                "fitting_backend": config.neural.model.fitting_backend,
+                "baseline_spline_df": config.neural.model.baseline_spline_df,
+                "baseline_spline_degree": config.neural.model.baseline_spline_degree,
+                "information_rate_lag_ms": config.neural.model.information_rate_lag_ms,
+                "prop_expected_lag_ms": config.neural.model.prop_expected_lag_ms,
+            },
+        },
     }

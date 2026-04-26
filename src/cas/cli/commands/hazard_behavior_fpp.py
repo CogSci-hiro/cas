@@ -7,7 +7,6 @@ from pathlib import Path
 
 from cas.hazard_behavior.config import BehaviourHazardConfig
 from cas.hazard_behavior.io import resolve_surprisal_paths
-from cas.hazard_behavior.neural_io import resolve_neural_feature_paths
 from cas.hazard_behavior.pipeline import run_behaviour_hazard_pipeline
 
 
@@ -31,7 +30,7 @@ def add_hazard_behavior_fpp_parser(
     parser.add_argument("--max-followup-s", type=float, default=6.0)
     parser.add_argument(
         "--episode-anchor",
-        choices=["partner_ipu", "legacy_fpp_previous_partner"],
+        choices=["partner_ipu"],
         default="partner_ipu",
     )
     parser.add_argument("--include-censored", dest="include_censored", action="store_true")
@@ -59,12 +58,12 @@ def add_hazard_behavior_fpp_parser(
         dest="require_partner_offset_before_fpp",
         action="store_false",
     )
-    parser.set_defaults(require_partner_offset_before_fpp=True)
+    parser.set_defaults(require_partner_offset_before_fpp=False)
     parser.add_argument("--partner-offset-fpp-tolerance-s", type=float, default=0.020)
     parser.add_argument(
         "--overlapping-episode-strategy",
         choices=["exclude", "truncate", "keep"],
-        default="exclude",
+        default="keep",
     )
     parser.add_argument("--cluster-column", default=None)
     parser.add_argument("--overwrite", action="store_true")
@@ -73,64 +72,9 @@ def add_hazard_behavior_fpp_parser(
     parser.set_defaults(save_riskset=True)
     parser.add_argument(
         "--lag-grid-ms",
-        default="0,100,200,300,500,700,1000",
+        default="0,50,100,150,200,300,500,700,1000",
         help="Comma-separated lag grid in milliseconds.",
     )
-    parser.add_argument("--fit-lagged-models", dest="fit_lagged_models", action="store_true")
-    parser.add_argument("--no-fit-lagged-models", dest="fit_lagged_models", action="store_false")
-    parser.set_defaults(fit_lagged_models=True)
-    parser.add_argument("--fit-primary-stat-tests", dest="fit_primary_stat_tests", action="store_true")
-    parser.add_argument("--no-fit-primary-stat-tests", dest="fit_primary_stat_tests", action="store_false")
-    parser.set_defaults(fit_primary_stat_tests=True)
-    parser.add_argument(
-        "--make-primary-publication-figures",
-        dest="make_primary_publication_figures",
-        action="store_true",
-    )
-    parser.add_argument(
-        "--no-make-primary-publication-figures",
-        dest="make_primary_publication_figures",
-        action="store_false",
-    )
-    parser.set_defaults(make_primary_publication_figures=True)
-    parser.add_argument(
-        "--run-primary-leave-one-cluster",
-        dest="run_primary_leave_one_cluster",
-        action="store_true",
-    )
-    parser.add_argument(
-        "--no-run-primary-leave-one-cluster",
-        dest="run_primary_leave_one_cluster",
-        action="store_false",
-    )
-    parser.set_defaults(run_primary_leave_one_cluster=False)
-    parser.add_argument(
-        "--fit-primary-behaviour-models",
-        dest="fit_primary_behaviour_models",
-        action="store_true",
-        help=(
-            "Fit the compact primary behavioural model sequence using local information rate and "
-            "expected-relative cumulative information lagged by 300 ms."
-        ),
-    )
-    parser.add_argument(
-        "--no-fit-primary-behaviour-models",
-        dest="fit_primary_behaviour_models",
-        action="store_false",
-    )
-    parser.set_defaults(fit_primary_behaviour_models=True)
-    parser.add_argument(
-        "--run-behaviour-model-suite",
-        dest="run_behaviour_model_suite",
-        action="store_true",
-        help="Fit the broader behavioural model and figure suite in addition to any neural outputs.",
-    )
-    parser.add_argument(
-        "--no-run-behaviour-model-suite",
-        dest="run_behaviour_model_suite",
-        action="store_false",
-    )
-    parser.set_defaults(run_behaviour_model_suite=True)
     parser.add_argument(
         "--fit-timing-control-models",
         dest="fit_timing_control_models",
@@ -163,34 +107,44 @@ def add_hazard_behavior_fpp_parser(
     parser.set_defaults(select_lags_with_timing_controls=False)
     parser.add_argument("--primary-information-rate-lag-ms", type=int, default=0)
     parser.add_argument("--primary-prop-expected-lag-ms", type=int, default=300)
+    parser.add_argument("--run-r-glmm-lag-sweep", dest="run_r_glmm_lag_sweep", action="store_true")
+    parser.add_argument("--no-run-r-glmm-lag-sweep", dest="run_r_glmm_lag_sweep", action="store_false")
+    parser.set_defaults(run_r_glmm_lag_sweep=False)
     parser.add_argument(
-        "--fit-neural-lowlevel-models",
-        dest="fit_neural_lowlevel_models",
+        "--r-glmm-lag-grid-ms",
+        default="0,50,100,150,200,300,500,700,1000",
+        help="Comma-separated lag grid in milliseconds for the R GLMM lag sweep.",
+    )
+    parser.add_argument("--r-glmm-onset-spline-df", type=int, default=5)
+    parser.add_argument("--r-glmm-offset-spline-df", type=int, default=4)
+    parser.add_argument("--r-glmm-backend", choices=["glmmTMB", "glmer"], default="glmmTMB")
+    parser.add_argument(
+        "--r-glmm-include-run-random-effect",
+        dest="r_glmm_include_run_random_effect",
         action="store_true",
     )
     parser.add_argument(
-        "--no-fit-neural-lowlevel-models",
-        dest="fit_neural_lowlevel_models",
+        "--no-r-glmm-include-run-random-effect",
+        dest="r_glmm_include_run_random_effect",
         action="store_false",
     )
-    parser.set_defaults(fit_neural_lowlevel_models=False)
+    parser.set_defaults(r_glmm_include_run_random_effect=False)
     parser.add_argument(
-        "--neural-features",
-        action="append",
-        default=[],
-        help="Path, directory, or glob for low-level neural TSV/CSV feature files. Repeatable.",
+        "--r-glmm-prop-expected-mode",
+        choices=["after_best_rate", "matched_lag"],
+        default="after_best_rate",
     )
-    parser.add_argument("--neural-window-s", type=float, default=0.500)
-    parser.add_argument("--neural-guard-s", type=float, default=0.100)
-    parser.add_argument("--neural-pca-mode", choices=["by_family", "combined"], default="by_family")
-    parser.add_argument("--neural-pca-variance-threshold", type=float, default=0.90)
-    parser.add_argument("--neural-pca-max-components", type=int, default=10)
     parser.add_argument(
-        "--neural-feature-prefix",
-        action="append",
-        default=[],
-        help="Repeatable prefix used to select neural feature columns, e.g. amp_, alpha_, beta_.",
+        "--r-glmm-include-prop-expected-in-final",
+        dest="r_glmm_include_prop_expected_in_final",
+        action="store_true",
     )
+    parser.add_argument(
+        "--no-r-glmm-include-prop-expected-in-final",
+        dest="r_glmm_include_prop_expected_in_final",
+        action="store_false",
+    )
+    parser.set_defaults(r_glmm_include_prop_expected_in_final=False)
     parser.add_argument("--save-lagged-feature-table", dest="save_lagged_feature_table", action="store_true")
     parser.add_argument("--no-save-lagged-feature-table", dest="save_lagged_feature_table", action="store_false")
     parser.set_defaults(save_lagged_feature_table=False)
@@ -200,7 +154,6 @@ def run_hazard_behavior_fpp_command(args: argparse.Namespace) -> int:
     """Run the behavioural hazard command."""
 
     surprisal_paths = resolve_surprisal_paths(args.surprisal)
-    neural_paths = resolve_neural_feature_paths(tuple(args.neural_features)) if args.neural_features else ()
     config = BehaviourHazardConfig(
         events_path=Path(args.events),
         surprisal_paths=tuple(surprisal_paths),
@@ -224,24 +177,18 @@ def run_hazard_behavior_fpp_command(args: argparse.Namespace) -> int:
         overwrite=bool(args.overwrite),
         save_riskset=bool(args.save_riskset),
         lag_grid_ms=_parse_lag_grid_ms(args.lag_grid_ms),
-        fit_primary_behaviour_models=bool(args.fit_primary_behaviour_models),
-        run_behaviour_model_suite=bool(args.run_behaviour_model_suite),
         fit_timing_control_models=bool(args.fit_timing_control_models or args.select_lags_with_timing_controls),
         select_lags_with_timing_controls=bool(args.select_lags_with_timing_controls),
-        fit_primary_stat_tests=bool(args.fit_primary_stat_tests),
-        make_primary_publication_figures=bool(args.make_primary_publication_figures),
-        run_primary_leave_one_cluster=bool(args.run_primary_leave_one_cluster),
+        run_r_glmm_lag_sweep=bool(args.run_r_glmm_lag_sweep),
+        r_glmm_lag_grid_ms=_parse_lag_grid_ms(args.r_glmm_lag_grid_ms),
+        r_glmm_onset_spline_df=int(args.r_glmm_onset_spline_df),
+        r_glmm_offset_spline_df=int(args.r_glmm_offset_spline_df),
+        r_glmm_backend=str(args.r_glmm_backend),
+        r_glmm_include_run_random_effect=bool(args.r_glmm_include_run_random_effect),
+        r_glmm_prop_expected_mode=str(args.r_glmm_prop_expected_mode),
+        r_glmm_include_prop_expected_in_final=bool(args.r_glmm_include_prop_expected_in_final),
         primary_information_rate_lag_ms=int(args.primary_information_rate_lag_ms),
         primary_prop_expected_lag_ms=int(args.primary_prop_expected_lag_ms),
-        fit_neural_lowlevel_models=bool(args.fit_neural_lowlevel_models),
-        neural_features=tuple(neural_paths),
-        neural_window_s=float(args.neural_window_s),
-        neural_guard_s=float(args.neural_guard_s),
-        neural_pca_mode=str(args.neural_pca_mode),
-        neural_pca_variance_threshold=float(args.neural_pca_variance_threshold),
-        neural_pca_max_components=int(args.neural_pca_max_components),
-        neural_feature_prefixes=tuple(args.neural_feature_prefix or ["amp_", "alpha_", "beta_"]),
-        fit_lagged_models=bool(args.fit_lagged_models),
         save_lagged_feature_table=bool(args.save_lagged_feature_table),
     )
     result = run_behaviour_hazard_pipeline(config)

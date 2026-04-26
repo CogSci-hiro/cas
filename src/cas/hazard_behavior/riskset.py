@@ -56,6 +56,8 @@ def build_discrete_time_riskset(
                 "run": episode["run"],
                 "participant_speaker": episode["participant_speaker"],
                 "partner_speaker": episode["partner_speaker"],
+                "partner_ipu_class": str(episode.get("partner_ipu_class", "unknown")),
+                "partner_role": str(episode.get("partner_role", "partner")),
                 "partner_ipu_id": episode.get("partner_ipu_id", f"{episode['episode_id']}|anchor"),
                 "partner_ipu_onset": episode["partner_ipu_onset"],
                 "partner_ipu_offset": episode["partner_ipu_offset"],

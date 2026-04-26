@@ -1,3 +1,5 @@
+mode: "neural_lowlevel"
+
 input:
   tde_hmm_results_dir: "/Users/hiro/Datasets/working/cas/models/glhmm"
   events_table_path: "/Users/hiro/Datasets/working/cas/events/events.csv"
@@ -6,6 +8,36 @@ input:
 
 output:
   output_dir: "/Users/hiro/Datasets/working/cas/reports/hazard_fpp_tde_hmm"
+
+neural:
+  enabled: true
+  event_types: ["fpp", "spp"]
+  events_path: "/Users/hiro/Datasets/working/cas/events/events.csv"
+  out_dir: "/Users/hiro/Datasets/working/cas/reports/hazard_neural_lowlevel"
+  bin_size_s: 0.050
+  input:
+    surprisal_paths:
+      - "/Users/hiro/Datasets/working/cas/features/surprisal/*.tsv"
+    lowlevel_neural_paths:
+      - "/Users/hiro/Datasets/working/cas/features/neural_lowlevel/*.tsv"
+  episode:
+    ipu_gap_threshold_s: 0.300
+    max_followup_s: 6.0
+    include_censored: true
+  window:
+    start_lag_s: 0.500
+    end_lag_s: 0.100
+    epsilon: 1.0e-12
+  pca:
+    mode: "variance"
+    n_components: 3
+    variance_threshold: 0.90
+  model:
+    fitting_backend: "glmmTMB"
+    baseline_spline_df: 6
+    baseline_spline_degree: 3
+    information_rate_lag_ms: 150
+    prop_expected_lag_ms: 700
 
 event_definition:
   partner_onset_column: "fpp_onset"

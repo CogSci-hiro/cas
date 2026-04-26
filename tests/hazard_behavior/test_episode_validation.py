@@ -21,8 +21,9 @@ def test_clean_preceding_partner_ipu_is_valid(tmp_path: Path) -> None:
 
     episode = result.episodes.iloc[0]
     assert np.isclose(episode["partner_ipu_offset"], 0.8)
-    assert np.isclose(episode["latency_from_partner_offset_s"], 0.4)
-    assert bool(episode["episode_is_valid"]) is True
+    assert np.isclose(episode["event_latency_from_partner_offset_s"], 0.4)
+    assert episode["event_phase"] == "post_partner_ipu"
+    assert bool(episode["event_observed"]) is True
 
 
 def test_future_partner_tokens_do_not_extend_selected_previous_ipu(tmp_path: Path) -> None:
@@ -38,11 +39,12 @@ def test_future_partner_tokens_do_not_extend_selected_previous_ipu(tmp_path: Pat
 
     episode = result.episodes.iloc[0]
     assert np.isclose(episode["partner_ipu_offset"], 0.8)
-    assert np.isclose(episode["latency_from_partner_offset_s"], 0.4)
-    assert bool(episode["episode_is_valid"]) is True
+    assert np.isclose(episode["event_latency_from_partner_offset_s"], 0.4)
+    assert episode["event_phase"] == "post_partner_ipu"
+    assert bool(episode["event_observed"]) is True
 
 
-def test_only_overlapping_partner_interval_is_invalid_by_default(tmp_path: Path) -> None:
+def test_fpp_during_partner_ipu_is_valid_by_default(tmp_path: Path) -> None:
     config = _build_config(tmp_path)
 
     result = build_event_positive_episodes(
@@ -51,13 +53,14 @@ def test_only_overlapping_partner_interval_is_invalid_by_default(tmp_path: Path)
         config=config,
     )
 
-    assert result.episodes.empty
-    candidate = result.candidate_episodes.iloc[0]
-    assert bool(candidate["episode_is_valid"]) is False
-    assert "overlaps" in str(candidate["invalid_reason"])
+    episode = result.episodes.iloc[0]
+    assert np.isclose(episode["partner_ipu_offset"], 1.3)
+    assert episode["event_latency_from_partner_offset_s"] < 0.0
+    assert episode["event_phase"] == "during_partner_ipu"
+    assert bool(episode["event_observed"]) is True
 
 
-def test_truncate_strategy_keeps_episode_with_zero_latency(tmp_path: Path) -> None:
+def test_truncate_strategy_does_not_change_valid_during_ipu_event(tmp_path: Path) -> None:
     config = _build_config(tmp_path, overlapping_episode_strategy="truncate")
 
     result = build_event_positive_episodes(
@@ -67,10 +70,9 @@ def test_truncate_strategy_keeps_episode_with_zero_latency(tmp_path: Path) -> No
     )
 
     episode = result.episodes.iloc[0]
-    assert np.isclose(episode["partner_ipu_offset"], episode["own_fpp_onset"])
-    assert np.isclose(episode["latency_from_partner_offset_s"], 0.0)
-    assert bool(episode["partner_ipu_was_truncated"]) is True
-    assert bool(episode["episode_is_valid"]) is True
+    assert np.isclose(episode["partner_ipu_offset"], 1.3)
+    assert episode["event_latency_from_partner_offset_s"] < 0.0
+    assert episode["event_phase"] == "during_partner_ipu"
 
 
 def test_keep_strategy_allows_negative_latency(tmp_path: Path) -> None:
@@ -83,22 +85,22 @@ def test_keep_strategy_allows_negative_latency(tmp_path: Path) -> None:
     )
 
     episode = result.episodes.iloc[0]
-    assert episode["latency_from_partner_offset_s"] < 0.0
-    assert bool(episode["partner_ipu_overlaps_fpp"]) is True
-    assert bool(episode["episode_is_valid"]) is True
+    assert episode["event_latency_from_partner_offset_s"] < 0.0
+    assert episode["event_phase"] == "during_partner_ipu"
+    assert bool(episode["event_observed"]) is True
 
 
-def test_final_riskset_has_no_negative_latency_by_default(tmp_path: Path) -> None:
+def test_final_riskset_retains_negative_offset_latency_when_event_occurs_during_ipu(tmp_path: Path) -> None:
     config = _build_config(tmp_path)
     result = build_event_positive_episodes(
         events_table=_toy_events(),
-        surprisal_table=_toy_tokens([("A", 0.0, 0.1), ("A", 0.3, 0.1), ("A", 0.7, 0.1), ("A", 1.3, 0.1)]),
+        surprisal_table=_toy_tokens([("A", 1.0, 0.30)]),
         config=config,
     )
 
     riskset_result = build_discrete_time_riskset(result.episodes, config=config)
     episode_summary = riskset_result.episode_summary
-    assert (episode_summary["latency_from_partner_offset_s"] >= -config.partner_offset_fpp_tolerance_s).all()
+    assert (episode_summary["latency_from_partner_offset_s"] < 0.0).any()
 
 
 def _build_config(tmp_path: Path, *, overlapping_episode_strategy: str = "exclude") -> BehaviourHazardConfig:
@@ -106,7 +108,7 @@ def _build_config(tmp_path: Path, *, overlapping_episode_strategy: str = "exclud
         events_path=tmp_path / "unused.csv",
         surprisal_paths=(tmp_path / "unused.tsv",),
         out_dir=tmp_path / "out",
-        episode_anchor="legacy_fpp_previous_partner",
+        episode_anchor="partner_ipu",
         include_censored=False,
         overlapping_episode_strategy=overlapping_episode_strategy,
     )

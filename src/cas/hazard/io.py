@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from glob import glob
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,8 @@ import pandas as pd
 
 from cas.hazard.config import HazardAnalysisConfig, config_to_metadata_dict
 from cas.hazard.entropy import compute_posterior_entropy, normalize_entropy
+from cas.hazard_behavior.io import read_surprisal_tables
+from cas.hazard_behavior.schema import normalize_events_schema
 
 LOGGER = logging.getLogger(__name__)
 JSON_INDENT = 2
@@ -162,11 +165,63 @@ def prepare_output_directory(output_dir: Path, *, overwrite: bool) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
 
+def prepare_neural_output_directories(output_dir: Path, *, overwrite: bool) -> dict[str, Path]:
+    """Create directories for low-level neural hazard outputs."""
+
+    if output_dir.exists() and any(output_dir.iterdir()) and not overwrite:
+        raise FileExistsError(f"Output directory already contains files and overwrite is false: {output_dir}")
+    directories = {
+        "root": output_dir,
+        "riskset": output_dir / "riskset",
+        "models": output_dir / "models",
+        "figures": output_dir / "figures",
+        "logs": output_dir / "logs",
+    }
+    for path in directories.values():
+        path.mkdir(parents=True, exist_ok=True)
+    return directories
+
+
 def write_hazard_table(hazard_table: pd.DataFrame, output_dir: Path) -> Path:
     """Write the person-period hazard table."""
 
     output_path = output_dir / "hazard_table.csv"
     hazard_table.to_csv(output_path, index=False)
+    return output_path
+
+
+def write_neural_hazard_table(
+    hazard_table: pd.DataFrame,
+    *,
+    output_dir: Path,
+    event_type: str,
+) -> Path:
+    """Write one neural hazard table for a target event family."""
+
+    event_text = str(event_type).lower()
+    parquet_path = output_dir / f"neural_{event_text}_hazard_table.parquet"
+    csv_path = output_dir / f"neural_{event_text}_hazard_table.csv"
+    try:
+        hazard_table.to_parquet(parquet_path, index=False)
+        return parquet_path
+    except Exception:
+        hazard_table.to_csv(csv_path, index=False)
+        return csv_path
+
+
+def write_neural_model_comparison(model_comparison: pd.DataFrame, *, output_dir: Path) -> Path:
+    """Write neural child-vs-baseline model comparison table."""
+
+    output_path = output_dir / "neural_model_comparison.csv"
+    model_comparison.to_csv(output_path, index=False)
+    return output_path
+
+
+def write_neural_coefficients(coefficients: pd.DataFrame, *, output_dir: Path) -> Path:
+    """Write neural model coefficient table."""
+
+    output_path = output_dir / "neural_coefficients.csv"
+    coefficients.to_csv(output_path, index=False)
     return output_path
 
 
@@ -202,6 +257,65 @@ def write_json_payload(payload: dict[str, Any], output_path: Path) -> Path:
         encoding="utf-8",
     )
     return output_path
+
+
+def load_normalized_events_table(events_path: Path) -> tuple[pd.DataFrame, list[str]]:
+    """Load events and normalize to canonical behavioural column names."""
+
+    events = pd.read_csv(events_path)
+    if events.empty:
+        raise ValueError(f"Events table is empty: {events_path}")
+    normalized = normalize_events_schema(events)
+    return normalized.table, normalized.warnings
+
+
+def load_surprisal_table(surprisal_paths: tuple[Path, ...]) -> tuple[pd.DataFrame, list[str]]:
+    """Load and normalize surprisal tables for partner-IPU episode construction."""
+
+    resolved_paths: list[Path] = []
+    for path in surprisal_paths:
+        path_text = str(path)
+        if any(symbol in path_text for symbol in ("*", "?", "[")):
+            resolved_paths.extend(sorted(Path(item) for item in glob(path_text)))
+        else:
+            resolved_paths.append(Path(path))
+    return read_surprisal_tables(tuple(resolved_paths), unmatched_surprisal_strategy="drop")
+
+
+def load_lowlevel_neural_tables(neural_paths: tuple[Path, ...]) -> pd.DataFrame:
+    """Load low-level neural feature tables from TSV/CSV/Parquet."""
+
+    if not neural_paths:
+        raise FileNotFoundError("No low-level neural feature files were provided.")
+    frames: list[pd.DataFrame] = []
+    resolved_paths: list[Path] = []
+    for path in neural_paths:
+        path_text = str(path)
+        if any(symbol in path_text for symbol in ("*", "?", "[")):
+            resolved_paths.extend(sorted(Path(item) for item in glob(path_text)))
+        else:
+            resolved_paths.append(Path(path))
+    for path in resolved_paths:
+        suffix = path.suffix.lower()
+        if suffix == ".parquet":
+            table = pd.read_parquet(path)
+        elif suffix == ".csv":
+            table = pd.read_csv(path)
+        else:
+            table = pd.read_csv(path, sep="\t")
+        frames.append(table)
+    combined = pd.concat(frames, ignore_index=True, sort=False)
+    required_columns = {"dyad_id", "run", "speaker", "time"}
+    missing = sorted(required_columns - set(combined.columns))
+    if missing:
+        raise ValueError(f"Low-level neural table is missing required columns: {missing}")
+    combined["dyad_id"] = combined["dyad_id"].astype(str)
+    combined["run"] = combined["run"].astype(str)
+    combined["speaker"] = combined["speaker"].astype(str)
+    combined["time"] = pd.to_numeric(combined["time"], errors="coerce")
+    combined = combined.loc[combined["time"].notna()].copy()
+    combined = combined.sort_values(["dyad_id", "run", "speaker", "time"], kind="mergesort").reset_index(drop=True)
+    return combined
 
 
 def write_note_file(note_text: str, output_path: Path) -> Path:

@@ -15,7 +15,6 @@ def _resolve_hazard_behavior_output_dir(config_value: str | None, default_subdir
 
 
 LM_FEATURE_DIR = PATHS_CONFIG.get("lm_feature_dir")
-NEURAL_FEATURE_DIR = PATHS_CONFIG.get("neural_feature_dir", f"{OUT_DIR}/features/neural_lowlevel")
 HAZARD_BEHAVIOR_OUTPUT_DIR = _resolve_hazard_behavior_output_dir(
     HAZARD_BEHAVIOR_OUTPUT_CONFIG.get("behaviour_output_dir"),
     "reports/hazard_behavior_fpp",
@@ -25,10 +24,29 @@ HAZARD_NEURAL_OUTPUT_DIR = _resolve_hazard_behavior_output_dir(
     "reports/hazard_neural_fpp",
 )
 HAZARD_BEHAVIOR_FIT_TIMING_CONTROL_MODELS = bool(HAZARD_BEHAVIOR_TIMING_CONTROL_CONFIG.get("fit_models", False))
-LOWLEVEL_NEURAL_FEATURE_OUTPUT_PATTERN = (
-    f"{NEURAL_FEATURE_DIR}/sub-{{subject}}/task-{{task}}/run-{{run}}/"
-    f"sub-{{subject}}_task-{{task}}_run-{{run}}_desc-lowlevelNeural_features.tsv"
+HAZARD_BEHAVIOR_RUN_R_GLMM_LAG_SWEEP = bool(HAZARD_BEHAVIOR_TIMING_CONTROL_CONFIG.get("run_r_glmm_lag_sweep", True))
+HAZARD_BEHAVIOR_R_GLMM_LAG_GRID = ",".join(
+    str(int(lag_ms))
+    for lag_ms in (HAZARD_BEHAVIOR_TIMING_CONTROL_CONFIG.get("r_glmm_lag_grid_ms") or [0, 50, 100, 150, 200, 300, 500, 700, 1000])
 )
+HAZARD_BEHAVIOR_R_GLMM_ONSET_SPLINE_DF = int(HAZARD_BEHAVIOR_TIMING_CONTROL_CONFIG.get("r_glmm_onset_spline_df", 5))
+HAZARD_BEHAVIOR_R_GLMM_OFFSET_SPLINE_DF = int(HAZARD_BEHAVIOR_TIMING_CONTROL_CONFIG.get("r_glmm_offset_spline_df", 4))
+HAZARD_BEHAVIOR_R_GLMM_BACKEND = str(HAZARD_BEHAVIOR_TIMING_CONTROL_CONFIG.get("r_glmm_backend", "glmmTMB"))
+HAZARD_BEHAVIOR_R_GLMM_INCLUDE_RUN_RANDOM_EFFECT = bool(
+    HAZARD_BEHAVIOR_TIMING_CONTROL_CONFIG.get("r_glmm_include_run_random_effect", False)
+)
+HAZARD_BEHAVIOR_R_GLMM_INCLUDE_RUN_RANDOM_EFFECT_TEXT = str(
+    HAZARD_BEHAVIOR_R_GLMM_INCLUDE_RUN_RANDOM_EFFECT
+).lower()
+HAZARD_BEHAVIOR_R_GLMM_PROP_EXPECTED_MODE = str(
+    HAZARD_BEHAVIOR_TIMING_CONTROL_CONFIG.get("r_glmm_prop_expected_mode", "after_best_rate")
+)
+HAZARD_BEHAVIOR_R_GLMM_INCLUDE_PROP_EXPECTED_IN_FINAL = bool(
+    HAZARD_BEHAVIOR_TIMING_CONTROL_CONFIG.get("r_glmm_include_prop_expected_in_final", False)
+)
+HAZARD_BEHAVIOR_R_GLMM_INCLUDE_PROP_EXPECTED_IN_FINAL_TEXT = str(
+    HAZARD_BEHAVIOR_R_GLMM_INCLUDE_PROP_EXPECTED_IN_FINAL
+).lower()
 HAZARD_BEHAVIOR_RISKSET_OUTPUT = (
     f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/riskset/hazard_behavior_riskset.tsv"
 )
@@ -36,117 +54,118 @@ HAZARD_BEHAVIOR_TIMING_CONTROL_RISKSET_OUTPUT = (
     f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/riskset/hazard_behavior_riskset_with_timing_controls.tsv"
 )
 HAZARD_BEHAVIOR_MODEL_COMPARISON_OUTPUT = (
-    f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/models/model_comparison_behaviour.csv"
+    f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/models/behaviour_timing_control_model_comparison.csv"
 )
 HAZARD_BEHAVIOR_FIT_METRICS_OUTPUT = (
-    f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/models/model_fit_metrics.json"
+    f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/models/behaviour_timing_control_fit_metrics.json"
 )
-HAZARD_BEHAVIOR_PRIMARY_STATS_OUTPUTS = [
-    f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/models/behaviour_primary_stat_tests.csv",
-    f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/models/behaviour_primary_stat_tests.json",
-    f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/models/behaviour_primary_publication_table.csv",
-    f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/models/behaviour_primary_interpretation.txt",
-]
-HAZARD_BEHAVIOR_PRIMARY_MODEL_OUTPUTS = [
-    f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/models/behaviour_primary_model_summary.csv",
-    f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/models/behaviour_primary_model_comparison.csv",
-    f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/models/behaviour_primary_effects.json",
-    f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/models/behaviour_primary_fit_metrics.json",
-]
-HAZARD_BEHAVIOR_MAIN_FIGURES = [
-    f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/figures/predicted_hazard_by_time.png",
-    f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/figures/predicted_hazard_by_information_rate.png",
-    f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/figures/observed_event_rate_by_time_bin.png",
-]
-HAZARD_BEHAVIOR_PRIMARY_FIGURES = [
-    f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/figures/behaviour_primary_coefficients.png",
-    f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/figures/behaviour_primary_model_comparison.png",
-    f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/figures/behaviour_primary_predicted_hazard_prop_expected.png",
-    f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/figures/behaviour_primary_predicted_hazard_information_rate.png",
-    f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/figures/behaviour_primary_observed_event_rate.png",
-    f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/figures/behaviour_primary_lag_sensitivity.png",
-]
 HAZARD_BEHAVIOR_TIMING_CONTROL_OUTPUTS = (
     [
+        f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/models/lag_selection/behaviour_timing_control_lag_selection.csv",
         f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/models/behaviour_timing_control_model_summary.csv",
         f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/models/behaviour_timing_control_model_comparison.csv",
         f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/models/behaviour_timing_control_fit_metrics.json",
         f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/models/behaviour_timing_control_selected_lags.json",
+        f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/models/behaviour_lag_screening_note.txt",
         HAZARD_BEHAVIOR_TIMING_CONTROL_RISKSET_OUTPUT,
-        f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/figures/behaviour_timing_control_model_comparison.png",
-        f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/figures/behaviour_timing_control_coefficients.png",
+        f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/qc_plots/lag_selection/behaviour_pooled_delta_bic_by_lag.png",
     ]
     if HAZARD_BEHAVIOR_FIT_TIMING_CONTROL_MODELS
     else []
 )
 HAZARD_BEHAVIOR_GLMM_EXPORT_OUTPUTS = (
     [
-        f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/r_exports/behaviour_glmm_data.csv",
-        f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/r_exports/behaviour_glmm_export_qc.json",
+        f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/models/exports/r_behaviour_glmm_lag_sweep_input.csv",
+        f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/models/exports/r_behaviour_glmm_lag_sweep_export_qc.json",
     ]
     if HAZARD_BEHAVIOR_FIT_TIMING_CONTROL_MODELS
     else []
 )
 HAZARD_BEHAVIOR_GLMM_MODEL_OUTPUTS = (
     [
-        f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/r_models/behaviour_glmm_model_summary.csv",
-        f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/r_models/behaviour_glmm_model_comparison.csv",
-        f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/r_models/behaviour_glmm_fit_metrics.json",
-        f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/r_models/behaviour_glmm_fixed_effects.csv",
-        f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/r_models/behaviour_glmm_random_effects.csv",
-        f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/r_models/behaviour_glmm_predictions_expected_info.csv",
-        f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/r_models/behaviour_glmm_predictions_information_rate.csv",
+        f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/models/r_glmm_information_rate_lag_sweep.csv",
+        f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/models/r_glmm_prop_expected_lag_sweep.csv",
+        f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/models/r_glmm_selected_behaviour_lags.json",
+        f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/models/r_glmm_final_behaviour_model_summary.csv",
+        f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/models/r_glmm_final_behaviour_model_comparison.csv",
+        f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/models/r_glmm_final_behaviour_effects.json",
+        f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/models/predictions/behaviour_r_glmm_final_predicted_hazard_information_rate.csv",
     ]
     if HAZARD_BEHAVIOR_FIT_TIMING_CONTROL_MODELS
     else []
 )
 HAZARD_BEHAVIOR_GLMM_FIGURES = (
     [
-        f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/figures/behaviour_glmm_coefficients.png",
-        f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/figures/behaviour_glmm_model_comparison.png",
-        f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/figures/behaviour_glmm_predicted_hazard_expected_info.png",
-        f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/figures/behaviour_glmm_predicted_hazard_information_rate.png",
+        f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/figures/behaviour_r_glmm_delta_bic_by_lag.png",
+        f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/figures/behaviour_r_glmm_coefficient_by_lag.png",
+        f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/figures/behaviour_r_glmm_odds_ratio_by_lag.png",
+        f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/figures/behaviour_r_glmm_final_model_comparison.png",
+        f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/figures/behaviour_r_glmm_final_predicted_hazard_information_rate.png",
     ]
     if HAZARD_BEHAVIOR_FIT_TIMING_CONTROL_MODELS
     else []
 )
 HAZARD_BEHAVIOR_RULE_OUTPUTS = [
     HAZARD_BEHAVIOR_RISKSET_OUTPUT,
-    HAZARD_BEHAVIOR_MODEL_COMPARISON_OUTPUT,
-    HAZARD_BEHAVIOR_FIT_METRICS_OUTPUT,
-    *HAZARD_BEHAVIOR_PRIMARY_MODEL_OUTPUTS,
-    *HAZARD_BEHAVIOR_PRIMARY_STATS_OUTPUTS,
-    *HAZARD_BEHAVIOR_MAIN_FIGURES,
-    *HAZARD_BEHAVIOR_PRIMARY_FIGURES,
     *HAZARD_BEHAVIOR_TIMING_CONTROL_OUTPUTS,
 ]
-HAZARD_BEHAVIOR_NEURAL_OUTPUTS = [
-    f"{HAZARD_NEURAL_OUTPUT_DIR}/riskset/neural_feature_qc.json",
-    f"{HAZARD_NEURAL_OUTPUT_DIR}/models/neural_lowlevel_model_summary.csv",
-    f"{HAZARD_NEURAL_OUTPUT_DIR}/models/neural_lowlevel_model_comparison.csv",
-    f"{HAZARD_NEURAL_OUTPUT_DIR}/models/neural_lowlevel_family_model_comparison.csv",
-    f"{HAZARD_NEURAL_OUTPUT_DIR}/models/neural_lowlevel_fit_metrics.json",
-    f"{HAZARD_NEURAL_OUTPUT_DIR}/models/neural_lowlevel_pca_summary_amplitude.csv",
-    f"{HAZARD_NEURAL_OUTPUT_DIR}/models/neural_lowlevel_pca_summary_alpha.csv",
-    f"{HAZARD_NEURAL_OUTPUT_DIR}/models/neural_lowlevel_pca_summary_beta.csv",
-    f"{HAZARD_NEURAL_OUTPUT_DIR}/models/neural_lowlevel_pca_loadings_amplitude.csv",
-    f"{HAZARD_NEURAL_OUTPUT_DIR}/models/neural_lowlevel_pca_loadings_alpha.csv",
-    f"{HAZARD_NEURAL_OUTPUT_DIR}/models/neural_lowlevel_pca_loadings_beta.csv",
-    f"{HAZARD_NEURAL_OUTPUT_DIR}/models/neural_lowlevel_effects.json",
-    f"{HAZARD_NEURAL_OUTPUT_DIR}/figures/neural_lowlevel_pca_variance.png",
-    f"{HAZARD_NEURAL_OUTPUT_DIR}/figures/neural_lowlevel_model_comparison.png",
-    f"{HAZARD_NEURAL_OUTPUT_DIR}/figures/neural_lowlevel_coefficients.png",
-    f"{HAZARD_NEURAL_OUTPUT_DIR}/figures/neural_lowlevel_predicted_hazard_pc1.png",
-    f"{HAZARD_NEURAL_OUTPUT_DIR}/figures/neural_lowlevel_feature_missingness.png",
-    f"{HAZARD_NEURAL_OUTPUT_DIR}/logs/neural_lowlevel_warnings.txt",
-]
-LOWLEVEL_NEURAL_FEATURE_OUTPUTS = expand(
-    LOWLEVEL_NEURAL_FEATURE_OUTPUT_PATTERN,
-    zip,
-    subject=[record["subject"] for record in PREPROCESSED_EEG_RECORDS],
-    task=[record["task"] for record in PREPROCESSED_EEG_RECORDS],
-    run=[record["run"] for record in PREPROCESSED_EEG_RECORDS],
+HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR = f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/latency_regime"
+HAZARD_BEHAVIOR_LATENCY_REGIME_EXPORT_OUTPUTS = (
+    [
+        f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/behaviour_latency_regime_data.csv",
+        f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/behaviour_latency_regime_export_qc.json",
+    ]
+    if HAZARD_BEHAVIOR_FIT_TIMING_CONTROL_MODELS
+    else []
 )
+HAZARD_BEHAVIOR_LATENCY_REGIME_MODEL_OUTPUTS = (
+    [
+        f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/stan_models/behaviour_latency_model_a_one_student_t_summary.csv",
+        f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/stan_models/behaviour_latency_model_b_two_student_t_summary.csv",
+        f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/stan_models/behaviour_latency_model_c_mixture_of_experts_summary.csv",
+        f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/stan_models/behaviour_latency_regime_loo_comparison.csv",
+        f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/stan_models/behaviour_latency_regime_fit_metrics.json",
+        f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/stan_models/behaviour_latency_regime_component_parameters.csv",
+        f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/stan_models/behaviour_latency_regime_gating_coefficients.csv",
+        f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/stan_models/behaviour_latency_regime_event_probabilities.csv",
+        f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/stan_models/behaviour_latency_regime_posterior_predictive.csv",
+    ]
+    if HAZARD_BEHAVIOR_FIT_TIMING_CONTROL_MODELS
+    else []
+)
+HAZARD_BEHAVIOR_LATENCY_REGIME_FIGURES = (
+    [
+        f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/figures/behaviour_latency_regime_components.png",
+        f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/figures/behaviour_latency_regime_probability_by_expected_info.png",
+        f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/figures/behaviour_latency_regime_probability_by_information_rate.png",
+        f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/figures/behaviour_latency_regime_gating_coefficients.png",
+        f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/figures/behaviour_latency_regime_ppc.png",
+        f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/figures/behaviour_latency_regime_loo_comparison.png",
+    ]
+    if HAZARD_BEHAVIOR_FIT_TIMING_CONTROL_MODELS
+    else []
+)
+
+HAZARD_NEURAL_RISKSET_OUTPUTS = [
+    f"{HAZARD_NEURAL_OUTPUT_DIR}/riskset/neural_fpp_hazard_table.parquet",
+    f"{HAZARD_NEURAL_OUTPUT_DIR}/riskset/neural_spp_hazard_table.parquet",
+]
+HAZARD_NEURAL_MODEL_OUTPUTS = [
+    f"{HAZARD_NEURAL_OUTPUT_DIR}/models/neural_model_comparison.csv",
+    f"{HAZARD_NEURAL_OUTPUT_DIR}/models/neural_coefficients.csv",
+    f"{HAZARD_NEURAL_OUTPUT_DIR}/models/neural_fit_metrics.json",
+]
+HAZARD_NEURAL_FIGURES = [
+    f"{HAZARD_NEURAL_OUTPUT_DIR}/figures/neural_delta_bic_fpp_vs_spp.png",
+    f"{HAZARD_NEURAL_OUTPUT_DIR}/figures/neural_delta_aic_fpp_vs_spp.png",
+    f"{HAZARD_NEURAL_OUTPUT_DIR}/figures/neural_coefficients_fpp_vs_spp.png",
+    f"{HAZARD_NEURAL_OUTPUT_DIR}/figures/neural_power_by_partner_time.png",
+]
+HAZARD_NEURAL_ALL_OUTPUTS = [
+    *HAZARD_NEURAL_RISKSET_OUTPUTS,
+    *HAZARD_NEURAL_MODEL_OUTPUTS,
+    *HAZARD_NEURAL_FIGURES,
+]
 
 
 def _hazard_behavior_surprisal_inputs(wildcards) -> list[str]:
@@ -163,21 +182,67 @@ def _hazard_behavior_surprisal_inputs(wildcards) -> list[str]:
     return matches
 
 
-def _subject_speaker_label(subject: str) -> str:
-    return "A" if int(subject) % 2 == 1 else "B"
-
-
-def _subject_dyad_id(subject: str) -> str:
-    subject_id = f"sub-{subject}"
-    dyad_id = SUBJECT_TO_DYAD_MAP.get(subject_id)
-    if dyad_id:
-        return dyad_id
-    dyad_number = (int(subject) + 1) // 2
-    return f"dyad-{dyad_number:03d}"
-
-
 def _hazard_behavior_timing_control_flag() -> str:
-    return "--fit-timing-control-models" if HAZARD_BEHAVIOR_FIT_TIMING_CONTROL_MODELS else ""
+    flags = []
+    if HAZARD_BEHAVIOR_FIT_TIMING_CONTROL_MODELS:
+        flags.extend(["--fit-timing-control-models", "--select-lags-with-timing-controls"])
+    if HAZARD_BEHAVIOR_RUN_R_GLMM_LAG_SWEEP:
+        flags.append("--run-r-glmm-lag-sweep")
+    return " ".join(flags)
+
+
+def _hazard_neural_lowlevel_inputs(wildcards) -> list[str]:
+    del wildcards
+    if not isinstance(LM_FEATURE_DIR, str) or not LM_FEATURE_DIR:
+        raise ValueError("`lm_feature_dir` is missing from config/paths.yaml.")
+    surprisal_pattern = os.path.join(LM_FEATURE_DIR, "**", "*desc-lmSurprisal_features.tsv")
+    surprisal_matches = sorted(glob.glob(surprisal_pattern, recursive=True))
+    if not surprisal_matches:
+        raise ValueError(
+            "No LM surprisal TSV files matched the neural hazard pattern under "
+            f"{LM_FEATURE_DIR!r}."
+        )
+    lowlevel_pattern = os.path.join(OUT_DIR, "features", "neural_lowlevel", "**", "*desc-lowlevelNeural_features.tsv")
+    lowlevel_matches = sorted(glob.glob(lowlevel_pattern, recursive=True))
+    if not lowlevel_matches:
+        raise ValueError(
+            "No low-level neural TSV files matched the neural hazard pattern under "
+            f"{os.path.join(OUT_DIR, 'features', 'neural_lowlevel')!r}."
+        )
+    return [EVENTS_CSV_OUTPUT, *surprisal_matches, *lowlevel_matches]
+
+
+rule hazard_neural_lowlevel:
+    input:
+        _hazard_neural_lowlevel_inputs,
+    output:
+        HAZARD_NEURAL_ALL_OUTPUTS
+    params:
+        config_path=f"{PROJECT_ROOT}/config/hazard_fpp_tde_hmm.yaml",
+        neural_out_dir=HAZARD_NEURAL_OUTPUT_DIR,
+        surprisal_glob=lambda wildcards: os.path.join(
+            LM_FEATURE_DIR,
+            "**",
+            "*desc-lmSurprisal_features.tsv",
+        ),
+        lowlevel_glob=lambda wildcards: os.path.join(
+            OUT_DIR,
+            "features",
+            "neural_lowlevel",
+            "**",
+            "*desc-lowlevelNeural_features.tsv",
+        ),
+    shell:
+        r"""
+        set -euo pipefail
+        mkdir -p "{resources.tmpdir}/mpl" "{resources.tmpdir}/cache"
+        MPLCONFIGDIR="{resources.tmpdir}/mpl" XDG_CACHE_HOME="{resources.tmpdir}/cache" \
+        PYTHONPATH="{SRC_DIR}:{PROJECT_ROOT}" "{PYTHON_BIN}" -m cas.cli.main hazard-fpp-tde-hmm \
+          --config "{params.config_path}" \
+          --neural-out-dir "{params.neural_out_dir}" \
+          --neural-surprisal "{params.surprisal_glob}" \
+          --neural-lowlevel "{params.lowlevel_glob}"
+        """
 
 
 rule hazard_behavior_fpp:
@@ -222,6 +287,7 @@ if HAZARD_BEHAVIOR_FIT_TIMING_CONTROL_MODELS:
             PYTHONPATH="{SRC_DIR}:{PROJECT_ROOT}" "{PYTHON_BIN}" -m cas.cli.main export-behaviour-glmm-data \
               --input-riskset "{input.riskset_tsv}" \
               --selected-lags-json "{input.selected_lags_json}" \
+              --lag-grid-ms "{HAZARD_BEHAVIOR_R_GLMM_LAG_GRID}" \
               --output-csv "{output.export_csv}" \
               --output-qc-json "{output.export_qc_json}"
             """
@@ -231,121 +297,138 @@ if HAZARD_BEHAVIOR_FIT_TIMING_CONTROL_MODELS:
         input:
             export_csv=HAZARD_BEHAVIOR_GLMM_EXPORT_OUTPUTS[0],
         output:
-            model_summary=HAZARD_BEHAVIOR_GLMM_MODEL_OUTPUTS[0],
-            model_comparison=HAZARD_BEHAVIOR_GLMM_MODEL_OUTPUTS[1],
-            fit_metrics=HAZARD_BEHAVIOR_GLMM_MODEL_OUTPUTS[2],
-            fixed_effects=HAZARD_BEHAVIOR_GLMM_MODEL_OUTPUTS[3],
-            random_effects=HAZARD_BEHAVIOR_GLMM_MODEL_OUTPUTS[4],
-            predictions_expected=HAZARD_BEHAVIOR_GLMM_MODEL_OUTPUTS[5],
-            predictions_information=HAZARD_BEHAVIOR_GLMM_MODEL_OUTPUTS[6],
+            information_rate_sweep=HAZARD_BEHAVIOR_GLMM_MODEL_OUTPUTS[0],
+            prop_expected_sweep=HAZARD_BEHAVIOR_GLMM_MODEL_OUTPUTS[1],
+            selected_lags=HAZARD_BEHAVIOR_GLMM_MODEL_OUTPUTS[2],
+            final_model_summary=HAZARD_BEHAVIOR_GLMM_MODEL_OUTPUTS[3],
+            final_model_comparison=HAZARD_BEHAVIOR_GLMM_MODEL_OUTPUTS[4],
+            final_model_effects=HAZARD_BEHAVIOR_GLMM_MODEL_OUTPUTS[5],
+            prediction_information=HAZARD_BEHAVIOR_GLMM_MODEL_OUTPUTS[6],
         params:
-            output_dir=f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/r_models",
+            output_dir=f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/models",
         shell:
             r"""
             set -euo pipefail
-            Rscript "{PROJECT_ROOT}/scripts/r/fit_behaviour_hazard_glmm.R" \
+            Rscript "{PROJECT_ROOT}/scripts/r/fit_behaviour_glmm_lag_sweep.R" \
               --input-csv "{input.export_csv}" \
-              --output-dir "{params.output_dir}"
+              --output-dir "{params.output_dir}" \
+              --lag-grid-ms "{HAZARD_BEHAVIOR_R_GLMM_LAG_GRID}" \
+              --onset-spline-df "{HAZARD_BEHAVIOR_R_GLMM_ONSET_SPLINE_DF}" \
+              --offset-spline-df "{HAZARD_BEHAVIOR_R_GLMM_OFFSET_SPLINE_DF}" \
+              --backend "{HAZARD_BEHAVIOR_R_GLMM_BACKEND}" \
+              --include-run-random-effect "{HAZARD_BEHAVIOR_R_GLMM_INCLUDE_RUN_RANDOM_EFFECT_TEXT}" \
+              --prop-expected-mode "{HAZARD_BEHAVIOR_R_GLMM_PROP_EXPECTED_MODE}" \
+              --include-prop-expected-in-final "{HAZARD_BEHAVIOR_R_GLMM_INCLUDE_PROP_EXPECTED_IN_FINAL_TEXT}"
             """
 
 
     rule plot_behaviour_glmm_results:
         input:
-            model_summary=HAZARD_BEHAVIOR_GLMM_MODEL_OUTPUTS[0],
-            model_comparison=HAZARD_BEHAVIOR_GLMM_MODEL_OUTPUTS[1],
-            fit_metrics=HAZARD_BEHAVIOR_GLMM_MODEL_OUTPUTS[2],
-            fixed_effects=HAZARD_BEHAVIOR_GLMM_MODEL_OUTPUTS[3],
-            random_effects=HAZARD_BEHAVIOR_GLMM_MODEL_OUTPUTS[4],
-            predictions_expected=HAZARD_BEHAVIOR_GLMM_MODEL_OUTPUTS[5],
-            predictions_information=HAZARD_BEHAVIOR_GLMM_MODEL_OUTPUTS[6],
+            information_rate_sweep=HAZARD_BEHAVIOR_GLMM_MODEL_OUTPUTS[0],
+            prop_expected_sweep=HAZARD_BEHAVIOR_GLMM_MODEL_OUTPUTS[1],
+            selected_lags=HAZARD_BEHAVIOR_GLMM_MODEL_OUTPUTS[2],
+            final_model_summary=HAZARD_BEHAVIOR_GLMM_MODEL_OUTPUTS[3],
+            final_model_comparison=HAZARD_BEHAVIOR_GLMM_MODEL_OUTPUTS[4],
+            final_model_effects=HAZARD_BEHAVIOR_GLMM_MODEL_OUTPUTS[5],
+            prediction_information=HAZARD_BEHAVIOR_GLMM_MODEL_OUTPUTS[6],
         output:
-            coefficients_figure=HAZARD_BEHAVIOR_GLMM_FIGURES[0],
-            comparison_figure=HAZARD_BEHAVIOR_GLMM_FIGURES[1],
-            expected_figure=HAZARD_BEHAVIOR_GLMM_FIGURES[2],
-            information_figure=HAZARD_BEHAVIOR_GLMM_FIGURES[3],
+            lag_figure=HAZARD_BEHAVIOR_GLMM_FIGURES[0],
+            coefficient_figure=HAZARD_BEHAVIOR_GLMM_FIGURES[1],
+            odds_ratio_figure=HAZARD_BEHAVIOR_GLMM_FIGURES[2],
+            final_comparison_figure=HAZARD_BEHAVIOR_GLMM_FIGURES[3],
+            final_prediction_figure=HAZARD_BEHAVIOR_GLMM_FIGURES[4],
         params:
-            r_results_dir=f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/r_models",
+            r_results_dir=f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/models",
             output_dir=f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/figures",
+            qc_output_dir=f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/qc_plots/lag_selection",
         shell:
             r"""
             set -euo pipefail
-            PYTHONPATH="{SRC_DIR}:{PROJECT_ROOT}" "{PYTHON_BIN}" -m cas.cli.main plot-behaviour-glmm-results \
+            PYTHONPATH="{SRC_DIR}:{PROJECT_ROOT}" "{PYTHON_BIN}" -m cas.cli.main plot-behaviour-hazard-results \
               --r-results-dir "{params.r_results_dir}" \
+              --timing-control-models-dir "{HAZARD_BEHAVIOR_OUTPUT_DIR}/models/lag_selection" \
+              --qc-output-dir "{params.qc_output_dir}" \
               --output-dir "{params.output_dir}"
             """
 
 
-rule extract_lowlevel_neural_features:
-    input:
-        eeg=PREPROCESSED_EEG_OUTPUT_PATTERN,
-    output:
-        features_tsv=LOWLEVEL_NEURAL_FEATURE_OUTPUT_PATTERN,
-    params:
-        dyad_id=lambda wildcards: _subject_dyad_id(wildcards.subject),
-        speaker=lambda wildcards: _subject_speaker_label(wildcards.subject),
-    run:
-        from cas.neural.lowlevel import export_lowlevel_neural_feature_table
-
-        print(
-            f"[snakemake] extract_lowlevel_neural_features subject={wildcards.subject} "
-            f"task={wildcards.task} run={wildcards.run}",
-            flush=True,
-        )
-        export_lowlevel_neural_feature_table(
-            raw_path=input.eeg,
-            output_path=output.features_tsv,
-            dyad_id=params.dyad_id,
-            run=wildcards.run,
-            speaker=params.speaker,
-        )
+    rule export_behaviour_latency_regime_data:
+        input:
+            riskset_tsv=HAZARD_BEHAVIOR_TIMING_CONTROL_RISKSET_OUTPUT,
+            selected_lags_json=f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/models/behaviour_timing_control_selected_lags.json",
+        output:
+            export_csv=HAZARD_BEHAVIOR_LATENCY_REGIME_EXPORT_OUTPUTS[0],
+            export_qc_json=HAZARD_BEHAVIOR_LATENCY_REGIME_EXPORT_OUTPUTS[1],
+        shell:
+            r"""
+            set -euo pipefail
+            echo "[latency-regime] Exporting event-only Stan input CSV"
+            PYTHONPATH="{SRC_DIR}:{PROJECT_ROOT}" "{PYTHON_BIN}" -m cas.cli.main export-behaviour-latency-regime-data \
+              --input-riskset "{input.riskset_tsv}" \
+              --selected-lags-json "{input.selected_lags_json}" \
+              --output-csv "{output.export_csv}" \
+              --output-qc-json "{output.export_qc_json}" \
+              --verbose
+            """
 
 
-rule hazard_behavior_fpp_neural_lowlevel:
-    input:
-        events_csv=EVENTS_CSV_OUTPUT,
-        surprisal_tsvs=_hazard_behavior_surprisal_inputs,
-        neural_tsvs=LOWLEVEL_NEURAL_FEATURE_OUTPUTS,
-    output:
-        neural_feature_qc=HAZARD_BEHAVIOR_NEURAL_OUTPUTS[0],
-        neural_model_summary=HAZARD_BEHAVIOR_NEURAL_OUTPUTS[1],
-        neural_model_comparison=HAZARD_BEHAVIOR_NEURAL_OUTPUTS[2],
-        neural_family_model_comparison=HAZARD_BEHAVIOR_NEURAL_OUTPUTS[3],
-        neural_fit_metrics=HAZARD_BEHAVIOR_NEURAL_OUTPUTS[4],
-        neural_pca_summary_amplitude=HAZARD_BEHAVIOR_NEURAL_OUTPUTS[5],
-        neural_pca_summary_alpha=HAZARD_BEHAVIOR_NEURAL_OUTPUTS[6],
-        neural_pca_summary_beta=HAZARD_BEHAVIOR_NEURAL_OUTPUTS[7],
-        neural_pca_loadings_amplitude=HAZARD_BEHAVIOR_NEURAL_OUTPUTS[8],
-        neural_pca_loadings_alpha=HAZARD_BEHAVIOR_NEURAL_OUTPUTS[9],
-        neural_pca_loadings_beta=HAZARD_BEHAVIOR_NEURAL_OUTPUTS[10],
-        neural_effects=HAZARD_BEHAVIOR_NEURAL_OUTPUTS[11],
-        neural_pca_variance_figure=HAZARD_BEHAVIOR_NEURAL_OUTPUTS[12],
-        neural_model_comparison_figure=HAZARD_BEHAVIOR_NEURAL_OUTPUTS[13],
-        neural_coefficients_figure=HAZARD_BEHAVIOR_NEURAL_OUTPUTS[14],
-        neural_predicted_pc1_figure=HAZARD_BEHAVIOR_NEURAL_OUTPUTS[15],
-        neural_feature_missingness_figure=HAZARD_BEHAVIOR_NEURAL_OUTPUTS[16],
-        neural_warnings=HAZARD_BEHAVIOR_NEURAL_OUTPUTS[17],
-    params:
-        out_dir=HAZARD_NEURAL_OUTPUT_DIR,
-        surprisal_glob=lambda wildcards: os.path.join(
-            LM_FEATURE_DIR,
-            "**",
-            "*desc-lmSurprisal_features.tsv",
-        ),
-        neural_feature_dir=NEURAL_FEATURE_DIR,
-    shell:
-        r"""
-        set -euo pipefail
-        mkdir -p "{resources.tmpdir}/mpl" "{resources.tmpdir}/cache"
-        MPLCONFIGDIR="{resources.tmpdir}/mpl" XDG_CACHE_HOME="{resources.tmpdir}/cache" \
-        PYTHONPATH="{SRC_DIR}:{PROJECT_ROOT}" "{PYTHON_BIN}" -m cas.cli.main hazard-behavior-fpp \
-          --events "{input.events_csv}" \
-          --surprisal "{params.surprisal_glob}" \
-          --neural-features "{params.neural_feature_dir}" \
-          --fit-neural-lowlevel-models \
-          --no-run-behaviour-model-suite \
-          --no-fit-primary-behaviour-models \
-          --no-fit-primary-stat-tests \
-          --no-make-primary-publication-figures \
-          --out-dir "{params.out_dir}" \
-          --overwrite
-        """
+    rule fit_behaviour_latency_regime_stan:
+        input:
+            export_csv=HAZARD_BEHAVIOR_LATENCY_REGIME_EXPORT_OUTPUTS[0],
+        output:
+            model_a_summary=HAZARD_BEHAVIOR_LATENCY_REGIME_MODEL_OUTPUTS[0],
+            model_b_summary=HAZARD_BEHAVIOR_LATENCY_REGIME_MODEL_OUTPUTS[1],
+            model_c_summary=HAZARD_BEHAVIOR_LATENCY_REGIME_MODEL_OUTPUTS[2],
+            loo_comparison=HAZARD_BEHAVIOR_LATENCY_REGIME_MODEL_OUTPUTS[3],
+            fit_metrics=HAZARD_BEHAVIOR_LATENCY_REGIME_MODEL_OUTPUTS[4],
+            component_parameters=HAZARD_BEHAVIOR_LATENCY_REGIME_MODEL_OUTPUTS[5],
+            gating_coefficients=HAZARD_BEHAVIOR_LATENCY_REGIME_MODEL_OUTPUTS[6],
+            event_probabilities=HAZARD_BEHAVIOR_LATENCY_REGIME_MODEL_OUTPUTS[7],
+            posterior_predictive=HAZARD_BEHAVIOR_LATENCY_REGIME_MODEL_OUTPUTS[8],
+        params:
+            output_dir=f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/stan_models",
+            stan_dir=f"{PROJECT_ROOT}/scripts/stan",
+        shell:
+            r"""
+            set -euo pipefail
+            echo "[latency-regime] Fitting Stan models A/B/C"
+            Rscript "{PROJECT_ROOT}/scripts/r/fit_behaviour_latency_regime_stan.R" \
+              --input-csv "{input.export_csv}" \
+              --output-dir "{params.output_dir}" \
+              --stan-dir "{params.stan_dir}" \
+              --verbose
+            """
+
+
+    rule plot_behaviour_latency_regime_results:
+        input:
+            event_csv=HAZARD_BEHAVIOR_LATENCY_REGIME_EXPORT_OUTPUTS[0],
+            model_a_summary=HAZARD_BEHAVIOR_LATENCY_REGIME_MODEL_OUTPUTS[0],
+            model_b_summary=HAZARD_BEHAVIOR_LATENCY_REGIME_MODEL_OUTPUTS[1],
+            model_c_summary=HAZARD_BEHAVIOR_LATENCY_REGIME_MODEL_OUTPUTS[2],
+            loo_comparison=HAZARD_BEHAVIOR_LATENCY_REGIME_MODEL_OUTPUTS[3],
+            fit_metrics=HAZARD_BEHAVIOR_LATENCY_REGIME_MODEL_OUTPUTS[4],
+            component_parameters=HAZARD_BEHAVIOR_LATENCY_REGIME_MODEL_OUTPUTS[5],
+            gating_coefficients=HAZARD_BEHAVIOR_LATENCY_REGIME_MODEL_OUTPUTS[6],
+            event_probabilities=HAZARD_BEHAVIOR_LATENCY_REGIME_MODEL_OUTPUTS[7],
+            posterior_predictive=HAZARD_BEHAVIOR_LATENCY_REGIME_MODEL_OUTPUTS[8],
+        output:
+            components=HAZARD_BEHAVIOR_LATENCY_REGIME_FIGURES[0],
+            probability_by_expected=HAZARD_BEHAVIOR_LATENCY_REGIME_FIGURES[1],
+            probability_by_rate=HAZARD_BEHAVIOR_LATENCY_REGIME_FIGURES[2],
+            gating_coefficients=HAZARD_BEHAVIOR_LATENCY_REGIME_FIGURES[3],
+            ppc=HAZARD_BEHAVIOR_LATENCY_REGIME_FIGURES[4],
+            loo=HAZARD_BEHAVIOR_LATENCY_REGIME_FIGURES[5],
+        params:
+            stan_results_dir=f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/stan_models",
+            output_dir=f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/figures",
+        shell:
+            r"""
+            set -euo pipefail
+            echo "[latency-regime] Plotting exploratory latency-regime figures"
+            PYTHONPATH="{SRC_DIR}:{PROJECT_ROOT}" "{PYTHON_BIN}" -m cas.cli.main plot-behaviour-latency-regime-results \
+              --stan-results-dir "{params.stan_results_dir}" \
+              --event-data-csv "{input.event_csv}" \
+              --output-dir "{params.output_dir}" \
+              --verbose
+            """
