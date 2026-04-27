@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 from cas.hazard_behavior.config import BehaviourHazardConfig
+from cas.hazard_behavior.identity import ensure_participant_speaker_id, validate_participant_speaker_id
 from cas.hazard_behavior.progress import progress_iterable
 
 FLOAT_TOLERANCE = 1.0e-9
@@ -54,6 +55,7 @@ def build_discrete_time_riskset(
                 "episode_id": episode["episode_id"],
                 "dyad_id": episode["dyad_id"],
                 "run": episode["run"],
+                "participant_speaker_id": episode.get("participant_speaker_id", f"{episode['dyad_id']}_{episode['participant_speaker']}"),
                 "participant_speaker": episode["participant_speaker"],
                 "partner_speaker": episode["partner_speaker"],
                 "partner_ipu_class": str(episode.get("partner_ipu_class", "unknown")),
@@ -88,11 +90,25 @@ def build_discrete_time_riskset(
         )
 
     riskset_table = pd.DataFrame(rows)
+    if not riskset_table.empty:
+        riskset_table = ensure_participant_speaker_id(
+            riskset_table,
+            dyad_col="dyad_id",
+            speaker_col="participant_speaker",
+            output_col="participant_speaker_id",
+            overwrite=True,
+        )
     LOGGER.info("Constructed %d risk-set rows across %d episodes.", len(riskset_table), len(episode_summaries))
     event_qc = validate_riskset(riskset_table, episodes_table)
     return RiskSetResult(
         riskset_table=riskset_table,
-        episode_summary=pd.DataFrame(episode_summaries),
+        episode_summary=ensure_participant_speaker_id(
+            pd.DataFrame(episode_summaries),
+            dyad_col="dyad_id",
+            speaker_col="participant_speaker",
+            output_col="participant_speaker_id",
+            overwrite=True,
+        ),
         warnings=warnings,
         event_qc=event_qc,
     )
@@ -151,6 +167,12 @@ def validate_riskset(riskset_table: pd.DataFrame, episodes_table: pd.DataFrame) 
         "positive_episodes_have_exactly_one_event_row": bool(positive_failures.empty),
         "censored_episodes_have_zero_event_rows": bool(censored_failures.empty),
         "event_column_is_int_0_1": True,
+        "identity_validation": validate_participant_speaker_id(
+            riskset_table,
+            dyad_col="dyad_id",
+            speaker_col="participant_speaker",
+            output_col="participant_speaker_id",
+        ),
     }
 
 
@@ -185,6 +207,9 @@ def _build_episode_bins(
             {
                 "dyad_id": str(episode["dyad_id"]),
                 "run": str(episode["run"]),
+                "participant_speaker_id": str(
+                    episode.get("participant_speaker_id", f"{episode['dyad_id']}_{episode['participant_speaker']}")
+                ),
                 "participant_speaker": str(episode["participant_speaker"]),
                 "partner_speaker": str(episode["partner_speaker"]),
                 "partner_ipu_id": str(episode.get("partner_ipu_id", f"{episode['episode_id']}|anchor")),

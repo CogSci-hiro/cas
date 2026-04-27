@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import gc
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -52,6 +53,7 @@ from cas.hazard.plots import (
 from cas.hazard.riskset import build_neural_partner_ipu_risksets, build_person_period_riskset
 from cas.hazard_behavior.config import BehaviourHazardConfig
 from cas.hazard_behavior.features import add_information_features_to_riskset, add_lagged_information_features, zscore_predictors
+from cas.hazard_behavior.identity import ensure_participant_speaker_id
 
 LOGGER = logging.getLogger(__name__)
 
@@ -241,8 +243,13 @@ def _run_neural_lowlevel_hazard_analysis(config: HazardAnalysisConfig) -> Hazard
     }
     hazard_paths: dict[str, Path] = {}
 
-    for event_type, riskset_table in riskset_build_result.risksets_by_event.items():
-        episodes_table = riskset_build_result.episode_summaries_by_event[event_type]
+    preferred_order = [event_type for event_type in ("fpp", "spp") if event_type in riskset_build_result.risksets_by_event]
+    remaining_event_types = [
+        event_type for event_type in riskset_build_result.risksets_by_event.keys() if event_type not in {"fpp", "spp"}
+    ]
+    for event_type in [*preferred_order, *remaining_event_types]:
+        riskset_table = riskset_build_result.risksets_by_event.pop(event_type)
+        episodes_table = riskset_build_result.episode_summaries_by_event.pop(event_type)
         enriched = _add_behavioural_controls_to_neural_riskset(
             riskset_table,
             episodes_table=episodes_table,
@@ -268,6 +275,12 @@ def _run_neural_lowlevel_hazard_analysis(config: HazardAnalysisConfig) -> Hazard
         )
         model_comparison_frames.append(model_result.comparison_table)
         coefficient_frames.append(model_result.coefficients_table)
+        del riskset_table
+        del episodes_table
+        del enriched
+        del enriched_with_neural
+        del model_result
+        gc.collect()
 
     model_comparison_table = pd.concat(model_comparison_frames, ignore_index=True, sort=False)
     coefficients_table = pd.concat(coefficient_frames, ignore_index=True, sort=False)
@@ -348,8 +361,15 @@ def _add_behavioural_controls_to_neural_riskset(
     with_lags, _lag_qc = add_lagged_information_features(with_features, config=behaviour_config)
     zscore_result = zscore_predictors(with_lags)
     table = zscore_result.table.copy()
+    table = ensure_participant_speaker_id(
+        table,
+        dyad_col="dyad_id",
+        speaker_col="participant_speaker",
+        output_col="participant_speaker_id",
+        overwrite=True,
+    )
     if "participant_id" not in table.columns:
-        table["participant_id"] = table["dyad_id"].astype(str) + "_" + table["participant_speaker"].astype(str)
+        table["participant_id"] = table["participant_speaker_id"].astype(str)
     required_columns = [
         f"z_information_rate_lag_{int(config.neural.model.information_rate_lag_ms)}ms",
         f"z_prop_expected_cumulative_info_lag_{int(config.neural.model.prop_expected_lag_ms)}ms",
@@ -370,6 +390,13 @@ def _add_neural_features_and_pcs(
     config: HazardAnalysisConfig,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     table = riskset_table.copy()
+    table = ensure_participant_speaker_id(
+        table,
+        dyad_col="dyad_id",
+        speaker_col="participant_speaker",
+        output_col="participant_speaker_id",
+        overwrite=True,
+    )
     alpha_columns = [column_name for column_name in lowlevel_table.columns if column_name.startswith("alpha_")]
     beta_columns = [column_name for column_name in lowlevel_table.columns if column_name.startswith("beta_")]
     if not alpha_columns or not beta_columns:
@@ -377,11 +404,19 @@ def _add_neural_features_and_pcs(
 
     alpha_output_columns = [f"mean_log_{column_name}" for column_name in alpha_columns]
     beta_output_columns = [f"mean_log_{column_name}" for column_name in beta_columns]
-    for column_name in alpha_output_columns + beta_output_columns:
-        table[column_name] = np.nan
-    table["neural_window_start"] = pd.to_numeric(table["bin_end"], errors="coerce") - float(config.neural.window.start_lag_s)
-    table["neural_window_end"] = pd.to_numeric(table["bin_end"], errors="coerce") - float(config.neural.window.end_lag_s)
-    table["neural_speaker_used"] = table["participant_speaker"].astype(str)
+    output_columns = alpha_output_columns + beta_output_columns
+    bin_end_numeric = pd.to_numeric(table["bin_end"], errors="coerce")
+    n_rows = len(table.index)
+    added_columns = pd.DataFrame(
+        {
+            **{column_name: np.full(n_rows, np.nan, dtype=np.float32) for column_name in output_columns},
+            "neural_window_start": bin_end_numeric - float(config.neural.window.start_lag_s),
+            "neural_window_end": bin_end_numeric - float(config.neural.window.end_lag_s),
+            "neural_speaker_used": table["participant_speaker"].astype(str),
+        },
+        index=table.index,
+    )
+    table = pd.concat([table, added_columns], axis=1)
 
     if not (pd.to_numeric(table["neural_window_end"], errors="coerce") <= pd.to_numeric(table["bin_start"], errors="coerce") + 1.0e-9).all():
         raise ValueError("Neural causal window end must not exceed hazard-bin start.")
@@ -396,17 +431,25 @@ def _add_neural_features_and_pcs(
         lowlevel = grouped_lowlevel.get((str(group_key[0]), str(group_key[1]), str(group_key[2])))
         if lowlevel is None or lowlevel.empty:
             continue
-        times = pd.to_numeric(lowlevel["time"], errors="coerce").to_numpy(dtype=float)
+        times = pd.to_numeric(lowlevel["time"], errors="coerce").to_numpy(dtype=np.float32)
         starts = pd.to_numeric(group_rows["neural_window_start"], errors="coerce").to_numpy(dtype=float)
         ends = pd.to_numeric(group_rows["neural_window_end"], errors="coerce").to_numpy(dtype=float)
         alpha_matrix = np.log(
-            np.clip(lowlevel.loc[:, alpha_columns].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float), config.neural.window.epsilon, None)
+            np.clip(
+                lowlevel.loc[:, alpha_columns].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=np.float32),
+                np.float32(config.neural.window.epsilon),
+                None,
+            )
         )
         beta_matrix = np.log(
-            np.clip(lowlevel.loc[:, beta_columns].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float), config.neural.window.epsilon, None)
+            np.clip(
+                lowlevel.loc[:, beta_columns].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=np.float32),
+                np.float32(config.neural.window.epsilon),
+                None,
+            )
         )
-        alpha_means = _windowed_means(times, alpha_matrix, starts=starts, ends=ends)
-        beta_means = _windowed_means(times, beta_matrix, starts=starts, ends=ends)
+        alpha_means = _windowed_means(times, alpha_matrix, starts=starts, ends=ends).astype(np.float32, copy=False)
+        beta_means = _windowed_means(times, beta_matrix, starts=starts, ends=ends).astype(np.float32, copy=False)
         table.loc[group_rows.index, alpha_output_columns] = alpha_means
         table.loc[group_rows.index, beta_output_columns] = beta_means
 
@@ -422,11 +465,13 @@ def _add_neural_features_and_pcs(
         band_name="beta",
         config=config,
     )
+    table = table.drop(columns=output_columns, errors="ignore")
     qc = {
         "participant_speaker_eeg_used": True,
         "causal_guard_passed": True,
         "alpha_feature_columns": alpha_output_columns,
         "beta_feature_columns": beta_output_columns,
+        "raw_neural_feature_columns_dropped": True,
         "alpha_pca": alpha_meta,
         "beta_pca": beta_meta,
     }
@@ -442,10 +487,10 @@ def _windowed_means(
 ) -> np.ndarray:
     start_indices = np.searchsorted(times, starts, side="left")
     end_indices = np.searchsorted(times, ends, side="left")
-    cumulative = np.vstack([np.zeros((1, matrix.shape[1]), dtype=float), np.cumsum(matrix, axis=0)])
+    cumulative = np.vstack([np.zeros((1, matrix.shape[1]), dtype=matrix.dtype), np.cumsum(matrix, axis=0, dtype=matrix.dtype)])
     sums = cumulative[end_indices] - cumulative[start_indices]
-    counts = (end_indices - start_indices).astype(float)
-    means = np.full((starts.shape[0], matrix.shape[1]), np.nan, dtype=float)
+    counts = (end_indices - start_indices).astype(np.float32)
+    means = np.full((starts.shape[0], matrix.shape[1]), np.nan, dtype=matrix.dtype)
     valid = counts > 0
     means[valid] = sums[valid] / counts[valid, None]
     return means
@@ -458,10 +503,10 @@ def _add_band_pcs(
     band_name: str,
     config: HazardAnalysisConfig,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
-    working = table.copy()
+    working = table
     feature_frame = working.loc[:, feature_columns].apply(pd.to_numeric, errors="coerce")
     valid_mask = np.isfinite(feature_frame).all(axis=1)
-    valid = feature_frame.loc[valid_mask].to_numpy(dtype=float)
+    valid = feature_frame.loc[valid_mask].to_numpy(dtype=np.float32)
     if valid.size == 0:
         raise ValueError(f"No valid rows were available for {band_name} PCA.")
     scaler = StandardScaler()
@@ -474,14 +519,15 @@ def _add_band_pcs(
     scores = pca.fit_transform(z_features)
     if scores.ndim == 1:
         scores = scores[:, None]
+    score_float32 = np.asarray(scores, dtype=np.float32)
     for component_index in range(scores.shape[1]):
-        score_values = scores[:, component_index]
+        score_values = score_float32[:, component_index]
         mean_value = float(np.mean(score_values))
         std_value = float(np.std(score_values, ddof=0))
         z_values = np.zeros_like(score_values) if std_value <= 0.0 else (score_values - mean_value) / std_value
         column_name = f"z_{band_name}_pc{component_index + 1}"
-        working[column_name] = np.nan
-        working.loc[valid_mask, column_name] = z_values
+        working[column_name] = np.full(len(working.index), np.nan, dtype=np.float32)
+        working.loc[valid_mask, column_name] = z_values.astype(np.float32, copy=False)
     return working, {
         "n_input_features": int(len(feature_columns)),
         "n_rows_valid": int(valid.shape[0]),

@@ -12,11 +12,19 @@ The active unit of analysis is the partner-IPU anchored discrete-time hazard epi
 
 ### Model family
 
-The final behavioural model is a logistic mixed-effects model for the binary hazard outcome `event in {0, 1}`, not an LMM. The default random intercept is `participant_speaker`.
+The final behavioural model is a logistic mixed-effects model for the binary hazard outcome `event in {0, 1}`, not an LMM. The default random intercept is `participant_speaker_id`.
+
+Identity columns are interpreted as:
+
+- `speaker`: within-dyad role label only, typically `A` or `B`
+- `participant_speaker_id`: canonical dyad-specific participant identity, e.g. `dyad-001_A`
+- `participant_speaker`: legacy compatibility column; do not use it for grouping unless it has been validated as equivalent to `participant_speaker_id`
+
+Grouping, random effects, GEE clusters, grouped train/test splits, and participant-level diagnostics must use `participant_speaker_id`. Neural feature matching still uses `dyad_id`, `run`, and `speaker`.
 
 The final R model sequence is:
 
-- `M0_timing`: onset and offset timing splines plus `(1 | participant_speaker)`
+- `M0_timing`: onset and offset timing splines plus `(1 | participant_speaker_id)`
 - `M1_rate`: `M0_timing` plus `z_information_rate_lag_best`
 - `M2_expected`: `M1_rate` plus `z_prop_expected_cumulative_info_lag_best`
 
@@ -81,7 +89,8 @@ python -m cas.cli.main export-behaviour-latency-regime-data \
 
 Rscript scripts/r/fit_behaviour_latency_regime_stan.R \
   --input-csv results/hazard_behavior/latency_regime/behaviour_latency_regime_data.csv \
-  --output-dir results/hazard_behavior/latency_regime/stan_models
+  --output-dir results/hazard_behavior/latency_regime/stan_models \
+  --verbose
 
 python -m cas.cli.main plot-behaviour-latency-regime-results \
   --stan-results-dir results/hazard_behavior/latency_regime/stan_models \

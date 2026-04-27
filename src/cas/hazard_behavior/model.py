@@ -596,7 +596,7 @@ def _selection_rows(
 
 
 def _resolve_cluster_column(riskset_table: pd.DataFrame, preferred_column: str | None) -> str:
-    candidates = [preferred_column, "participant_speaker", "subject_id", "dyad_id", "episode_id"]
+    candidates = [preferred_column, "participant_speaker_id", "participant_speaker", "subject_id", "dyad_id", "episode_id"]
     for candidate in candidates:
         if candidate and candidate in riskset_table.columns:
             return candidate

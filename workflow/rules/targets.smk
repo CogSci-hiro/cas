@@ -218,6 +218,11 @@ rule hazard_neural_models_all:
         *HAZARD_NEURAL_MODEL_OUTPUTS
 
 
+rule hazard_neural_permutation_null_all:
+    input:
+        *HAZARD_NEURAL_PERMUTATION_NULL_OUTPUTS
+
+
 rule hazard_neural_figures_all:
     input:
         *HAZARD_NEURAL_FIGURES

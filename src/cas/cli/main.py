@@ -18,6 +18,10 @@ from cas.cli.commands.diagnose_behaviour_latency_regime import (
     add_diagnose_behaviour_latency_regime_parser,
     run_diagnose_behaviour_latency_regime_command,
 )
+from cas.cli.commands.diagnose_spp_neural_hazard_failure import (
+    add_diagnose_spp_neural_hazard_failure_parser,
+    run_diagnose_spp_neural_hazard_failure_command,
+)
 from cas.cli.commands.export_behaviour_glmm_data import (
     add_export_behaviour_glmm_data_parser,
     run_export_behaviour_glmm_data_command,
@@ -42,6 +46,10 @@ from cas.cli.commands.plot_behaviour_glmm_results import (
 from cas.cli.commands.plot_behaviour_latency_regime_results import (
     add_plot_behaviour_latency_regime_results_parser,
     run_plot_behaviour_latency_regime_results_command,
+)
+from cas.cli.commands.run_fpp_neural_permutation_null import (
+    add_run_fpp_neural_permutation_null_parser,
+    run_fpp_neural_permutation_null_command,
 )
 from cas.cli.commands.plot_tde_hmm_qc import (
     add_plot_tde_hmm_qc_parser,
@@ -177,6 +185,7 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     add_annotations_parser(subparsers)
     add_diagnose_behaviour_latency_regime_parser(subparsers)
+    add_diagnose_spp_neural_hazard_failure_parser(subparsers)
     add_export_behaviour_glmm_data_parser(subparsers)
     add_export_behaviour_latency_regime_data_parser(subparsers)
     add_fit_tde_hmm_parser(subparsers)
@@ -185,6 +194,7 @@ def _build_parser() -> argparse.ArgumentParser:
     add_plot_behaviour_glmm_results_parser(subparsers)
     add_plot_behaviour_latency_regime_results_parser(subparsers)
     add_plot_tde_hmm_qc_parser(subparsers)
+    add_run_fpp_neural_permutation_null_parser(subparsers)
 
     trf_parser = subparsers.add_parser("trf", help="Run TRF nested CV from run-wise arrays.")
     trf_parser.add_argument("--eeg-runs", nargs="+", required=True, help="Run-wise EEG .npy paths.")
@@ -1313,6 +1323,8 @@ def main() -> int:
         return run_annotations_command(args)
     if args.command == "diagnose-behaviour-latency-regime":
         return run_diagnose_behaviour_latency_regime_command(args)
+    if args.command == "diagnose-spp-neural-hazard-failure":
+        return run_diagnose_spp_neural_hazard_failure_command(args)
     if args.command == "export-behaviour-glmm-data":
         return run_export_behaviour_glmm_data_command(args)
     if args.command == "export-behaviour-latency-regime-data":
@@ -1329,6 +1341,8 @@ def main() -> int:
         return run_plot_behaviour_latency_regime_results_command(args)
     if args.command == "plot-tde-hmm-qc":
         return run_plot_tde_hmm_qc_command(args)
+    if args.command == "run-fpp-neural-permutation-null":
+        return run_fpp_neural_permutation_null_command(args)
     if args.command == "trf":
         return _run_trf(args)
     if args.command == "trf-config":

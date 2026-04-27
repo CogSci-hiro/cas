@@ -13,6 +13,7 @@ from cas.hazard.config import (
     NeuralWindowConfig,
     load_hazard_analysis_config,
 )
+from cas.hazard_behavior.neural_lowlevel import run_neural_lowlevel_hazard_analysis
 from cas.hazard_behavior.io import resolve_surprisal_paths
 
 
@@ -132,6 +133,10 @@ def run_hazard_fpp_tde_hmm_command(args: argparse.Namespace) -> int:
             enabled=True,
         )
     config = replace(config, neural=neural_config)
+    if config.mode == "neural_lowlevel" or bool(config.neural.enabled):
+        result = run_neural_lowlevel_hazard_analysis(config)
+        print(result.output_dir)
+        return 0
     result = run_hazard_analysis(config)
     print(result.output_dir)
     return 0

@@ -24,6 +24,7 @@ from cas.hazard_behavior.io import (
     write_json,
     write_table,
 )
+from cas.hazard_behavior.identity import validate_participant_speaker_id
 from cas.hazard_behavior.model import (
     compare_timing_control_models,
     ensure_primary_predictors_available,
@@ -211,6 +212,12 @@ def run_behaviour_hazard_pipeline(config: BehaviourHazardConfig) -> BehaviourHaz
             "information_rate_max": float(pd.to_numeric(riskset_table["information_rate"], errors="coerce").max(skipna=True)),
             "prop_expected_min": float(pd.to_numeric(riskset_table["prop_expected_cumulative_info"], errors="coerce").min(skipna=True)),
             "prop_expected_max": float(pd.to_numeric(riskset_table["prop_expected_cumulative_info"], errors="coerce").max(skipna=True)),
+            "identity_validation": validate_participant_speaker_id(
+                riskset_table,
+                dyad_col="dyad_id",
+                speaker_col="participant_speaker",
+                output_col="participant_speaker_id",
+            ),
         },
         output_dirs["riskset"] / "hazard_behavior_feature_qc.json",
     )

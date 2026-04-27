@@ -9,6 +9,7 @@ import pandas as pd
 EVENT_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     "dyad_id": ("dyad_id", "dyad", "recording_id"),
     "run": ("run",),
+    "participant_speaker_id": ("participant_speaker_id",),
     "participant_speaker": ("participant_speaker", "speaker", "speaker_fpp", "fpp_speaker"),
     "partner_speaker": ("partner_speaker", "speaker_spp"),
     "fpp_onset": ("fpp_onset", "onset"),
