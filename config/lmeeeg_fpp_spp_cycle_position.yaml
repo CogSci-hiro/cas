@@ -54,7 +54,7 @@ lmeeeg:
   test:
     # Use a lighter correction here so pooled induced inference completes
     # reliably on the local workstation instead of being killed during TFCE.
-    method: "maxstat"
+    method: "cluster"
     n_permutations: 64
     tail: 0
     adjacency: "mne_default"

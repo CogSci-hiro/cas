@@ -596,10 +596,9 @@ def test_run_permutation_inference_skips_on_backend_failure(monkeypatch):
     assert "fake_permute_fixed_effect" in result["traceback"]
 
 
-def test_build_adjacency_uses_biosemi64_and_combines_time(monkeypatch):
+def test_build_adjacency_uses_biosemi64_spatial_graph(monkeypatch):
     calls: dict[str, object] = {}
     spatial_adjacency = object()
-    combined_adjacency = object()
 
     def fake_create_info(channel_names, sfreq, ch_types):
         calls["create_info"] = {
@@ -619,25 +618,19 @@ def test_build_adjacency_uses_biosemi64_and_combines_time(monkeypatch):
         calls["find_ch_adjacency"] = {"info": info, "ch_type": ch_type}
         return spatial_adjacency, ["Cz", "Pz"]
 
-    def fake_combine_adjacency(n_times, adjacency):
-        calls["combine_adjacency"] = {"n_times": n_times, "adjacency": adjacency}
-        return combined_adjacency
-
     fake_mne = SimpleNamespace(
         create_info=fake_create_info,
         channels=SimpleNamespace(
             make_standard_montage=fake_make_standard_montage,
             find_ch_adjacency=fake_find_ch_adjacency,
         ),
-        stats=SimpleNamespace(combine_adjacency=fake_combine_adjacency),
     )
     monkeypatch.setitem(sys.modules, "mne", fake_mne)
 
     adjacency = _build_adjacency(["Cz", "Pz"], 17, {"adjacency": "mne_default", "montage": "biosemi64"})
 
-    assert adjacency is combined_adjacency
+    assert adjacency is spatial_adjacency
     assert calls["montage_name"] == "biosemi64"
-    assert calls["combine_adjacency"] == {"n_times": 17, "adjacency": spatial_adjacency}
 
 
 def test_build_adjacency_configures_mne_runtime_before_import(monkeypatch):
@@ -664,7 +657,6 @@ def test_build_adjacency_configures_mne_runtime_before_import(monkeypatch):
                     make_standard_montage=lambda name: f"montage:{name}",
                     find_ch_adjacency=lambda info, ch_type: ("spatial", ["Cz"]),
                 ),
-                stats=SimpleNamespace(combine_adjacency=lambda n_times, adjacency: "combined"),
             )
         return real_import(name, globals, locals, fromlist, level)
 
@@ -673,7 +665,7 @@ def test_build_adjacency_configures_mne_runtime_before_import(monkeypatch):
 
     adjacency = _build_adjacency(["Cz"], 5, {"adjacency": "mne_default"})
 
-    assert adjacency == "combined"
+    assert adjacency == "spatial"
     assert calls["configure"] == 1
 
 

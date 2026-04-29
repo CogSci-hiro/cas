@@ -246,7 +246,7 @@ def build_lmeeeg_trial_data_from_arrays(
     from types import SimpleNamespace
 
     return SimpleNamespace(
-        eeg_data=np.asarray(eeg_data, dtype=float),
+        eeg_data=np.asarray(eeg_data, dtype=np.float32),
         channel_names=list(channel_names),
         times=np.asarray(times, dtype=float),
         trial_metadata=metadata_df,
@@ -676,7 +676,7 @@ def _refit_for_inference(runtime_config, trial_data, *, model_name):
 
 
 def _build_adjacency(channel_names: list[str], n_times: int, test_cfg: dict[str, Any]):
-    """Build an explicit spatiotemporal adjacency matrix for cluster tests."""
+    """Build a spatial EEG adjacency matrix for cluster/TFCE tests."""
     adjacency_type = str(test_cfg.get("adjacency", "none")).lower()
     if adjacency_type == "none":
         return None
@@ -689,7 +689,7 @@ def _build_adjacency(channel_names: list[str], n_times: int, test_cfg: dict[str,
     montage = mne.channels.make_standard_montage(montage_name)
     info.set_montage(montage, on_missing="warn")
     spatial_adjacency, _ = mne.channels.find_ch_adjacency(info, ch_type="eeg")
-    return mne.stats.combine_adjacency(int(n_times), spatial_adjacency)
+    return spatial_adjacency
 
 
 def _model_output_dir(
@@ -801,6 +801,11 @@ def _run_pooled_model(
     pooled_metadata: list[pd.DataFrame] = []
     ref_ch_names: list[str] | None = None
     ref_times: np.ndarray | None = None
+    lmeeeg_cfg = dict(runtime_config.get("lmeeeg") or {})
+    model_cfg = dict((lmeeeg_cfg.get("models") or {}).get(model_name) or {})
+    merged_selection = dict(lmeeeg_cfg.get("selection") or {})
+    merged_selection.update(dict(model_cfg.get("selection") or {}))
+    selection_config = {"selection": merged_selection}
 
     for ep_path in epochs_paths:
         source_path, metadata_csv = _resolve_pooled_source_paths(
@@ -821,7 +826,35 @@ def _run_pooled_model(
             except ValueError:
                 pass
 
-        eeg = epochs.get_data(copy=True)
+        eeg = np.asarray(epochs.get_data(copy=False), dtype=np.float32)
+
+        # Apply event/metadata selection per source file so we do not pool
+        # rows that will immediately be discarded downstream.
+        if merged_selection:
+            from types import SimpleNamespace
+
+            class _IndexableArray:
+                """Thin wrapper so select_epochs_from_config can index eeg data."""
+
+                def __init__(self, arr):
+                    self._arr = arr
+                    self.selection = np.arange(arr.shape[0], dtype=int)
+
+                def __len__(self):
+                    return self._arr.shape[0]
+
+                def __getitem__(self, item):
+                    idx = np.asarray(item)
+                    if idx.dtype == bool:
+                        idx = np.flatnonzero(idx)
+                    new = _IndexableArray(self._arr[idx])
+                    new.selection = self.selection[idx]
+                    return new
+
+            wrapper = _IndexableArray(eeg)
+            wrapper, metadata = select_epochs_from_config(wrapper, metadata, selection_config)
+            eeg = wrapper._arr
+
         pooled_eeg.append(eeg)
         pooled_metadata.append(metadata)
 
@@ -839,42 +872,8 @@ def _run_pooled_model(
     if not pooled_eeg:
         raise ValueError("No epochs were loaded.")
 
-    combined_eeg = np.concatenate(pooled_eeg, axis=0)
+    combined_eeg = np.concatenate(pooled_eeg, axis=0, dtype=np.float32)
     combined_metadata = pd.concat(pooled_metadata, axis=0, ignore_index=True)
-
-    # Apply selection (event_type, metadata_query) before building trial data
-    lmeeeg_cfg = dict(runtime_config.get("lmeeeg") or {})
-    model_cfg = dict((lmeeeg_cfg.get("models") or {}).get(model_name) or {})
-    merged_selection = dict(lmeeeg_cfg.get("selection") or {})
-    merged_selection.update(dict(model_cfg.get("selection") or {}))
-    selection_config = {"selection": merged_selection}
-
-    if merged_selection:
-        from types import SimpleNamespace
-
-        class _IndexableArray:
-            """Thin wrapper so select_epochs_from_config can index eeg data."""
-
-            def __init__(self, arr):
-                self._arr = arr
-                self.selection = np.arange(arr.shape[0], dtype=int)
-
-            def __len__(self):
-                return self._arr.shape[0]
-
-            def __getitem__(self, item):
-                idx = np.asarray(item)
-                if idx.dtype == bool:
-                    idx = np.flatnonzero(idx)
-                new = _IndexableArray(self._arr[idx])
-                new.selection = self.selection[idx]
-                return new
-
-        wrapper = _IndexableArray(combined_eeg)
-        wrapper, combined_metadata = select_epochs_from_config(
-            wrapper, combined_metadata, selection_config
-        )
-        combined_eeg = wrapper._arr
 
     combined_eeg, combined_metadata = _prepare_model_inputs(
         runtime_config,
