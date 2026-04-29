@@ -7,15 +7,9 @@ HAZARD_BEHAVIOR_TIMING_CONTROL_CONFIG = dict(HAZARD_BEHAVIOR_WORKFLOW_CONFIG.get
 HAZARD_NEURAL_PERMUTATION_WORKFLOW_CONFIG = (
     HAZARD_FPP_NEURAL_PERMUTATION_NULL_CONFIG if isinstance(HAZARD_FPP_NEURAL_PERMUTATION_NULL_CONFIG, dict) else {}
 )
-HAZARD_NEURAL_CLUSTERING_WORKFLOW_CONFIG = (
-    HAZARD_FPP_NEURAL_CLUSTERING_CONFIG if isinstance(HAZARD_FPP_NEURAL_CLUSTERING_CONFIG, dict) else {}
-)
 HAZARD_NEURAL_PERMUTATION_INPUT_CONFIG = dict(HAZARD_NEURAL_PERMUTATION_WORKFLOW_CONFIG.get("input") or {})
 HAZARD_NEURAL_PERMUTATION_OUTPUT_CONFIG = dict(HAZARD_NEURAL_PERMUTATION_WORKFLOW_CONFIG.get("output") or {})
 HAZARD_NEURAL_PERMUTATION_RUN_CONFIG = dict(HAZARD_NEURAL_PERMUTATION_WORKFLOW_CONFIG.get("permutation") or {})
-HAZARD_NEURAL_CLUSTERING_INPUT_CONFIG = dict(HAZARD_NEURAL_CLUSTERING_WORKFLOW_CONFIG.get("input") or {})
-HAZARD_NEURAL_CLUSTERING_OUTPUT_CONFIG = dict(HAZARD_NEURAL_CLUSTERING_WORKFLOW_CONFIG.get("output") or {})
-HAZARD_NEURAL_CLUSTERING_GMM_CONFIG = dict(HAZARD_NEURAL_CLUSTERING_WORKFLOW_CONFIG.get("gmm") or {})
 
 
 def _resolve_hazard_behavior_output_dir(config_value: str | None, default_subdir: str) -> str:
@@ -35,11 +29,6 @@ HAZARD_NEURAL_OUTPUT_DIR = _resolve_hazard_behavior_output_dir(
     HAZARD_BEHAVIOR_OUTPUT_CONFIG.get("neural_output_dir"),
     "reports/hazard_neural_fpp",
 )
-HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR = _resolve_hazard_behavior_output_dir(
-    HAZARD_NEURAL_CLUSTERING_OUTPUT_CONFIG.get("output_dir"),
-    "reports/hazard_neural_fpp/neural_clustering_fpp",
-)
-HAZARD_NEURAL_CLUSTERING_PRIMARY_K = int(HAZARD_NEURAL_CLUSTERING_GMM_CONFIG.get("primary_k", 2))
 HAZARD_NEURAL_LAG_SELECTION_OUTPUT_DIR = os.path.join(HAZARD_NEURAL_OUTPUT_DIR, "lag_selection")
 HAZARD_BEHAVIOR_FIT_TIMING_CONTROL_MODELS = bool(HAZARD_BEHAVIOR_TIMING_CONTROL_CONFIG.get("fit_models", False))
 HAZARD_BEHAVIOR_RUN_R_GLMM_LAG_SWEEP = bool(HAZARD_BEHAVIOR_TIMING_CONTROL_CONFIG.get("run_r_glmm_lag_sweep", True))
@@ -230,28 +219,6 @@ HAZARD_NEURAL_ALL_OUTPUTS = [
     *HAZARD_NEURAL_MODEL_OUTPUTS,
     *HAZARD_NEURAL_FIGURES,
 ]
-HAZARD_NEURAL_CLUSTERING_OUTPUTS = [
-    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/tables/neural_clustering_event_features.csv",
-    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/tables/neural_clustering_event_features_with_pcs.csv",
-    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/models/neural_clustering_pca_summary.csv",
-    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/models/neural_clustering_pca_loadings.csv",
-    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/models/neural_clustering_gmm_model_selection.csv",
-    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/models/neural_clustering_gmm_primary_assignments.csv",
-    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/models/neural_clustering_gmm_primary_parameters.csv",
-    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/models/neural_clustering_latency_by_cluster.csv",
-    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/models/neural_clustering_latency_regression_summary.csv",
-    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/models/neural_clustering_long_latency_summary.csv",
-    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/models/neural_clustering_evaluation_metrics.json",
-    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/qc/neural_clustering_qc.json",
-    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/figures/neural_clustering_pca_variance.png",
-    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/figures/neural_clustering_k_selection.png",
-    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/figures/neural_clustering_pca_scatter_k{HAZARD_NEURAL_CLUSTERING_PRIMARY_K}.png",
-    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/figures/neural_clustering_pca_scatter_p_state2.png",
-    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/figures/neural_clustering_latency_by_cluster.png",
-    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/figures/neural_clustering_state_probability_vs_latency.png",
-    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/figures/neural_clustering_long_latency_by_cluster.png",
-    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/figures/neural_clustering_feature_loadings.png",
-]
 # Dedicated low-level neural lag-selection outputs.
 # Kept in a separate subdirectory so the legacy fixed-window neural outputs remain reproducible.
 HAZARD_NEURAL_LAG_SELECTION_OUTPUTS = [
@@ -412,11 +379,6 @@ def _hazard_neural_lowlevel_inputs(wildcards) -> list[str]:
     return [EVENTS_CSV_OUTPUT, *surprisal_matches, *lowlevel_matches]
 
 
-def _hazard_neural_clustering_inputs(wildcards) -> list[str]:
-    del wildcards
-    return [HAZARD_NEURAL_RISKSET_OUTPUTS[0], *_hazard_neural_lowlevel_inputs(wildcards=None)]
-
-
 rule hazard_neural_lowlevel:
     input:
         _hazard_neural_lowlevel_inputs,
@@ -528,38 +490,6 @@ rule hazard_neural_permutation_null:
           --delta-criterion "{params.delta_criterion}" \
           --n-jobs "{params.n_jobs}" \
           {params.optional_flags}
-        """
-
-
-rule run_fpp_neural_clustering:
-    input:
-        _hazard_neural_clustering_inputs,
-    output:
-        HAZARD_NEURAL_CLUSTERING_OUTPUTS
-    params:
-        config_path=f"{PROJECT_ROOT}/config/neural_clustering_fpp.yaml",
-        riskset_path=HAZARD_NEURAL_CLUSTERING_INPUT_CONFIG.get("fpp_riskset_path", HAZARD_NEURAL_RISKSET_OUTPUTS[0]),
-        output_dir=HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR,
-        lowlevel_glob=lambda wildcards: os.path.join(
-            OUT_DIR,
-            "features",
-            "neural_lowlevel",
-            "**",
-            "*desc-lowlevelNeural_features.tsv",
-        ),
-        selected_lags_json=f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/models/behaviour_timing_control_selected_lags.json",
-    shell:
-        r"""
-        set -euo pipefail
-        mkdir -p "{resources.tmpdir}/mpl" "{resources.tmpdir}/cache"
-        MPLCONFIGDIR="{resources.tmpdir}/mpl" XDG_CACHE_HOME="{resources.tmpdir}/cache" \
-        PYTHONPATH="{SRC_DIR}:{PROJECT_ROOT}" "{PYTHON_BIN}" -m cas.cli.main run-fpp-neural-clustering \
-          --config "{params.config_path}" \
-          --fpp-riskset-path "{params.riskset_path}" \
-          --neural-features-path "{params.lowlevel_glob}" \
-          --selected-lags-json "{params.selected_lags_json}" \
-          --output-dir "{params.output_dir}" \
-          --overwrite
         """
 
 

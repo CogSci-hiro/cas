@@ -55,10 +55,6 @@ from cas.cli.commands.run_fpp_neural_permutation_null import (
     add_run_fpp_neural_permutation_null_parser,
     run_fpp_neural_permutation_null_command,
 )
-from cas.cli.commands.run_fpp_neural_clustering import (
-    add_run_fpp_neural_clustering_parser,
-    run_fpp_neural_clustering_command,
-)
 from cas.cli.commands.plot_tde_hmm_qc import (
     add_plot_tde_hmm_qc_parser,
     run_plot_tde_hmm_qc_command,
@@ -203,7 +199,6 @@ def _build_parser() -> argparse.ArgumentParser:
     add_plot_behaviour_glmm_results_parser(subparsers)
     add_plot_behaviour_latency_regime_results_parser(subparsers)
     add_plot_tde_hmm_qc_parser(subparsers)
-    add_run_fpp_neural_clustering_parser(subparsers)
     add_run_fpp_neural_permutation_null_parser(subparsers)
 
     trf_parser = subparsers.add_parser("trf", help="Run TRF nested CV from run-wise arrays.")
@@ -1411,8 +1406,6 @@ def main() -> int:
         return run_plot_behaviour_latency_regime_results_command(args)
     if args.command == "plot-tde-hmm-qc":
         return run_plot_tde_hmm_qc_command(args)
-    if args.command == "run-fpp-neural-clustering":
-        return run_fpp_neural_clustering_command(args)
     if args.command == "run-fpp-neural-permutation-null":
         return run_fpp_neural_permutation_null_command(args)
     if args.command == "trf":

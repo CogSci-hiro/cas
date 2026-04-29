@@ -238,11 +238,6 @@ rule hazard_neural_permutation_null_all:
         *HAZARD_NEURAL_PERMUTATION_NULL_OUTPUTS
 
 
-rule neural_clustering_fpp:
-    input:
-        *HAZARD_NEURAL_CLUSTERING_OUTPUTS
-
-
 rule hazard_neural_figures_all:
     input:
         *HAZARD_NEURAL_FIGURES

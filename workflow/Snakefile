@@ -26,7 +26,6 @@ EVENTS_CONFIG_PATH = f"{CONFIG_DIR}/events.yaml"
 EPOCHS_CONFIG_PATH = f"{CONFIG_DIR}/epochs.yaml"
 HMM_CONFIG_PATH = f"{CONFIG_DIR}/hmm.yaml"
 HAZARD_BEHAVIOR_CONFIG_PATH = f"{CONFIG_DIR}/hazard_behavior.yaml"
-HAZARD_FPP_NEURAL_CLUSTERING_CONFIG_PATH = f"{CONFIG_DIR}/neural_clustering_fpp.yaml"
 HAZARD_FPP_NEURAL_PERMUTATION_NULL_CONFIG_PATH = f"{CONFIG_DIR}/hazard_fpp_neural_permutation_null.yaml"
 DYADS_CSV_PATH = f"{CONFIG_DIR}/dyads.csv"
 with open(PATHS_CONFIG_PATH, encoding="utf-8") as f:
@@ -45,8 +44,6 @@ with open(HMM_CONFIG_PATH, encoding="utf-8") as f:
     HMM_CONFIG = yaml.safe_load(f) or {}
 with open(HAZARD_BEHAVIOR_CONFIG_PATH, encoding="utf-8") as f:
     HAZARD_BEHAVIOR_CONFIG = yaml.safe_load(f) or {}
-with open(HAZARD_FPP_NEURAL_CLUSTERING_CONFIG_PATH, encoding="utf-8") as f:
-    HAZARD_FPP_NEURAL_CLUSTERING_CONFIG = yaml.safe_load(f) or {}
 with open(HAZARD_FPP_NEURAL_PERMUTATION_NULL_CONFIG_PATH, encoding="utf-8") as f:
     HAZARD_FPP_NEURAL_PERMUTATION_NULL_CONFIG = yaml.safe_load(f) or {}
 
