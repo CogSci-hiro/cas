@@ -47,6 +47,24 @@ def add_hazard_fpp_tde_hmm_parser(
     parser.add_argument("--neural-max-followup-s", type=float, default=None)
     parser.add_argument("--neural-window-start-lag-s", type=float, default=None)
     parser.add_argument("--neural-window-end-lag-s", type=float, default=None)
+    parser.add_argument("--select-neural-lags", dest="select_neural_lags", action="store_true")
+    parser.add_argument("--no-select-neural-lags", dest="select_neural_lags", action="store_false")
+    parser.set_defaults(select_neural_lags=None)
+    parser.add_argument(
+        "--neural-lag-grid-ms",
+        default=None,
+        help="Comma-separated lag windows in milliseconds, e.g. 50-250,100-500.",
+    )
+    parser.add_argument(
+        "--neural-lag-selection-criterion",
+        choices=["bic"],
+        default=None,
+        help="Lag-selection criterion for neural low-level models.",
+    )
+    parser.add_argument("--neural-null-permutations", type=int, default=None)
+    parser.add_argument("--skip-spp-on-failure", dest="skip_spp_on_failure", action="store_true")
+    parser.add_argument("--no-skip-spp-on-failure", dest="skip_spp_on_failure", action="store_false")
+    parser.set_defaults(skip_spp_on_failure=None)
     parser.add_argument("--neural-pca-mode", choices=["count", "variance"], default=None)
     parser.add_argument("--neural-pca-count", type=int, default=None)
     parser.add_argument("--neural-pca-variance-threshold", type=float, default=None)
@@ -117,6 +135,40 @@ def run_hazard_fpp_tde_hmm_command(args: argparse.Namespace) -> int:
             enabled=True,
         )
     if (
+        args.select_neural_lags is not None
+        or args.neural_lag_grid_ms is not None
+        or args.neural_lag_selection_criterion is not None
+        or args.neural_null_permutations is not None
+        or args.skip_spp_on_failure is not None
+    ):
+        neural_config = replace(
+            neural_config,
+            select_neural_lags=(
+                bool(args.select_neural_lags)
+                if args.select_neural_lags is not None
+                else neural_config.select_neural_lags
+            ),
+            neural_lag_grid_ms=(
+                _parse_neural_lag_grid_ms(args.neural_lag_grid_ms)
+                if args.neural_lag_grid_ms is not None
+                else neural_config.neural_lag_grid_ms
+            ),
+            neural_lag_selection_criterion=str(
+                args.neural_lag_selection_criterion or neural_config.neural_lag_selection_criterion
+            ),
+            neural_null_permutations=(
+                int(args.neural_null_permutations)
+                if args.neural_null_permutations is not None
+                else neural_config.neural_null_permutations
+            ),
+            skip_spp_on_failure=(
+                bool(args.skip_spp_on_failure)
+                if args.skip_spp_on_failure is not None
+                else neural_config.skip_spp_on_failure
+            ),
+            enabled=True,
+        )
+    if (
         args.neural_pca_mode is not None
         or args.neural_pca_count is not None
         or args.neural_pca_variance_threshold is not None
@@ -140,3 +192,20 @@ def run_hazard_fpp_tde_hmm_command(args: argparse.Namespace) -> int:
     result = run_hazard_analysis(config)
     print(result.output_dir)
     return 0
+
+
+def _parse_neural_lag_grid_ms(value: str) -> tuple[tuple[int, int], ...]:
+    windows: list[tuple[int, int]] = []
+    for part in str(value).split(","):
+        window_text = part.strip()
+        if not window_text:
+            continue
+        pieces = window_text.split("-", 1)
+        if len(pieces) != 2:
+            raise ValueError("`--neural-lag-grid-ms` entries must look like start-end in milliseconds.")
+        lag_start_ms = int(pieces[0].strip())
+        lag_end_ms = int(pieces[1].strip())
+        windows.append((lag_start_ms, lag_end_ms))
+    if not windows:
+        raise ValueError("`--neural-lag-grid-ms` must contain at least one lag window.")
+    return tuple(windows)

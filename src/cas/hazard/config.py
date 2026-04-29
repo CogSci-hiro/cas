@@ -187,6 +187,18 @@ class NeuralHazardConfig:
     window: NeuralWindowConfig = field(default_factory=NeuralWindowConfig)
     pca: NeuralPcaConfig = field(default_factory=NeuralPcaConfig)
     model: NeuralModelConfig = field(default_factory=NeuralModelConfig)
+    select_neural_lags: bool = False
+    neural_lag_grid_ms: tuple[tuple[int, int], ...] = (
+        (50, 250),
+        (100, 300),
+        (100, 500),
+        (300, 500),
+        (300, 700),
+        (500, 900),
+    )
+    neural_lag_selection_criterion: Literal["bic"] = "bic"
+    neural_null_permutations: int = 100
+    skip_spp_on_failure: bool = True
 
     def validate(self) -> None:
         if not self.enabled:
@@ -221,6 +233,17 @@ class NeuralHazardConfig:
             raise ValueError("`neural.model.baseline_spline_degree` must be at least 1.")
         if self.model.information_rate_lag_ms < 0 or self.model.prop_expected_lag_ms < 0:
             raise ValueError("Neural behavioural-control lags must be non-negative.")
+        if self.neural_lag_selection_criterion != "bic":
+            raise ValueError("`neural.neural_lag_selection_criterion` must be `bic`.")
+        if self.neural_null_permutations < 0:
+            raise ValueError("`neural.neural_null_permutations` must be non-negative.")
+        if not self.neural_lag_grid_ms:
+            raise ValueError("`neural.neural_lag_grid_ms` must contain at least one lag window.")
+        for lag_start_ms, lag_end_ms in self.neural_lag_grid_ms:
+            if int(lag_start_ms) <= 0:
+                raise ValueError("Neural lag windows must satisfy lag_start_ms > 0.")
+            if int(lag_end_ms) <= int(lag_start_ms):
+                raise ValueError("Neural lag windows must satisfy lag_end_ms > lag_start_ms.")
         unsupported_events = sorted(set(self.event_types) - {"fpp", "spp"})
         if unsupported_events:
             raise ValueError(f"Unsupported neural event type(s): {unsupported_events}")
@@ -450,6 +473,26 @@ def load_hazard_analysis_config(config_path: str | Path) -> HazardAnalysisConfig
                 information_rate_lag_ms=int(neural_model_payload.get("information_rate_lag_ms", 150)),
                 prop_expected_lag_ms=int(neural_model_payload.get("prop_expected_lag_ms", 700)),
             ),
+            select_neural_lags=bool(neural_payload.get("select_neural_lags", False)),
+            neural_lag_grid_ms=tuple(
+                (int(lag_window["lag_start_ms"]), int(lag_window["lag_end_ms"]))
+                for lag_window in neural_payload.get(
+                    "neural_lag_grid_ms",
+                    (
+                        {"lag_start_ms": 50, "lag_end_ms": 250},
+                        {"lag_start_ms": 100, "lag_end_ms": 300},
+                        {"lag_start_ms": 100, "lag_end_ms": 500},
+                        {"lag_start_ms": 300, "lag_end_ms": 500},
+                        {"lag_start_ms": 300, "lag_end_ms": 700},
+                        {"lag_start_ms": 500, "lag_end_ms": 900},
+                    ),
+                )
+            ),
+            neural_lag_selection_criterion=str(
+                neural_payload.get("neural_lag_selection_criterion", "bic")
+            ),
+            neural_null_permutations=int(neural_payload.get("neural_null_permutations", 100)),
+            skip_spp_on_failure=bool(neural_payload.get("skip_spp_on_failure", True)),
         ),
     )
     config.validate()
@@ -590,5 +633,13 @@ def config_to_metadata_dict(config: HazardAnalysisConfig) -> dict[str, Any]:
                 "information_rate_lag_ms": config.neural.model.information_rate_lag_ms,
                 "prop_expected_lag_ms": config.neural.model.prop_expected_lag_ms,
             },
+            "select_neural_lags": config.neural.select_neural_lags,
+            "neural_lag_grid_ms": [
+                {"lag_start_ms": int(lag_start_ms), "lag_end_ms": int(lag_end_ms)}
+                for lag_start_ms, lag_end_ms in config.neural.neural_lag_grid_ms
+            ],
+            "neural_lag_selection_criterion": config.neural.neural_lag_selection_criterion,
+            "neural_null_permutations": config.neural.neural_null_permutations,
+            "skip_spp_on_failure": config.neural.skip_spp_on_failure,
         },
     }

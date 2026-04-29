@@ -7,9 +7,15 @@ HAZARD_BEHAVIOR_TIMING_CONTROL_CONFIG = dict(HAZARD_BEHAVIOR_WORKFLOW_CONFIG.get
 HAZARD_NEURAL_PERMUTATION_WORKFLOW_CONFIG = (
     HAZARD_FPP_NEURAL_PERMUTATION_NULL_CONFIG if isinstance(HAZARD_FPP_NEURAL_PERMUTATION_NULL_CONFIG, dict) else {}
 )
+HAZARD_NEURAL_CLUSTERING_WORKFLOW_CONFIG = (
+    HAZARD_FPP_NEURAL_CLUSTERING_CONFIG if isinstance(HAZARD_FPP_NEURAL_CLUSTERING_CONFIG, dict) else {}
+)
 HAZARD_NEURAL_PERMUTATION_INPUT_CONFIG = dict(HAZARD_NEURAL_PERMUTATION_WORKFLOW_CONFIG.get("input") or {})
 HAZARD_NEURAL_PERMUTATION_OUTPUT_CONFIG = dict(HAZARD_NEURAL_PERMUTATION_WORKFLOW_CONFIG.get("output") or {})
 HAZARD_NEURAL_PERMUTATION_RUN_CONFIG = dict(HAZARD_NEURAL_PERMUTATION_WORKFLOW_CONFIG.get("permutation") or {})
+HAZARD_NEURAL_CLUSTERING_INPUT_CONFIG = dict(HAZARD_NEURAL_CLUSTERING_WORKFLOW_CONFIG.get("input") or {})
+HAZARD_NEURAL_CLUSTERING_OUTPUT_CONFIG = dict(HAZARD_NEURAL_CLUSTERING_WORKFLOW_CONFIG.get("output") or {})
+HAZARD_NEURAL_CLUSTERING_GMM_CONFIG = dict(HAZARD_NEURAL_CLUSTERING_WORKFLOW_CONFIG.get("gmm") or {})
 
 
 def _resolve_hazard_behavior_output_dir(config_value: str | None, default_subdir: str) -> str:
@@ -29,6 +35,12 @@ HAZARD_NEURAL_OUTPUT_DIR = _resolve_hazard_behavior_output_dir(
     HAZARD_BEHAVIOR_OUTPUT_CONFIG.get("neural_output_dir"),
     "reports/hazard_neural_fpp",
 )
+HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR = _resolve_hazard_behavior_output_dir(
+    HAZARD_NEURAL_CLUSTERING_OUTPUT_CONFIG.get("output_dir"),
+    "reports/hazard_neural_fpp/neural_clustering_fpp",
+)
+HAZARD_NEURAL_CLUSTERING_PRIMARY_K = int(HAZARD_NEURAL_CLUSTERING_GMM_CONFIG.get("primary_k", 2))
+HAZARD_NEURAL_LAG_SELECTION_OUTPUT_DIR = os.path.join(HAZARD_NEURAL_OUTPUT_DIR, "lag_selection")
 HAZARD_BEHAVIOR_FIT_TIMING_CONTROL_MODELS = bool(HAZARD_BEHAVIOR_TIMING_CONTROL_CONFIG.get("fit_models", False))
 HAZARD_BEHAVIOR_RUN_R_GLMM_LAG_SWEEP = bool(HAZARD_BEHAVIOR_TIMING_CONTROL_CONFIG.get("run_r_glmm_lag_sweep", True))
 HAZARD_BEHAVIOR_R_GLMM_LAG_GRID = ",".join(
@@ -163,6 +175,40 @@ HAZARD_BEHAVIOR_LATENCY_REGIME_FIGURES = (
     if HAZARD_BEHAVIOR_FIT_TIMING_CONTROL_MODELS
     else []
 )
+HAZARD_BEHAVIOR_LATENCY_REGIME_BIMODALITY_FIGURES = (
+    [
+        f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/figures/behaviour_latency_regime_conditional_density_fixed_predictors.png",
+        f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/figures/behaviour_latency_regime_ppc_by_expected_info_quantile.png",
+        f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/figures/behaviour_latency_regime_ppc_by_information_rate_quantile.png",
+        f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/figures/behaviour_latency_regime_r_model_residual_density.png",
+        f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/figures/behaviour_latency_regime_pointwise_elpd_c_minus_r_by_latency.png",
+        f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/figures/behaviour_latency_regime_pointwise_elpd_c_minus_r_by_expected_info.png",
+        f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/figures/behaviour_latency_regime_pointwise_elpd_c_minus_r_by_information_rate.png",
+        f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/figures/behaviour_latency_regime_pointwise_elpd_c_minus_r_by_p_late.png",
+        f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/figures/behaviour_latency_regime_p_late_vs_r_mu.png",
+        f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/figures/behaviour_latency_regime_latency_vs_r_mu_coloured_by_p_late.png",
+        f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/figures/behaviour_latency_regime_latency_vs_information_rate_coloured_by_p_late.png",
+        f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/figures/behaviour_latency_regime_latency_vs_expected_cum_info_coloured_by_p_late.png",
+        f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/figures/behaviour_latency_regime_counterfactual_predictor_distribution.png",
+    ]
+    if HAZARD_BEHAVIOR_FIT_TIMING_CONTROL_MODELS
+    else []
+)
+HAZARD_BEHAVIOR_LATENCY_REGIME_BIMODALITY_DIAGNOSTICS = (
+    [
+        f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/diagnostics/latency_regime_conditional_density_fixed_predictors.csv",
+        f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/diagnostics/latency_regime_ppc_by_predictor_quantile.csv",
+        f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/diagnostics/latency_regime_r_model_residuals.csv",
+        f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/diagnostics/latency_regime_r_model_residual_bimodality_summary.csv",
+        f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/diagnostics/latency_regime_pointwise_elpd_differences.csv",
+        f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/diagnostics/latency_regime_p_late_vs_r_predictions.csv",
+        f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/diagnostics/latency_regime_p_late_r_prediction_correlations.csv",
+        f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/diagnostics/latency_regime_counterfactual_predictor_distribution.csv",
+        f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/diagnostics/latency_regime_conditional_vs_marginal_bimodality_report.md",
+    ]
+    if HAZARD_BEHAVIOR_FIT_TIMING_CONTROL_MODELS
+    else []
+)
 
 HAZARD_NEURAL_RISKSET_OUTPUTS = [
     f"{HAZARD_NEURAL_OUTPUT_DIR}/riskset/neural_fpp_hazard_table.parquet",
@@ -183,6 +229,41 @@ HAZARD_NEURAL_ALL_OUTPUTS = [
     *HAZARD_NEURAL_RISKSET_OUTPUTS,
     *HAZARD_NEURAL_MODEL_OUTPUTS,
     *HAZARD_NEURAL_FIGURES,
+]
+HAZARD_NEURAL_CLUSTERING_OUTPUTS = [
+    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/tables/neural_clustering_event_features.csv",
+    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/tables/neural_clustering_event_features_with_pcs.csv",
+    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/models/neural_clustering_pca_summary.csv",
+    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/models/neural_clustering_pca_loadings.csv",
+    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/models/neural_clustering_gmm_model_selection.csv",
+    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/models/neural_clustering_gmm_primary_assignments.csv",
+    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/models/neural_clustering_gmm_primary_parameters.csv",
+    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/models/neural_clustering_latency_by_cluster.csv",
+    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/models/neural_clustering_latency_regression_summary.csv",
+    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/models/neural_clustering_long_latency_summary.csv",
+    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/models/neural_clustering_evaluation_metrics.json",
+    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/qc/neural_clustering_qc.json",
+    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/figures/neural_clustering_pca_variance.png",
+    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/figures/neural_clustering_k_selection.png",
+    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/figures/neural_clustering_pca_scatter_k{HAZARD_NEURAL_CLUSTERING_PRIMARY_K}.png",
+    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/figures/neural_clustering_pca_scatter_p_state2.png",
+    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/figures/neural_clustering_latency_by_cluster.png",
+    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/figures/neural_clustering_state_probability_vs_latency.png",
+    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/figures/neural_clustering_long_latency_by_cluster.png",
+    f"{HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR}/figures/neural_clustering_feature_loadings.png",
+]
+# Dedicated low-level neural lag-selection outputs.
+# Kept in a separate subdirectory so the legacy fixed-window neural outputs remain reproducible.
+HAZARD_NEURAL_LAG_SELECTION_OUTPUTS = [
+    f"{HAZARD_NEURAL_LAG_SELECTION_OUTPUT_DIR}/models/neural_lowlevel_lag_selection.csv",
+    f"{HAZARD_NEURAL_LAG_SELECTION_OUTPUT_DIR}/models/neural_lowlevel_selected_lags.json",
+    f"{HAZARD_NEURAL_LAG_SELECTION_OUTPUT_DIR}/models/neural_lowlevel_model_comparison.csv",
+    f"{HAZARD_NEURAL_LAG_SELECTION_OUTPUT_DIR}/models/neural_lowlevel_selected_model_comparison.csv",
+    f"{HAZARD_NEURAL_LAG_SELECTION_OUTPUT_DIR}/models/neural_lowlevel_lag_null_summary.csv",
+    f"{HAZARD_NEURAL_LAG_SELECTION_OUTPUT_DIR}/models/neural_lowlevel_fit_metrics.json",
+    f"{HAZARD_NEURAL_LAG_SELECTION_OUTPUT_DIR}/figures/neural_lowlevel_delta_bic_by_lag.png",
+    f"{HAZARD_NEURAL_LAG_SELECTION_OUTPUT_DIR}/figures/neural_lowlevel_lag_null_comparison.png",
+    f"{HAZARD_NEURAL_LAG_SELECTION_OUTPUT_DIR}/figures/neural_lowlevel_selected_model_comparison.png",
 ]
 HAZARD_NEURAL_PERMUTATION_NULL_OUTPUT_DIR = _resolve_hazard_behavior_output_dir(
     HAZARD_NEURAL_PERMUTATION_OUTPUT_CONFIG.get("output_dir"),
@@ -331,6 +412,11 @@ def _hazard_neural_lowlevel_inputs(wildcards) -> list[str]:
     return [EVENTS_CSV_OUTPUT, *surprisal_matches, *lowlevel_matches]
 
 
+def _hazard_neural_clustering_inputs(wildcards) -> list[str]:
+    del wildcards
+    return [HAZARD_NEURAL_RISKSET_OUTPUTS[0], *_hazard_neural_lowlevel_inputs(wildcards=None)]
+
+
 rule hazard_neural_lowlevel:
     input:
         _hazard_neural_lowlevel_inputs,
@@ -361,6 +447,49 @@ rule hazard_neural_lowlevel:
           --neural-out-dir "{params.neural_out_dir}" \
           --neural-surprisal "{params.surprisal_glob}" \
           --neural-lowlevel "{params.lowlevel_glob}"
+        """
+
+
+rule hazard_neural_lowlevel_lag_selection:
+    # Explicit Snakemake entrypoint for guarded causal neural lag selection.
+    # This keeps lag-sweep artifacts separate from the default fixed-window neural hazard run.
+    input:
+        _hazard_neural_lowlevel_inputs,
+    output:
+        HAZARD_NEURAL_LAG_SELECTION_OUTPUTS
+    params:
+        config_path=f"{PROJECT_ROOT}/config/hazard_fpp_tde_hmm.yaml",
+        neural_out_dir=HAZARD_NEURAL_LAG_SELECTION_OUTPUT_DIR,
+        surprisal_glob=lambda wildcards: os.path.join(
+            LM_FEATURE_DIR,
+            "**",
+            "*desc-lmSurprisal_features.tsv",
+        ),
+        lowlevel_glob=lambda wildcards: os.path.join(
+            OUT_DIR,
+            "features",
+            "neural_lowlevel",
+            "**",
+            "*desc-lowlevelNeural_features.tsv",
+        ),
+    shell:
+        r"""
+        set -euo pipefail
+        mkdir -p "{resources.tmpdir}/mpl" "{resources.tmpdir}/cache"
+        echo "[hazard_neural_lowlevel_lag_selection] Starting guarded causal neural lag selection."
+        echo "[hazard_neural_lowlevel_lag_selection] Output directory: {params.neural_out_dir}"
+        echo "[hazard_neural_lowlevel_lag_selection] Neural inputs: surprisal={params.surprisal_glob} lowlevel={params.lowlevel_glob}"
+        echo "[hazard_neural_lowlevel_lag_selection] Enabling lag sweep, delta-BIC selection, and skip-spp-on-failure."
+        MPLCONFIGDIR="{resources.tmpdir}/mpl" XDG_CACHE_HOME="{resources.tmpdir}/cache" \
+        PYTHONPATH="{SRC_DIR}:{PROJECT_ROOT}" "{PYTHON_BIN}" -m cas.cli.main hazard-fpp-tde-hmm \
+          --config "{params.config_path}" \
+          --neural-out-dir "{params.neural_out_dir}" \
+          --neural-surprisal "{params.surprisal_glob}" \
+          --neural-lowlevel "{params.lowlevel_glob}" \
+          --select-neural-lags \
+          --neural-lag-selection-criterion bic \
+          --skip-spp-on-failure
+        echo "[hazard_neural_lowlevel_lag_selection] Finished neural lag selection."
         """
 
 
@@ -399,6 +528,38 @@ rule hazard_neural_permutation_null:
           --delta-criterion "{params.delta_criterion}" \
           --n-jobs "{params.n_jobs}" \
           {params.optional_flags}
+        """
+
+
+rule run_fpp_neural_clustering:
+    input:
+        _hazard_neural_clustering_inputs,
+    output:
+        HAZARD_NEURAL_CLUSTERING_OUTPUTS
+    params:
+        config_path=f"{PROJECT_ROOT}/config/neural_clustering_fpp.yaml",
+        riskset_path=HAZARD_NEURAL_CLUSTERING_INPUT_CONFIG.get("fpp_riskset_path", HAZARD_NEURAL_RISKSET_OUTPUTS[0]),
+        output_dir=HAZARD_NEURAL_CLUSTERING_OUTPUT_DIR,
+        lowlevel_glob=lambda wildcards: os.path.join(
+            OUT_DIR,
+            "features",
+            "neural_lowlevel",
+            "**",
+            "*desc-lowlevelNeural_features.tsv",
+        ),
+        selected_lags_json=f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/models/behaviour_timing_control_selected_lags.json",
+    shell:
+        r"""
+        set -euo pipefail
+        mkdir -p "{resources.tmpdir}/mpl" "{resources.tmpdir}/cache"
+        MPLCONFIGDIR="{resources.tmpdir}/mpl" XDG_CACHE_HOME="{resources.tmpdir}/cache" \
+        PYTHONPATH="{SRC_DIR}:{PROJECT_ROOT}" "{PYTHON_BIN}" -m cas.cli.main run-fpp-neural-clustering \
+          --config "{params.config_path}" \
+          --fpp-riskset-path "{params.riskset_path}" \
+          --neural-features-path "{params.lowlevel_glob}" \
+          --selected-lags-json "{params.selected_lags_json}" \
+          --output-dir "{params.output_dir}" \
+          --overwrite
         """
 
 
@@ -607,5 +768,65 @@ if HAZARD_BEHAVIOR_FIT_TIMING_CONTROL_MODELS:
               --stan-results-dir "{params.stan_results_dir}" \
               --event-data-csv "{input.event_csv}" \
               --output-dir "{params.output_dir}" \
+              --verbose
+            """
+
+
+    rule diagnose_behaviour_latency_regime_bimodality:
+        input:
+            event_csv=HAZARD_BEHAVIOR_LATENCY_REGIME_EXPORT_OUTPUTS[0],
+            model_a_summary=HAZARD_BEHAVIOR_LATENCY_REGIME_MODEL_OUTPUTS[0],
+            model_s_summary=HAZARD_BEHAVIOR_LATENCY_REGIME_MODEL_OUTPUTS[1],
+            model_b_summary=HAZARD_BEHAVIOR_LATENCY_REGIME_MODEL_OUTPUTS[2],
+            model_c_summary=HAZARD_BEHAVIOR_LATENCY_REGIME_MODEL_OUTPUTS[3],
+            model_r1_summary=HAZARD_BEHAVIOR_LATENCY_REGIME_MODEL_OUTPUTS[4],
+            model_r2_summary=HAZARD_BEHAVIOR_LATENCY_REGIME_MODEL_OUTPUTS[5],
+            model_r3_summary=HAZARD_BEHAVIOR_LATENCY_REGIME_MODEL_OUTPUTS[6],
+            model_r4_summary=HAZARD_BEHAVIOR_LATENCY_REGIME_MODEL_OUTPUTS[7],
+            loo_comparison=HAZARD_BEHAVIOR_LATENCY_REGIME_MODEL_OUTPUTS[8],
+            fit_metrics=HAZARD_BEHAVIOR_LATENCY_REGIME_MODEL_OUTPUTS[9],
+            component_parameters=HAZARD_BEHAVIOR_LATENCY_REGIME_MODEL_OUTPUTS[10],
+            gating_coefficients=HAZARD_BEHAVIOR_LATENCY_REGIME_MODEL_OUTPUTS[11],
+            event_probabilities=HAZARD_BEHAVIOR_LATENCY_REGIME_MODEL_OUTPUTS[12],
+            posterior_predictive=HAZARD_BEHAVIOR_LATENCY_REGIME_MODEL_OUTPUTS[13],
+            regression_coefficients=HAZARD_BEHAVIOR_LATENCY_REGIME_MODEL_OUTPUTS[14],
+            regression_predictions=HAZARD_BEHAVIOR_LATENCY_REGIME_MODEL_OUTPUTS[15],
+            shifted_lognormal_diagnostics=HAZARD_BEHAVIOR_LATENCY_REGIME_MODEL_OUTPUTS[16],
+        output:
+            conditional_density_figure=HAZARD_BEHAVIOR_LATENCY_REGIME_BIMODALITY_FIGURES[0],
+            ppc_expected_info_figure=HAZARD_BEHAVIOR_LATENCY_REGIME_BIMODALITY_FIGURES[1],
+            ppc_information_rate_figure=HAZARD_BEHAVIOR_LATENCY_REGIME_BIMODALITY_FIGURES[2],
+            residual_density_figure=HAZARD_BEHAVIOR_LATENCY_REGIME_BIMODALITY_FIGURES[3],
+            elpd_latency_figure=HAZARD_BEHAVIOR_LATENCY_REGIME_BIMODALITY_FIGURES[4],
+            elpd_expected_info_figure=HAZARD_BEHAVIOR_LATENCY_REGIME_BIMODALITY_FIGURES[5],
+            elpd_information_rate_figure=HAZARD_BEHAVIOR_LATENCY_REGIME_BIMODALITY_FIGURES[6],
+            elpd_p_late_figure=HAZARD_BEHAVIOR_LATENCY_REGIME_BIMODALITY_FIGURES[7],
+            p_late_vs_r_mu_figure=HAZARD_BEHAVIOR_LATENCY_REGIME_BIMODALITY_FIGURES[8],
+            latency_vs_r_mu_figure=HAZARD_BEHAVIOR_LATENCY_REGIME_BIMODALITY_FIGURES[9],
+            latency_vs_information_rate_figure=HAZARD_BEHAVIOR_LATENCY_REGIME_BIMODALITY_FIGURES[10],
+            latency_vs_expected_cum_info_figure=HAZARD_BEHAVIOR_LATENCY_REGIME_BIMODALITY_FIGURES[11],
+            counterfactual_figure=HAZARD_BEHAVIOR_LATENCY_REGIME_BIMODALITY_FIGURES[12],
+            conditional_density_csv=HAZARD_BEHAVIOR_LATENCY_REGIME_BIMODALITY_DIAGNOSTICS[0],
+            ppc_by_quantile_csv=HAZARD_BEHAVIOR_LATENCY_REGIME_BIMODALITY_DIAGNOSTICS[1],
+            residuals_csv=HAZARD_BEHAVIOR_LATENCY_REGIME_BIMODALITY_DIAGNOSTICS[2],
+            residual_bimodality_csv=HAZARD_BEHAVIOR_LATENCY_REGIME_BIMODALITY_DIAGNOSTICS[3],
+            pointwise_elpd_csv=HAZARD_BEHAVIOR_LATENCY_REGIME_BIMODALITY_DIAGNOSTICS[4],
+            p_late_vs_r_csv=HAZARD_BEHAVIOR_LATENCY_REGIME_BIMODALITY_DIAGNOSTICS[5],
+            p_late_r_correlations_csv=HAZARD_BEHAVIOR_LATENCY_REGIME_BIMODALITY_DIAGNOSTICS[6],
+            counterfactual_csv=HAZARD_BEHAVIOR_LATENCY_REGIME_BIMODALITY_DIAGNOSTICS[7],
+            report_md=HAZARD_BEHAVIOR_LATENCY_REGIME_BIMODALITY_DIAGNOSTICS[8],
+        params:
+            stan_results_dir=f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/stan_models",
+            figures_dir=f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/figures",
+            diagnostics_dir=f"{HAZARD_BEHAVIOR_LATENCY_REGIME_OUTPUT_DIR}/diagnostics",
+        shell:
+            r"""
+            set -euo pipefail
+            echo "[latency-regime] Running conditional-vs-marginal bimodality diagnostics"
+            PYTHONPATH="{SRC_DIR}:{PROJECT_ROOT}" "{PYTHON_BIN}" -m cas.cli.main diagnose-behaviour-latency-regime-bimodality \
+              --stan-results-dir "{params.stan_results_dir}" \
+              --event-data-csv "{input.event_csv}" \
+              --figures-dir "{params.figures_dir}" \
+              --diagnostics-dir "{params.diagnostics_dir}" \
               --verbose
             """

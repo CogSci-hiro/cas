@@ -239,6 +239,7 @@ def build_lmeeeg_qc_manifest_from_model_payloads(
     out_dir: str | Path,
     model_payloads: dict[str, dict[str, object]],
     manifest_path: str | Path,
+    figure_subdir: str = "lmeeeg",
     significance_masks: dict[str, dict[str, np.ndarray]] | None = None,
     formats: tuple[str, ...] = ("png", "pdf"),
     dpi: int = 300,
@@ -274,7 +275,7 @@ def build_lmeeeg_qc_manifest_from_model_payloads(
                 if not np.isfinite(column_map).any():
                     continue
                 significance_mask = significance_masks.get(model_name, {}).get(column_name)
-                output_stem = out_dir / "figures" / "lmeeeg" / measure_dirname / model_name / _sanitize_token(column_name)
+                output_stem = out_dir / "figures" / figure_subdir / measure_dirname / model_name / _sanitize_token(column_name)
                 written_paths = plot_joint_model_weights(
                     column_map,
                     times=times,
@@ -308,6 +309,7 @@ def build_lmeeeg_qc_manifest_from_stats(
     stats_root: str | Path,
     manifest_path: str | Path,
     model_axes: dict[str, dict[str, object]],
+    figure_subdir: str = "lmeeeg",
     formats: tuple[str, ...] = ("png", "pdf"),
     dpi: int = 300,
 ) -> dict[str, object]:
@@ -341,7 +343,7 @@ def build_lmeeeg_qc_manifest_from_stats(
         )
         significance_mask = corrected_p_map < 0.05
 
-        stem = out_dir / "figures" / "lmeeeg" / "statistics" / model_name / _sanitize_token(effect_name)
+        stem = out_dir / "figures" / figure_subdir / "statistics" / model_name / _sanitize_token(effect_name)
         written = plot_joint_model_weights(
             observed_map,
             times=times,

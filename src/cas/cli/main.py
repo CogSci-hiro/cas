@@ -18,6 +18,10 @@ from cas.cli.commands.diagnose_behaviour_latency_regime import (
     add_diagnose_behaviour_latency_regime_parser,
     run_diagnose_behaviour_latency_regime_command,
 )
+from cas.cli.commands.diagnose_behaviour_latency_regime_bimodality import (
+    add_diagnose_behaviour_latency_regime_bimodality_parser,
+    run_diagnose_behaviour_latency_regime_bimodality_command,
+)
 from cas.cli.commands.diagnose_spp_neural_hazard_failure import (
     add_diagnose_spp_neural_hazard_failure_parser,
     run_diagnose_spp_neural_hazard_failure_command,
@@ -50,6 +54,10 @@ from cas.cli.commands.plot_behaviour_latency_regime_results import (
 from cas.cli.commands.run_fpp_neural_permutation_null import (
     add_run_fpp_neural_permutation_null_parser,
     run_fpp_neural_permutation_null_command,
+)
+from cas.cli.commands.run_fpp_neural_clustering import (
+    add_run_fpp_neural_clustering_parser,
+    run_fpp_neural_clustering_command,
 )
 from cas.cli.commands.plot_tde_hmm_qc import (
     add_plot_tde_hmm_qc_parser,
@@ -185,6 +193,7 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     add_annotations_parser(subparsers)
     add_diagnose_behaviour_latency_regime_parser(subparsers)
+    add_diagnose_behaviour_latency_regime_bimodality_parser(subparsers)
     add_diagnose_spp_neural_hazard_failure_parser(subparsers)
     add_export_behaviour_glmm_data_parser(subparsers)
     add_export_behaviour_latency_regime_data_parser(subparsers)
@@ -194,6 +203,7 @@ def _build_parser() -> argparse.ArgumentParser:
     add_plot_behaviour_glmm_results_parser(subparsers)
     add_plot_behaviour_latency_regime_results_parser(subparsers)
     add_plot_tde_hmm_qc_parser(subparsers)
+    add_run_fpp_neural_clustering_parser(subparsers)
     add_run_fpp_neural_permutation_null_parser(subparsers)
 
     trf_parser = subparsers.add_parser("trf", help="Run TRF nested CV from run-wise arrays.")
@@ -520,6 +530,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Optional explicit viz.yaml path.",
     )
     figures_lmeeeg_parser.add_argument(
+        "--lmeeeg-config",
+        default=None,
+        help="Optional explicit lmeEEG config path.",
+    )
+    figures_lmeeeg_parser.add_argument(
         "--output",
         default=None,
         help="Optional explicit QC manifest output path.",
@@ -538,6 +553,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--viz-config",
         default=None,
         help="Optional explicit viz.yaml path.",
+    )
+    figures_lmeeeg_inference_parser.add_argument(
+        "--lmeeeg-config",
+        default=None,
+        help="Optional explicit lmeEEG config path.",
     )
     figures_lmeeeg_inference_parser.add_argument(
         "--output",
@@ -831,8 +851,32 @@ def _lmeeeg_analysis_root(out_dir: Path) -> Path:
     return out_dir / "lmeeeg"
 
 
-def _load_lmeeeg_analysis_summary(*, out_dir: Path) -> dict[str, object]:
+def _resolve_lmeeeg_config_path(*, config_root: Path, explicit_config_path: str | None) -> Path:
+    return Path(explicit_config_path).resolve() if explicit_config_path else config_root / "lmeeeg.yaml"
+
+
+def _lmeeeg_analysis_name(config: dict[str, object]) -> str | None:
+    value = str(config.get("analysis_name", "")).strip()
+    return value or None
+
+
+def _lmeeeg_figure_dirname(config: dict[str, object]) -> str:
+    return _lmeeeg_analysis_name(config) or "lmeeeg"
+
+
+def _lmeeeg_inference_figure_dirname(config: dict[str, object]) -> str:
+    analysis_name = _lmeeeg_analysis_name(config)
+    return f"{analysis_name}_inference" if analysis_name else "lmeeeg_inference"
+
+
+def _lmeeeg_analysis_root_for_config(out_dir: Path, *, config: dict[str, object]) -> Path:
     analysis_root = _lmeeeg_analysis_root(out_dir)
+    analysis_name = _lmeeeg_analysis_name(config)
+    return analysis_root / analysis_name if analysis_name else analysis_root
+
+
+def _load_lmeeeg_analysis_summary(*, out_dir: Path, config: dict[str, object]) -> dict[str, object]:
+    analysis_root = _lmeeeg_analysis_root_for_config(out_dir, config=config)
     summary_path = analysis_root / "lmeeeg_analysis_summary.json"
     if not summary_path.exists():
         raise FileNotFoundError(f"Missing pooled lmeEEG analysis summary: {summary_path}")
@@ -851,11 +895,16 @@ def _lmeeeg_model_label(model_name: str, band_name: str | None = None) -> str:
     return model_name
 
 
-def _load_lmeeeg_model_payloads(*, out_dir: Path, config_root: Path) -> dict[str, dict[str, object]]:
+def _load_lmeeeg_model_payloads(
+    *,
+    out_dir: Path,
+    lmeeeg_config_path: Path,
+    config: dict[str, object],
+) -> dict[str, dict[str, object]]:
     from cas.stats.lmeeeg_pipeline import load_lmeeeg_config
 
-    analysis_summary = _load_lmeeeg_analysis_summary(out_dir=out_dir)
-    config = load_lmeeeg_config(config_root / "lmeeeg.yaml")
+    analysis_summary = _load_lmeeeg_analysis_summary(out_dir=out_dir, config=config)
+    config = load_lmeeeg_config(lmeeeg_config_path)
     payloads: dict[str, dict[str, object]] = {}
 
     config_models = {str(name) for name in (config.get("models") or {}).keys()}
@@ -994,19 +1043,29 @@ def _run_figures_lmeeeg(args: argparse.Namespace) -> int:
         build_lmeeeg_qc_manifest_from_model_payloads,
         build_lmeeeg_qc_manifest_from_stats,
     )
+    from cas.stats.lmeeeg_pipeline import load_lmeeeg_config
 
     config_root = Path(args.config_root).resolve()
     out_dir = _resolve_out_dir(config_root)
+    lmeeeg_config_path = _resolve_lmeeeg_config_path(
+        config_root=config_root,
+        explicit_config_path=getattr(args, "lmeeeg_config", None),
+    )
+    lmeeeg_config = load_lmeeeg_config(lmeeeg_config_path)
+    figure_dirname = _lmeeeg_figure_dirname(lmeeeg_config)
     viz_section = _load_viz_section(config_root, args.viz_config)
     figure_section = dict((viz_section.get("figures") or {}).get("lmeeeg") or {})
     formats = tuple(figure_section.get("formats", viz_section.get("formats", ["png", "pdf"])))
     dpi = int(viz_section.get("dpi", 300))
-    output_path = Path(args.output) if args.output else out_dir / "figures" / "lmeeeg" / "figure_manifest.json"
+    output_path = Path(args.output) if args.output else out_dir / "figures" / figure_dirname / "figure_manifest.json"
 
-    analysis_root = _lmeeeg_analysis_root(out_dir)
-    analysis_summary = _load_lmeeeg_analysis_summary(out_dir=out_dir)
-    model_payloads = _load_lmeeeg_model_payloads(out_dir=out_dir, config_root=config_root)
-    stats_root = out_dir / "stats" / "lmeeeg"
+    analysis_summary = _load_lmeeeg_analysis_summary(out_dir=out_dir, config=lmeeeg_config)
+    model_payloads = _load_lmeeeg_model_payloads(
+        out_dir=out_dir,
+        lmeeeg_config_path=lmeeeg_config_path,
+        config=lmeeeg_config,
+    )
+    stats_root = out_dir / "stats" / figure_dirname
     significance_masks = _load_significance_masks(
         stats_root=stats_root,
         model_payloads=model_payloads,
@@ -1016,6 +1075,7 @@ def _run_figures_lmeeeg(args: argparse.Namespace) -> int:
         out_dir=out_dir,
         model_payloads=model_payloads,
         manifest_path=output_path,
+        figure_subdir=figure_dirname,
         significance_masks=significance_masks,
         formats=formats,
         dpi=dpi,
@@ -1035,6 +1095,7 @@ def _run_figures_lmeeeg(args: argparse.Namespace) -> int:
             stats_root=stats_root,
             manifest_path=output_path,
             model_axes=model_axes,
+            figure_subdir=figure_dirname,
             formats=formats,
             dpi=dpi,
         )
@@ -1052,16 +1113,23 @@ def _run_figures_lmeeeg(args: argparse.Namespace) -> int:
 
 def _run_figures_lmeeeg_inference(args: argparse.Namespace) -> int:
     from cas.viz.lmeeeg import plot_joint_model_weights
+    from cas.stats.lmeeeg_pipeline import load_lmeeeg_config
 
     config_root = Path(args.config_root).resolve()
     out_dir = _resolve_out_dir(config_root)
+    lmeeeg_config_path = _resolve_lmeeeg_config_path(
+        config_root=config_root,
+        explicit_config_path=getattr(args, "lmeeeg_config", None),
+    )
+    lmeeeg_config = load_lmeeeg_config(lmeeeg_config_path)
+    output_dirname = _lmeeeg_inference_figure_dirname(lmeeeg_config)
     viz_section = _load_viz_section(config_root, args.viz_config)
     figure_section = dict((viz_section.get("figures") or {}).get("lmeeeg_inference") or {})
     formats = tuple(figure_section.get("formats", viz_section.get("formats", ["png", "pdf"])))
     dpi = int(viz_section.get("dpi", 300))
-    output_path = Path(args.output) if args.output else out_dir / "figures" / "lmeeeg_inference" / "figure_manifest.json"
+    output_path = Path(args.output) if args.output else out_dir / "figures" / output_dirname / "figure_manifest.json"
 
-    analysis_summary = _load_lmeeeg_analysis_summary(out_dir=out_dir)
+    analysis_summary = _load_lmeeeg_analysis_summary(out_dir=out_dir, config=lmeeeg_config)
     plots: list[dict[str, object]] = []
     for model_summary in analysis_summary.get("models") or []:
         if not isinstance(model_summary, dict):
@@ -1103,7 +1171,7 @@ def _run_figures_lmeeeg_inference(args: argparse.Namespace) -> int:
             significance_mask = corrected_p_array < 0.05
             significance_map = np.where(significance_mask, observed_map, 0.0)
 
-            observed_stem = out_dir / "figures" / "lmeeeg_inference" / model_key / f"{_sanitize_token(effect_name)}_observed"
+            observed_stem = out_dir / "figures" / output_dirname / model_key / f"{_sanitize_token(effect_name)}_observed"
             observed_paths = plot_joint_model_weights(
                 observed_map,
                 times=times,
@@ -1115,7 +1183,7 @@ def _run_figures_lmeeeg_inference(args: argparse.Namespace) -> int:
                 line_width=2.5,
                 significance_mask=significance_mask,
             )
-            corrected_p_stem = out_dir / "figures" / "lmeeeg_inference" / model_key / f"{_sanitize_token(effect_name)}_corrected_p"
+            corrected_p_stem = out_dir / "figures" / output_dirname / model_key / f"{_sanitize_token(effect_name)}_corrected_p"
             corrected_p_paths = plot_joint_model_weights(
                 1.0 - corrected_p_array,
                 times=times,
@@ -1127,7 +1195,7 @@ def _run_figures_lmeeeg_inference(args: argparse.Namespace) -> int:
                 line_width=2.5,
                 significance_mask=significance_mask,
             )
-            pvalue_stem = out_dir / "figures" / "lmeeeg_inference" / model_key / f"{_sanitize_token(effect_name)}_p005_masked"
+            pvalue_stem = out_dir / "figures" / output_dirname / model_key / f"{_sanitize_token(effect_name)}_p005_masked"
             pvalue_paths = plot_joint_model_weights(
                 significance_map,
                 times=times,
@@ -1323,6 +1391,8 @@ def main() -> int:
         return run_annotations_command(args)
     if args.command == "diagnose-behaviour-latency-regime":
         return run_diagnose_behaviour_latency_regime_command(args)
+    if args.command == "diagnose-behaviour-latency-regime-bimodality":
+        return run_diagnose_behaviour_latency_regime_bimodality_command(args)
     if args.command == "diagnose-spp-neural-hazard-failure":
         return run_diagnose_spp_neural_hazard_failure_command(args)
     if args.command == "export-behaviour-glmm-data":
@@ -1341,6 +1411,8 @@ def main() -> int:
         return run_plot_behaviour_latency_regime_results_command(args)
     if args.command == "plot-tde-hmm-qc":
         return run_plot_tde_hmm_qc_command(args)
+    if args.command == "run-fpp-neural-clustering":
+        return run_fpp_neural_clustering_command(args)
     if args.command == "run-fpp-neural-permutation-null":
         return run_fpp_neural_permutation_null_command(args)
     if args.command == "trf":

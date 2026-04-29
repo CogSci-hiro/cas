@@ -332,33 +332,58 @@ def _write_tasklocked_epochs(*, input_eeg, input_raw, events_csv, output_epochs,
 
 
 LMEEEG_CONFIG_PATH = f"{CONFIG_DIR}/lmeeeg.yaml"
+FPP_SPP_CYCLE_POSITION_LMEEEG_CONFIG_PATH = f"{CONFIG_DIR}/lmeeeg_fpp_spp_cycle_position.yaml"
 LMEEEG_OUTPUT_DIR = f"{OUT_DIR}/lmeeeg"
 LMEEEG_SUMMARY_OUTPUT = f"{LMEEEG_OUTPUT_DIR}/lmeeeg_analysis_summary.json"
 LMEEEG_INDUCED_SUMMARY_OUTPUT = f"{LMEEEG_OUTPUT_DIR}/induced_lmeeeg_analysis_summary.json"
 
 
-def _load_lmeeeg_workflow_config() -> dict[str, object]:
-    with open(LMEEEG_CONFIG_PATH, encoding="utf-8") as handle:
+def _load_lmeeeg_workflow_config(config_path: str = LMEEEG_CONFIG_PATH) -> dict[str, object]:
+    with open(config_path, encoding="utf-8") as handle:
         payload = yaml.safe_load(handle) or {}
     if not isinstance(payload, dict):
-        raise ValueError(f"Expected a mapping in {LMEEEG_CONFIG_PATH}.")
+        raise ValueError(f"Expected a mapping in {config_path}.")
     section = payload.get("lmeeeg", payload)
     if not isinstance(section, dict):
-        raise ValueError(f"`lmeeeg` in {LMEEEG_CONFIG_PATH} must be a mapping.")
+        raise ValueError(f"`lmeeeg` in {config_path} must be a mapping.")
     loaded = dict(section)
     if "induced_epochs" in payload:
         loaded["induced_epochs"] = payload["induced_epochs"]
     return loaded
 
 
-def _induced_lmeeeg_model_names() -> list[str]:
-    models_cfg = dict(_load_lmeeeg_workflow_config().get("models") or {})
+def _induced_lmeeeg_model_names(config_path: str = LMEEEG_CONFIG_PATH) -> list[str]:
+    models_cfg = dict(_load_lmeeeg_workflow_config(config_path).get("models") or {})
     selected = [
         str(model_name)
         for model_name, model_cfg in models_cfg.items()
         if str((model_cfg or {}).get("modality", "evoked")).strip().lower() == "induced"
     ]
     return sorted(selected)
+
+
+def _lmeeeg_analysis_root_from_config(config_path: str) -> str:
+    config_payload = _load_lmeeeg_workflow_config(config_path)
+    analysis_name = str(config_payload.get("analysis_name", "")).strip()
+    return f"{OUT_DIR}/lmeeeg/{analysis_name}" if analysis_name else f"{OUT_DIR}/lmeeeg"
+
+
+FPP_SPP_CYCLE_POSITION_LMEEEG_OUTPUT_DIR = _lmeeeg_analysis_root_from_config(
+    FPP_SPP_CYCLE_POSITION_LMEEEG_CONFIG_PATH
+)
+FPP_SPP_CYCLE_POSITION_LMEEEG_SUMMARY_OUTPUT = (
+    f"{FPP_SPP_CYCLE_POSITION_LMEEEG_OUTPUT_DIR}/lmeeeg_analysis_summary.json"
+)
+FPP_SPP_CYCLE_POSITION_LMEEEG_INDUCED_BANDS = _load_lmeeeg_workflow_config(
+    FPP_SPP_CYCLE_POSITION_LMEEEG_CONFIG_PATH
+).get("induced_epochs", {}).get("bands", ["theta"])
+FPP_SPP_CYCLE_POSITION_LMEEEG_CONTRAST_OUTPUTS = expand(
+    (
+        f"{FPP_SPP_CYCLE_POSITION_LMEEEG_OUTPUT_DIR}/induced/{{band}}/"
+        "fpp_vs_spp_cycle_position/pair_positionFPP_beta.npy"
+    ),
+    band=[str(band) for band in FPP_SPP_CYCLE_POSITION_LMEEEG_INDUCED_BANDS],
+)
 
 
 rule make_epochs:
@@ -471,3 +496,24 @@ rule run_induced_lmeeeg:
 
         Path(output.summary).parent.mkdir(parents=True, exist_ok=True)
         Path(output.summary).write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+rule run_fpp_spp_cycle_position_lmeeeg:
+    input:
+        epochs=EPOCH_OUTPUTS,
+        induced=_induced_epoch_summary_outputs(),
+        config=FPP_SPP_CYCLE_POSITION_LMEEEG_CONFIG_PATH,
+    output:
+        summary=FPP_SPP_CYCLE_POSITION_LMEEEG_SUMMARY_OUTPUT,
+        contrast=FPP_SPP_CYCLE_POSITION_LMEEEG_CONTRAST_OUTPUTS,
+    run:
+        from cas.stats.lmeeeg_pipeline import run_pooled_lmeeeg_analysis
+
+        # First-pass active-sensing cycle-position contrast:
+        # FPP = initiation phase, SPP = response/update phase.
+        # This is not by itself a pure motor-free belief-state test.
+        run_pooled_lmeeeg_analysis(
+            epochs_paths=list(input.epochs),
+            config_path=input.config,
+            output_dir=os.path.dirname(output.summary),
+        )

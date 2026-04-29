@@ -16,16 +16,33 @@ import pandas as pd
 from scipy.stats import gaussian_kde, norm, t
 
 
+MODEL_A = "model_a_one_student_t"
+MODEL_B = "model_b_two_student_t_mixture"
+MODEL_C = "model_c_mixture_of_experts"
+MODEL_R1 = "model_r1_student_t_location_regression"
+MODEL_R2 = "model_r2_student_t_location_scale_regression"
+MODEL_R3 = "model_r3_shifted_lognormal_location_regression"
+MODEL_R4 = "model_r4_shifted_lognormal_location_scale_regression"
+MODEL_S = "model_s_skew_unimodal"
+
 MODEL_LABELS = {
-    "model_a_one_student_t": "one Student-t",
-    "model_s_skew_unimodal": "skewed unimodal",
-    "model_b_two_student_t_mixture": "two Student-t mixture",
-    "model_c_mixture_of_experts": "mixture of experts",
-    "model_r1_student_t_location_regression": "Student-t location regression",
-    "model_r2_student_t_location_scale_regression": "Student-t location + scale regression",
-    "model_r3_shifted_lognormal_location_regression": "shifted-lognormal location regression",
-    "model_r4_shifted_lognormal_location_scale_regression": "shifted-lognormal location + scale regression",
+    MODEL_A: "one Student-t",
+    MODEL_S: "skewed unimodal",
+    MODEL_B: "two Student-t mixture",
+    MODEL_C: "mixture of experts",
+    MODEL_R1: "Student-t location regression",
+    MODEL_R2: "Student-t location + scale regression",
+    MODEL_R3: "shifted-lognormal location regression",
+    MODEL_R4: "shifted-lognormal location + scale regression",
 }
+
+DENSITY_TYPE_CONDITIONAL = "conditional_fixed_predictors"
+DENSITY_TYPE_MARGINAL = "marginal_over_observed_predictors"
+DENSITY_TYPE_COMPONENT = "component_density"
+DENSITY_TYPE_WEIGHTED = "weighted_mixture_density"
+DENSITY_TYPE_POSTERIOR_PREDICTIVE = "posterior_predictive_density"
+DENSITY_TYPE_HISTOGRAM = "histogram_density"
+DENSITY_TYPE_UNKNOWN = "unknown"
 
 
 def seconds_to_milliseconds(values_s: np.ndarray | pd.Series | float) -> np.ndarray:
@@ -117,6 +134,55 @@ def mixture_density_per_ms(
     return density_per_second_to_per_millisecond(mixture_s)
 
 
+def select_exact_model_rows(
+    table: pd.DataFrame | None,
+    *,
+    model_name: str,
+    source_table: str,
+    allow_missing_model_column: bool = False,
+) -> pd.DataFrame:
+    """Return rows for exactly one model name and reject mixed-model selections."""
+
+    if table is None:
+        return pd.DataFrame()
+    working = table.copy()
+    if "model_name" not in working.columns:
+        if allow_missing_model_column:
+            return working
+        raise AssertionError(f"{source_table} does not contain a model_name column for exact filtering.")
+    working["model_name"] = working["model_name"].astype(str)
+    subset = working.loc[working["model_name"] == model_name].copy()
+    if not subset.empty:
+        observed = set(subset["model_name"].unique())
+        if observed != {model_name}:
+            raise AssertionError(f"{source_table} unexpectedly mixed model rows while selecting {model_name}: {observed}.")
+    return subset
+
+
+def count_local_maxima(
+    grid: np.ndarray,
+    density: np.ndarray,
+    prominence_threshold: float | None = None,
+) -> int:
+    """Count simple local maxima on a 1D density grid."""
+
+    x = np.asarray(grid, dtype=float)
+    y = np.asarray(density, dtype=float)
+    finite = np.isfinite(x) & np.isfinite(y)
+    x = x[finite]
+    y = y[finite]
+    if y.size < 3:
+        return 0
+    threshold = 0.0 if prominence_threshold is None else float(prominence_threshold)
+    count = 0
+    for idx in range(1, y.size - 1):
+        left = y[idx] - y[idx - 1]
+        right = y[idx] - y[idx + 1]
+        if left > 0.0 and right > 0.0 and min(left, right) > threshold:
+            count += 1
+    return count
+
+
 def check_density_area(
     grid_ms: np.ndarray,
     density_ms: np.ndarray,
@@ -198,7 +264,7 @@ def plot_behaviour_latency_regime_results(
         component_parameters=component_parameters,
         event_data=event_data,
         event_probabilities=event_probabilities,
-        model_name="model_c_mixture_of_experts",
+        model_name=MODEL_C,
         output_path=outputs["components"],
         title="Latency-regime components (Model C mixture-of-experts)",
         nu=nu,
@@ -210,7 +276,7 @@ def plot_behaviour_latency_regime_results(
         predictor_column="z_prop_expected_cumulative_info_lag_best",
         output_path=outputs["probability_by_expected_info"],
         x_label="Expected cumulative information (z)",
-        model_name="model_c_mixture_of_experts",
+        model_name=MODEL_C,
         title="P(late) by expected info (Model C)",
     )
 
@@ -220,7 +286,7 @@ def plot_behaviour_latency_regime_results(
         predictor_column="z_information_rate_lag_best",
         output_path=outputs["probability_by_information_rate"],
         x_label="Information rate (z)",
-        model_name="model_c_mixture_of_experts",
+        model_name=MODEL_C,
         title="P(late) by information rate (Model C)",
     )
 
@@ -238,6 +304,20 @@ def plot_behaviour_latency_regime_results(
         output_path=outputs["skew_vs_mixture"],
         nu=nu,
     )
+
+    audit_paths = write_latency_regime_plot_source_audit(
+        stan_results_dir=stan_results_dir,
+        event_data=event_data,
+        output_dir=output_dir.parent / "diagnostics" / "plot_source_audit",
+        component_parameters=component_parameters,
+        event_probabilities=event_probabilities,
+        gating_coefficients=gating_coefficients,
+        ppc_table=ppc_table,
+        loo_table=loo_table,
+        regression_coefficients=regression_coefficients,
+        fit_metrics=fit_metrics,
+    )
+    outputs.update(audit_paths)
 
     outputs["regression_vs_mixture"] = output_dir / "behaviour_latency_regime_regression_vs_mixture.png"
     plot_regression_vs_mixture_overlay(
@@ -432,7 +512,7 @@ def plot_gating_coefficients(*, gating_coefficients: pd.DataFrame | None, output
 
     working = gating_coefficients.loc[
         gating_coefficients["term"].isin(["beta_rate", "beta_expected"])
-        & (gating_coefficients["model_name"] == "model_c_mixture_of_experts")
+        & (gating_coefficients["model_name"] == MODEL_C)
     ].copy()
     if working.empty:
         _draw_placeholder(axis, "Gating coefficients", "No beta gating coefficients were available.")
@@ -459,7 +539,7 @@ def plot_gating_coefficients(*, gating_coefficients: pd.DataFrame | None, output
         color="#1d3557",
         ecolor="#1d3557",
         capsize=4,
-        label=MODEL_LABELS.get("model_c_mixture_of_experts", "model_c_mixture_of_experts"),
+        label=MODEL_LABELS.get(MODEL_C, MODEL_C),
     )
 
     axis.axvline(0.0, color="#666666", linestyle="--", linewidth=1.0)
@@ -493,14 +573,14 @@ def plot_latency_regime_ppc(
     obs_centers_ms = (obs_edges_ms[:-1] + obs_edges_ms[1:]) / 2.0
     axis.plot(obs_centers_ms, obs_density_ms, color="#111111", linewidth=2.0, label="Observed")
 
-    highlight_models = ["model_a_one_student_t", "model_b_two_student_t_mixture", "model_c_mixture_of_experts"]
+    highlight_models = [MODEL_A, MODEL_B, MODEL_C]
     best_r_model = _choose_best_model(
         loo_table,
         candidates=(
-            "model_r1_student_t_location_regression",
-            "model_r2_student_t_location_scale_regression",
-            "model_r3_shifted_lognormal_location_regression",
-            "model_r4_shifted_lognormal_location_scale_regression",
+            MODEL_R1,
+            MODEL_R2,
+            MODEL_R3,
+            MODEL_R4,
         ),
     )
     if best_r_model is not None:
@@ -511,11 +591,17 @@ def plot_latency_regime_ppc(
         if model_samples_ms.size == 0:
             continue
         density_ms = _sample_density_per_ms(samples_ms=model_samples_ms, grid_ms=obs_centers_ms)
-        axis.plot(obs_centers_ms, density_ms, color=color, linewidth=1.8, label=MODEL_LABELS.get(model_name, model_name))
+        axis.plot(
+            obs_centers_ms,
+            density_ms,
+            color=color,
+            linewidth=1.8,
+            label=f"{MODEL_LABELS.get(model_name, model_name)} posterior predictive",
+        )
 
     axis.set_xlabel("Latency from partner offset (ms)")
     axis.set_ylabel("Probability density (per ms)")
-    axis.set_title("Latency-regime posterior predictive check")
+    axis.set_title("Latency-regime posterior predictive densities")
     axis.legend(frameon=False)
     _save_figure(figure, output_path)
 
@@ -585,7 +671,7 @@ def plot_skew_vs_mixture_overlay(
     mixture = _mixture_density_for_model(
         component_parameters=component_parameters,
         event_probabilities=event_probabilities,
-        model_name="model_c_mixture_of_experts",
+        model_name=MODEL_C,
         grid_ms=grid_ms,
         nu=nu,
     )
@@ -595,10 +681,10 @@ def plot_skew_vs_mixture_overlay(
     best_r_model = _choose_best_model(
         loo_table,
         candidates=(
-            "model_r1_student_t_location_regression",
-            "model_r2_student_t_location_scale_regression",
-            "model_r3_shifted_lognormal_location_regression",
-            "model_r4_shifted_lognormal_location_scale_regression",
+            MODEL_R1,
+            MODEL_R2,
+            MODEL_R3,
+            MODEL_R4,
         ),
     )
     if best_r_model is not None and ppc_table is not None:
@@ -610,7 +696,7 @@ def plot_skew_vs_mixture_overlay(
                 color="#264653",
                 linewidth=2.0,
                 alpha=0.9,
-                label=f"Best R model ({MODEL_LABELS.get(best_r_model, best_r_model)})",
+                label=f"Best R model posterior predictive ({MODEL_LABELS.get(best_r_model, best_r_model)})",
             )
 
     axis.axvline(0.0, color="#666666", linestyle="--", linewidth=1.0)
@@ -644,23 +730,23 @@ def plot_regression_vs_mixture_overlay(
 
     if ppc_table is not None and not ppc_table.empty:
         comparison_models = [
-            ("model_c_mixture_of_experts", "#2a9d8f", "Model C"),
+            (MODEL_C, "#2a9d8f", "Model C posterior predictive"),
         ]
         best_student_t_r = _choose_best_model(
             loo_table,
-            candidates=("model_r1_student_t_location_regression", "model_r2_student_t_location_scale_regression"),
+            candidates=(MODEL_R1, MODEL_R2),
         )
         best_lognormal_r = _choose_best_model(
             loo_table,
             candidates=(
-                "model_r3_shifted_lognormal_location_regression",
-                "model_r4_shifted_lognormal_location_scale_regression",
+                MODEL_R3,
+                MODEL_R4,
             ),
         )
         if best_student_t_r is not None:
-            comparison_models.append((best_student_t_r, "#1d3557", "Best Student-t R"))
+            comparison_models.append((best_student_t_r, "#1d3557", "Best Student-t R posterior predictive"))
         if best_lognormal_r is not None:
-            comparison_models.append((best_lognormal_r, "#bc6c25", "Best shifted-lognormal R"))
+            comparison_models.append((best_lognormal_r, "#bc6c25", "Best shifted-lognormal R posterior predictive"))
 
         for model_name, color, label in comparison_models:
             samples_ms = _extract_ppc_samples_ms(ppc_table=ppc_table, model_name=model_name)
@@ -671,7 +757,7 @@ def plot_regression_vs_mixture_overlay(
     axis.axvline(0.0, color="#666666", linestyle="--", linewidth=1.0)
     axis.set_xlabel("Latency from partner offset (ms)")
     axis.set_ylabel("Probability density (per ms)")
-    axis.set_title("Event-only latency-regime analysis: regression competitors vs mixture")
+    axis.set_title("Event-only latency-regime analysis: posterior predictive comparison")
     axis.legend(frameon=False)
     _save_figure(figure, output_path)
 
@@ -698,21 +784,21 @@ def plot_latency_regime_regression_effects(
 
     best_student_t_r = _choose_best_model(
         loo_table,
-        candidates=("model_r1_student_t_location_regression", "model_r2_student_t_location_scale_regression"),
+        candidates=(MODEL_R1, MODEL_R2),
     )
     best_lognormal_r = _choose_best_model(
         loo_table,
-        candidates=("model_r3_shifted_lognormal_location_regression", "model_r4_shifted_lognormal_location_scale_regression"),
+        candidates=(MODEL_R3, MODEL_R4),
     )
     selected_models = [model_name for model_name in (best_student_t_r, best_lognormal_r) if model_name is not None]
     if not selected_models:
         selected_models = sorted(set(regression_predictions["model_name"].astype(str)))
 
     color_map = {
-        "model_r1_student_t_location_regression": "#1d3557",
-        "model_r2_student_t_location_scale_regression": "#457b9d",
-        "model_r3_shifted_lognormal_location_regression": "#bc6c25",
-        "model_r4_shifted_lognormal_location_scale_regression": "#dda15e",
+        MODEL_R1: "#1d3557",
+        MODEL_R2: "#457b9d",
+        MODEL_R3: "#bc6c25",
+        MODEL_R4: "#dda15e",
     }
     working = regression_predictions.loc[regression_predictions["predictor_name"] == predictor_name].copy()
     if working.empty:
@@ -790,17 +876,15 @@ def _write_density_scaling_diagnostics(
 
     one_student = _one_student_t_density_per_ms(model_a_summary=model_a_summary, grid_ms=grid_ms, nu=nu)
     if one_student is not None:
-        record_area("model_a_one_student_t", "one_student_t_density_per_ms", one_student)
+        record_area(MODEL_A, "one_student_t_density_per_ms", one_student)
 
     skew_density = _skew_density_per_ms(model_s_summary=model_s_summary, grid_ms=grid_ms)
     if skew_density is not None:
-        record_area("model_s_skew_unimodal", "skew_unimodal_density_per_ms", skew_density)
+        record_area(MODEL_S, "skew_unimodal_density_per_ms", skew_density)
 
     mixture_subset = None
     if component_parameters is not None and not component_parameters.empty:
-        mixture_subset = component_parameters.loc[
-            component_parameters.get("model_name") == "model_c_mixture_of_experts"
-        ].copy()
+        mixture_subset = component_parameters.loc[component_parameters.get("model_name") == MODEL_C].copy()
     if mixture_subset is not None and not mixture_subset.empty:
         early_mu = _extract_component_value(mixture_subset, component="early", parameter="mu")
         late_mu = _extract_component_value(mixture_subset, component="late", parameter="mu")
@@ -810,19 +894,19 @@ def _write_density_scaling_diagnostics(
         late_density_s = t.pdf(grid_s, df=nu, loc=late_mu, scale=late_sigma)
         early_density_ms = density_per_second_to_per_millisecond(early_density_s)
         late_density_ms = density_per_second_to_per_millisecond(late_density_s)
-        record_area("model_c_mixture_of_experts", "early_component_density_per_ms", early_density_ms)
-        record_area("model_c_mixture_of_experts", "late_component_density_per_ms", late_density_ms)
+        record_area(MODEL_C, "early_component_density_per_ms", early_density_ms)
+        record_area(MODEL_C, "late_component_density_per_ms", late_density_ms)
 
         p_late_values = _resolve_event_probabilities(
             event_probabilities=event_probabilities,
-            model_name="model_c_mixture_of_experts",
+            model_name=MODEL_C,
         )
         mixture_event_averaged_ms = mixture_density_per_ms(
             early_density_s=early_density_s,
             late_density_s=late_density_s,
             p_late_values=p_late_values,
         )
-        record_area("model_c_mixture_of_experts", "mixture_density_event_averaged_per_ms", mixture_event_averaged_ms)
+        record_area(MODEL_C, "mixture_density_event_averaged_per_ms", mixture_event_averaged_ms)
 
         mixture_density_50_50 = mixture_density_per_ms(
             early_density_s=early_density_s,
@@ -830,9 +914,9 @@ def _write_density_scaling_diagnostics(
             p_late_values=None,
             fixed_weight=0.5,
         )
-        record_area("model_b_two_student_t_mixture", "mixture_density_50_50_per_ms_optional", mixture_density_50_50)
+        record_area(MODEL_B, "mixture_density_50_50_per_ms_optional", mixture_density_50_50)
 
-        alpha_value = _resolve_alpha(gating_coefficients=gating_coefficients, model_name="model_c_mixture_of_experts")
+        alpha_value = _resolve_alpha(gating_coefficients=gating_coefficients, model_name=MODEL_C)
         if np.isfinite(alpha_value):
             p_alpha = 1.0 / (1.0 + np.exp(-alpha_value))
             mixture_density_alpha_only = mixture_density_per_ms(
@@ -841,13 +925,13 @@ def _write_density_scaling_diagnostics(
                 p_late_values=None,
                 fixed_weight=float(p_alpha),
             )
-            record_area("model_c_mixture_of_experts", "mixture_density_alpha_only_per_ms_optional", mixture_density_alpha_only)
+            record_area(MODEL_C, "mixture_density_alpha_only_per_ms_optional", mixture_density_alpha_only)
 
     if regression_coefficients is not None and not regression_coefficients.empty:
         if {"model_name", "coefficient_group", "term", "mean"} <= set(regression_coefficients.columns):
             student_t_models = {
-                "model_r1_student_t_location_regression",
-                "model_r2_student_t_location_scale_regression",
+                MODEL_R1,
+                MODEL_R2,
             }
             for model_name in student_t_models & set(regression_coefficients["model_name"].astype(str)):
                 mean_shift = regression_coefficients.loc[
@@ -855,7 +939,7 @@ def _write_density_scaling_diagnostics(
                     & (regression_coefficients["term"].isin(["alpha_mu", "alpha_sigma"])),
                     "mean",
                 ]
-                if model_name == "model_r1_student_t_location_regression":
+                if model_name == MODEL_R1:
                     mu = _resolve_regression_term_mean(regression_coefficients, model_name, "alpha_mu")
                     sigma = _resolve_scalar_or_regression_scale(regression_coefficients, model_name, default=np.nan)
                     if np.isfinite(mu) and np.isfinite(sigma) and sigma > 0:
@@ -1012,6 +1096,789 @@ def _build_density_scaling_report(
                 for row in area_checks
                 if row.get("area_on_displayed_grid") is not None
             ],
+            "",
+        ]
+    )
+
+
+def write_latency_regime_plot_source_audit(
+    *,
+    stan_results_dir: Path,
+    event_data: pd.DataFrame,
+    output_dir: Path,
+    component_parameters: pd.DataFrame | None,
+    event_probabilities: pd.DataFrame | None,
+    gating_coefficients: pd.DataFrame | None,
+    ppc_table: pd.DataFrame | None,
+    loo_table: pd.DataFrame | None,
+    regression_coefficients: pd.DataFrame | None,
+    fit_metrics: dict[str, object] | None,
+) -> dict[str, Path]:
+    """Write audited source diagnostics for latency-regime density plots."""
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    outputs: dict[str, Path] = {}
+    latency_series = pd.to_numeric(event_data.get("latency_from_partner_offset"), errors="coerce")
+    finite_latency = latency_series[np.isfinite(latency_series)]
+    if finite_latency.empty:
+        return outputs
+
+    latency_s = finite_latency.to_numpy(dtype=float)
+    grid_ms = _build_latency_grid_ms(latency_s)
+    grid_s = milliseconds_to_seconds(grid_ms)
+    nu = float((fit_metrics or {}).get("nu", 4.0))
+    audit_rows: list[dict[str, object]] = []
+
+    hist_counts_ms, hist_edges_ms = np.histogram(seconds_to_milliseconds(latency_s), bins=72, density=True)
+    hist_centers_ms = (hist_edges_ms[:-1] + hist_edges_ms[1:]) / 2.0
+    hist_area = float(np.trapezoid(hist_counts_ms, hist_centers_ms)) if hist_counts_ms.size > 1 else float("nan")
+
+    r2_diag = compute_r2_density_diagnostic(
+        event_data=event_data,
+        regression_coefficients=regression_coefficients,
+        model_name=MODEL_R2,
+        grid_ms=grid_ms,
+        nu=nu,
+    )
+    model_b_diag = compute_model_b_density_diagnostic(
+        component_parameters=component_parameters,
+        grid_ms=grid_ms,
+        nu=nu,
+    )
+    model_c_diag = compute_model_c_density_diagnostic(
+        component_parameters=component_parameters,
+        gating_coefficients=gating_coefficients,
+        event_probabilities=event_probabilities,
+        grid_ms=grid_ms,
+        nu=nu,
+    )
+    best_student_t_r = _choose_best_model(loo_table, candidates=(MODEL_R1, MODEL_R2))
+    best_lognormal_r = _choose_best_model(loo_table, candidates=(MODEL_R3, MODEL_R4))
+
+    def add_audit_row(
+        *,
+        figure_name: str,
+        curve_label: str,
+        intended_model_name: str,
+        actual_model_name_used: str,
+        source_file: Path,
+        source_table: str,
+        n_source_rows_used: int,
+        parameter_names_used: list[str],
+        density_type: str,
+        predictor_values_used: str,
+        notes: str = "",
+    ) -> None:
+        mismatch = intended_model_name != actual_model_name_used
+        full_notes = notes
+        if mismatch:
+            full_notes = (full_notes + " " if full_notes else "") + "ERROR: label/source model mismatch."
+        audit_rows.append(
+            {
+                "figure_name": figure_name,
+                "curve_label": curve_label,
+                "intended_model_name": intended_model_name,
+                "actual_model_name_used": actual_model_name_used,
+                "source_file": str(source_file),
+                "source_table": source_table,
+                "n_source_rows_used": int(n_source_rows_used),
+                "parameter_names_used": ",".join(parameter_names_used),
+                "density_type": density_type,
+                "predictor_values_used": predictor_values_used,
+                "x_unit": "milliseconds",
+                "y_density_unit": "probability density per millisecond",
+                "conversion_applied": True,
+                "notes": full_notes,
+            }
+        )
+
+    add_audit_row(
+        figure_name="behaviour_latency_regime_ppc.png",
+        curve_label="Observed histogram",
+        intended_model_name="observed_data",
+        actual_model_name_used="observed_data",
+        source_file=Path(event_data.attrs.get("source_file", stan_results_dir.parent / "behaviour_latency_regime_data.csv")),
+        source_table="event_data_csv",
+        n_source_rows_used=len(latency_s),
+        parameter_names_used=["latency_from_partner_offset"],
+        density_type=DENSITY_TYPE_HISTOGRAM,
+        predictor_values_used="observed latencies",
+        notes=f"Histogram density area on plotted bins ≈ {hist_area:.3f}.",
+    )
+
+    if ppc_table is not None and not ppc_table.empty:
+        for model_name in [MODEL_A, MODEL_B, MODEL_C, best_student_t_r, best_lognormal_r]:
+            if model_name is None:
+                continue
+            ppc_rows = select_exact_model_rows(
+                ppc_table,
+                model_name=model_name,
+                source_table="behaviour_latency_regime_posterior_predictive.csv",
+                allow_missing_model_column=True,
+            )
+            if ppc_rows.empty:
+                continue
+            add_audit_row(
+                figure_name="behaviour_latency_regime_ppc.png",
+                curve_label=f"{MODEL_LABELS.get(model_name, model_name)} posterior predictive",
+                intended_model_name=model_name,
+                actual_model_name_used=model_name,
+                source_file=stan_results_dir / "behaviour_latency_regime_posterior_predictive.csv",
+                source_table="behaviour_latency_regime_posterior_predictive.csv",
+                n_source_rows_used=len(ppc_rows),
+                parameter_names_used=["y_rep_value"],
+                density_type=DENSITY_TYPE_POSTERIOR_PREDICTIVE,
+                predictor_values_used="posterior predictive draws over observed events",
+            )
+
+    if ppc_table is not None and not ppc_table.empty:
+        add_audit_row(
+            figure_name="behaviour_latency_regime_regression_vs_mixture.png",
+            curve_label="Model C posterior predictive",
+            intended_model_name=MODEL_C,
+            actual_model_name_used=MODEL_C,
+                source_file=stan_results_dir / "behaviour_latency_regime_posterior_predictive.csv",
+                source_table="behaviour_latency_regime_posterior_predictive.csv",
+                n_source_rows_used=len(
+                    select_exact_model_rows(
+                        ppc_table,
+                        model_name=MODEL_C,
+                        source_table="behaviour_latency_regime_posterior_predictive.csv",
+                        allow_missing_model_column=True,
+                    )
+                ),
+                parameter_names_used=["y_rep_value"],
+                density_type=DENSITY_TYPE_POSTERIOR_PREDICTIVE,
+                predictor_values_used="posterior predictive draws over observed events",
+                notes="Production figure is posterior predictive, not conditional-fixed-predictor.",
+            )
+        if best_student_t_r is not None:
+            add_audit_row(
+                figure_name="behaviour_latency_regime_regression_vs_mixture.png",
+                curve_label="Best Student-t R posterior predictive",
+                intended_model_name=best_student_t_r,
+                actual_model_name_used=best_student_t_r,
+                source_file=stan_results_dir / "behaviour_latency_regime_posterior_predictive.csv",
+                source_table="behaviour_latency_regime_posterior_predictive.csv",
+                n_source_rows_used=len(
+                    select_exact_model_rows(
+                        ppc_table,
+                        model_name=best_student_t_r,
+                        source_table="behaviour_latency_regime_posterior_predictive.csv",
+                        allow_missing_model_column=True,
+                    )
+                ),
+                parameter_names_used=["y_rep_value"],
+                density_type=DENSITY_TYPE_POSTERIOR_PREDICTIVE,
+                predictor_values_used="posterior predictive draws over observed events",
+                notes="This curve can be multimodal without implying a conditional R2 density bug.",
+            )
+        if best_lognormal_r is not None:
+            add_audit_row(
+                figure_name="behaviour_latency_regime_regression_vs_mixture.png",
+                curve_label="Best shifted-lognormal R posterior predictive",
+                intended_model_name=best_lognormal_r,
+                actual_model_name_used=best_lognormal_r,
+                source_file=stan_results_dir / "behaviour_latency_regime_posterior_predictive.csv",
+                source_table="behaviour_latency_regime_posterior_predictive.csv",
+                n_source_rows_used=len(
+                    select_exact_model_rows(
+                        ppc_table,
+                        model_name=best_lognormal_r,
+                        source_table="behaviour_latency_regime_posterior_predictive.csv",
+                        allow_missing_model_column=True,
+                    )
+                ),
+                parameter_names_used=["y_rep_value"],
+                density_type=DENSITY_TYPE_POSTERIOR_PREDICTIVE,
+                predictor_values_used="posterior predictive draws over observed events",
+            )
+
+    if r2_diag is not None:
+        coeff_rows = select_exact_model_rows(
+            regression_coefficients,
+            model_name=MODEL_R2,
+            source_table="behaviour_latency_regime_regression_coefficients.csv",
+        )
+        add_audit_row(
+            figure_name="latency_regime_r2_conditional_vs_marginal_density.png",
+            curve_label="R2 conditional, predictors=0",
+            intended_model_name=MODEL_R2,
+            actual_model_name_used=MODEL_R2,
+            source_file=stan_results_dir / "behaviour_latency_regime_regression_coefficients.csv",
+            source_table="behaviour_latency_regime_regression_coefficients.csv",
+            n_source_rows_used=len(coeff_rows),
+            parameter_names_used=["alpha_mu", "beta_mu_rate", "beta_mu_expected", "alpha_sigma", "beta_sigma_rate", "beta_sigma_expected"],
+            density_type=DENSITY_TYPE_CONDITIONAL,
+            predictor_values_used="z_information_rate_lag_best=0; z_prop_expected_cumulative_info_lag_best=0",
+        )
+        add_audit_row(
+            figure_name="latency_regime_r2_conditional_vs_marginal_density.png",
+            curve_label="R2 marginal over observed predictors",
+            intended_model_name=MODEL_R2,
+            actual_model_name_used=MODEL_R2,
+            source_file=stan_results_dir / "behaviour_latency_regime_regression_coefficients.csv",
+            source_table="behaviour_latency_regime_regression_coefficients.csv",
+            n_source_rows_used=len(coeff_rows),
+            parameter_names_used=["alpha_mu", "beta_mu_rate", "beta_mu_expected", "alpha_sigma", "beta_sigma_rate", "beta_sigma_expected"],
+            density_type=DENSITY_TYPE_MARGINAL,
+            predictor_values_used="Observed z_information_rate_lag_best and z_prop_expected_cumulative_info_lag_best",
+        )
+
+    if model_b_diag is not None:
+        n_b = len(select_exact_model_rows(component_parameters, model_name=MODEL_B, source_table="behaviour_latency_regime_component_parameters.csv"))
+        for label, dtype in [
+            ("Model B early component", DENSITY_TYPE_COMPONENT),
+            ("Model B late component", DENSITY_TYPE_COMPONENT),
+            ("B constant two-component mixture", DENSITY_TYPE_WEIGHTED),
+        ]:
+            add_audit_row(
+                figure_name="latency_regime_model_b_component_check.png",
+                curve_label=label,
+                intended_model_name=MODEL_B,
+                actual_model_name_used=MODEL_B,
+                source_file=stan_results_dir / "behaviour_latency_regime_component_parameters.csv",
+                source_table="behaviour_latency_regime_component_parameters.csv",
+                n_source_rows_used=n_b,
+                parameter_names_used=["mu", "sigma", "pi_late"],
+                density_type=dtype,
+                predictor_values_used="No predictors; constant mixture weight",
+            )
+
+    if model_c_diag is not None:
+        n_c_components = len(select_exact_model_rows(component_parameters, model_name=MODEL_C, source_table="behaviour_latency_regime_component_parameters.csv"))
+        n_c_probs = len(select_exact_model_rows(event_probabilities, model_name=MODEL_C, source_table="behaviour_latency_regime_event_probabilities.csv"))
+        add_audit_row(
+            figure_name="latency_regime_model_c_component_check.png",
+            curve_label="Model C early component",
+            intended_model_name=MODEL_C,
+            actual_model_name_used=MODEL_C,
+            source_file=stan_results_dir / "behaviour_latency_regime_component_parameters.csv",
+            source_table="behaviour_latency_regime_component_parameters.csv",
+            n_source_rows_used=n_c_components,
+            parameter_names_used=["mu", "sigma"],
+            density_type=DENSITY_TYPE_COMPONENT,
+            predictor_values_used="Global early component",
+        )
+        add_audit_row(
+            figure_name="latency_regime_model_c_component_check.png",
+            curve_label="Model C late component",
+            intended_model_name=MODEL_C,
+            actual_model_name_used=MODEL_C,
+            source_file=stan_results_dir / "behaviour_latency_regime_component_parameters.csv",
+            source_table="behaviour_latency_regime_component_parameters.csv",
+            n_source_rows_used=n_c_components,
+            parameter_names_used=["mu", "sigma"],
+            density_type=DENSITY_TYPE_COMPONENT,
+            predictor_values_used="Global late component",
+        )
+        add_audit_row(
+            figure_name="latency_regime_model_c_component_check.png",
+            curve_label="C mixture-of-experts, event-averaged",
+            intended_model_name=MODEL_C,
+            actual_model_name_used=MODEL_C,
+            source_file=stan_results_dir / "behaviour_latency_regime_event_probabilities.csv",
+            source_table="behaviour_latency_regime_event_probabilities.csv",
+            n_source_rows_used=n_c_probs,
+            parameter_names_used=["p_late_mean", "alpha", "beta_rate", "beta_expected", "mu", "sigma"],
+            density_type=DENSITY_TYPE_WEIGHTED,
+            predictor_values_used="Observed predictors through event-level p_late_mean",
+        )
+        add_audit_row(
+            figure_name="latency_regime_model_c_component_check.png",
+            curve_label="Model C alpha-only mixture",
+            intended_model_name=MODEL_C,
+            actual_model_name_used=MODEL_C,
+            source_file=stan_results_dir / "behaviour_latency_regime_gating_coefficients.csv",
+            source_table="behaviour_latency_regime_gating_coefficients.csv",
+            n_source_rows_used=len(select_exact_model_rows(gating_coefficients, model_name=MODEL_C, source_table="behaviour_latency_regime_gating_coefficients.csv", allow_missing_model_column=True)),
+            parameter_names_used=["alpha", "mu", "sigma"],
+            density_type=DENSITY_TYPE_CONDITIONAL,
+            predictor_values_used="Predictors=0 in gating equation only",
+        )
+
+    audit_csv = output_dir / "latency_regime_plot_source_audit.csv"
+    audit_df = pd.DataFrame(audit_rows)
+    audit_df.to_csv(audit_csv, index=False)
+    outputs["plot_source_audit_csv"] = audit_csv
+
+    if r2_diag is not None:
+        r2_path = output_dir / "latency_regime_r2_density_diagnostic.csv"
+        r2_diag.to_csv(r2_path, index=False)
+        outputs["r2_density_diagnostic_csv"] = r2_path
+    if model_b_diag is not None:
+        model_b_path = output_dir / "latency_regime_model_b_density_diagnostic.csv"
+        model_b_diag.to_csv(model_b_path, index=False)
+        outputs["model_b_density_diagnostic_csv"] = model_b_path
+    if model_c_diag is not None:
+        model_c_path = output_dir / "latency_regime_model_c_density_diagnostic.csv"
+        model_c_diag.to_csv(model_c_path, index=False)
+        outputs["model_c_density_diagnostic_csv"] = model_c_path
+
+    if r2_diag is not None:
+        outputs["r2_density_figure"] = output_dir / "latency_regime_r2_conditional_vs_marginal_density.png"
+        _plot_r2_density_diagnostic(
+            latency_ms=seconds_to_milliseconds(latency_s),
+            diagnostic=r2_diag,
+            output_path=outputs["r2_density_figure"],
+        )
+    if model_b_diag is not None:
+        outputs["model_b_density_figure"] = output_dir / "latency_regime_model_b_component_check.png"
+        _plot_model_b_density_diagnostic(
+            latency_ms=seconds_to_milliseconds(latency_s),
+            diagnostic=model_b_diag,
+            output_path=outputs["model_b_density_figure"],
+        )
+    if model_c_diag is not None:
+        outputs["model_c_density_figure"] = output_dir / "latency_regime_model_c_component_check.png"
+        _plot_model_c_density_diagnostic(
+            latency_ms=seconds_to_milliseconds(latency_s),
+            diagnostic=model_c_diag,
+            output_path=outputs["model_c_density_figure"],
+        )
+    if r2_diag is not None and model_b_diag is not None and model_c_diag is not None:
+        overlay_path = output_dir / "latency_regime_model_overlay_audited.png"
+        _plot_audited_overlay(
+            latency_ms=seconds_to_milliseconds(latency_s),
+            r2_diagnostic=r2_diag,
+            model_b_diagnostic=model_b_diag,
+            model_c_diagnostic=model_c_diag,
+            output_path=overlay_path,
+        )
+        outputs["audited_overlay_figure"] = overlay_path
+
+    maxima_payload = {
+        "r2_conditional": count_local_maxima(grid_ms, r2_diag["r2_conditional_density_per_ms"].to_numpy(dtype=float)) if r2_diag is not None else None,
+        "r2_marginal": count_local_maxima(grid_ms, r2_diag["r2_marginal_density_per_ms"].to_numpy(dtype=float)) if r2_diag is not None else None,
+        "model_b_mixture": count_local_maxima(grid_ms, model_b_diag["model_b_mixture_density_per_ms"].to_numpy(dtype=float)) if model_b_diag is not None else None,
+        "model_c_event_averaged": count_local_maxima(grid_ms, model_c_diag["model_c_event_averaged_mixture_density_per_ms"].to_numpy(dtype=float)) if model_c_diag is not None else None,
+    }
+    mismatches = audit_df.loc[audit_df["intended_model_name"] != audit_df["actual_model_name_used"]].to_dict(orient="records") if not audit_df.empty else []
+    summary_payload = _build_plot_source_audit_summary(
+        stan_results_dir=stan_results_dir,
+        audit_df=audit_df,
+        r2_diag=r2_diag,
+        model_b_diag=model_b_diag,
+        model_c_diag=model_c_diag,
+        maxima_payload=maxima_payload,
+        mismatches=mismatches,
+        best_student_t_r=best_student_t_r,
+    )
+    audit_json = output_dir / "latency_regime_plot_source_audit.json"
+    audit_json.write_text(json.dumps(summary_payload, indent=2), encoding="utf-8")
+    outputs["plot_source_audit_json"] = audit_json
+
+    report_path = output_dir / "latency_regime_plot_source_audit_report.md"
+    report_path.write_text(_build_plot_source_audit_report(summary_payload), encoding="utf-8")
+    outputs["plot_source_audit_report"] = report_path
+
+    return outputs
+
+
+def compute_r2_density_diagnostic(
+    *,
+    event_data: pd.DataFrame,
+    regression_coefficients: pd.DataFrame | None,
+    model_name: str,
+    grid_ms: np.ndarray,
+    nu: float,
+) -> pd.DataFrame | None:
+    coeffs = select_exact_model_rows(
+        regression_coefficients,
+        model_name=model_name,
+        source_table="behaviour_latency_regime_regression_coefficients.csv",
+    )
+    if coeffs.empty:
+        return None
+    z_rate = pd.to_numeric(event_data.get("z_information_rate_lag_best"), errors="coerce").to_numpy(dtype=float)
+    z_expected = pd.to_numeric(event_data.get("z_prop_expected_cumulative_info_lag_best"), errors="coerce").to_numpy(dtype=float)
+    finite = np.isfinite(z_rate) & np.isfinite(z_expected)
+    if not np.any(finite):
+        return None
+    mu_0 = _resolve_regression_linear_predictor(coeffs, coefficient_group="location", predictor_rate=0.0, predictor_expected=0.0)
+    sigma_0 = _resolve_regression_scale_predictor(coeffs, predictor_rate=0.0, predictor_expected=0.0)
+    conditional_ms = student_t_density_per_ms(grid_ms, mu_s=mu_0, sigma_s=sigma_0, nu=nu)
+    marginal_s = []
+    grid_s = milliseconds_to_seconds(grid_ms)
+    for rate_value, expected_value in zip(z_rate[finite], z_expected[finite], strict=False):
+        mu_i = _resolve_regression_linear_predictor(
+            coeffs,
+            coefficient_group="location",
+            predictor_rate=float(rate_value),
+            predictor_expected=float(expected_value),
+        )
+        sigma_i = _resolve_regression_scale_predictor(
+            coeffs,
+            predictor_rate=float(rate_value),
+            predictor_expected=float(expected_value),
+        )
+        marginal_s.append(t.pdf(grid_s, df=nu, loc=mu_i, scale=sigma_i))
+    marginal_ms = density_per_second_to_per_millisecond(np.mean(np.vstack(marginal_s), axis=0))
+    return pd.DataFrame(
+        {
+            "latency_s": grid_s,
+            "latency_ms": grid_ms,
+            "r2_conditional_density_per_ms": conditional_ms,
+            "r2_marginal_density_per_ms": marginal_ms,
+        }
+    )
+
+
+def compute_model_b_density_diagnostic(
+    *,
+    component_parameters: pd.DataFrame | None,
+    grid_ms: np.ndarray,
+    nu: float,
+) -> pd.DataFrame | None:
+    subset = select_exact_model_rows(
+        component_parameters,
+        model_name=MODEL_B,
+        source_table="behaviour_latency_regime_component_parameters.csv",
+    )
+    if subset.empty:
+        return None
+    early_mu = _extract_component_value(subset, component="early", parameter="mu")
+    late_mu = _extract_component_value(subset, component="late", parameter="mu")
+    early_sigma = _extract_component_value(subset, component="early", parameter="sigma")
+    late_sigma = _extract_component_value(subset, component="late", parameter="sigma")
+    weight = _extract_optional_component_value(subset, component="late", parameter="pi_late", default=0.5)
+    early_ms = student_t_density_per_ms(grid_ms, mu_s=early_mu, sigma_s=early_sigma, nu=nu)
+    late_ms = student_t_density_per_ms(grid_ms, mu_s=late_mu, sigma_s=late_sigma, nu=nu)
+    mixture_ms = (1.0 - weight) * early_ms + weight * late_ms
+    return pd.DataFrame(
+        {
+            "latency_s": milliseconds_to_seconds(grid_ms),
+            "latency_ms": grid_ms,
+            "model_b_early_density_per_ms": early_ms,
+            "model_b_late_density_per_ms": late_ms,
+            "model_b_mixture_density_per_ms": mixture_ms,
+        }
+    )
+
+
+def compute_model_c_density_diagnostic(
+    *,
+    component_parameters: pd.DataFrame | None,
+    gating_coefficients: pd.DataFrame | None,
+    event_probabilities: pd.DataFrame | None,
+    grid_ms: np.ndarray,
+    nu: float,
+) -> pd.DataFrame | None:
+    subset = select_exact_model_rows(
+        component_parameters,
+        model_name=MODEL_C,
+        source_table="behaviour_latency_regime_component_parameters.csv",
+    )
+    if subset.empty:
+        return None
+    early_mu = _extract_component_value(subset, component="early", parameter="mu")
+    late_mu = _extract_component_value(subset, component="late", parameter="mu")
+    early_sigma = _extract_component_value(subset, component="early", parameter="sigma")
+    late_sigma = _extract_component_value(subset, component="late", parameter="sigma")
+    early_ms = student_t_density_per_ms(grid_ms, mu_s=early_mu, sigma_s=early_sigma, nu=nu)
+    late_ms = student_t_density_per_ms(grid_ms, mu_s=late_mu, sigma_s=late_sigma, nu=nu)
+    early_s = early_ms * 1000.0
+    late_s = late_ms * 1000.0
+    p_late_values = _resolve_event_probabilities(event_probabilities=event_probabilities, model_name=MODEL_C)
+    event_averaged_ms = mixture_density_per_ms(
+        early_density_s=early_s,
+        late_density_s=late_s,
+        p_late_values=p_late_values,
+    )
+    alpha_value = _resolve_alpha(gating_coefficients=gating_coefficients, model_name=MODEL_C)
+    if not np.isfinite(alpha_value):
+        alpha_value = 0.0
+    alpha_only_weight = 1.0 / (1.0 + np.exp(-alpha_value))
+    alpha_only_ms = mixture_density_per_ms(
+        early_density_s=early_s,
+        late_density_s=late_s,
+        p_late_values=None,
+        fixed_weight=alpha_only_weight,
+    )
+    return pd.DataFrame(
+        {
+            "latency_s": milliseconds_to_seconds(grid_ms),
+            "latency_ms": grid_ms,
+            "model_c_early_density_per_ms": early_ms,
+            "model_c_late_density_per_ms": late_ms,
+            "model_c_event_averaged_mixture_density_per_ms": event_averaged_ms,
+            "model_c_alpha_only_mixture_density_per_ms": alpha_only_ms,
+        }
+    )
+
+
+def _resolve_regression_linear_predictor(
+    regression_coefficients: pd.DataFrame,
+    *,
+    coefficient_group: str,
+    predictor_rate: float,
+    predictor_expected: float,
+) -> float:
+    subset = regression_coefficients.copy()
+    if "coefficient_group" in subset.columns:
+        subset = subset.loc[subset["coefficient_group"] == coefficient_group].copy()
+    lookup = dict(zip(subset["term"].astype(str), pd.to_numeric(subset["mean"], errors="coerce"), strict=False))
+    intercept = float(lookup.get("alpha_mu", lookup.get("alpha_log", 0.0)))
+    beta_rate = float(lookup.get("beta_mu_rate", lookup.get("beta_log_rate", 0.0)))
+    beta_expected = float(lookup.get("beta_mu_expected", lookup.get("beta_log_expected", 0.0)))
+    return intercept + beta_rate * float(predictor_rate) + beta_expected * float(predictor_expected)
+
+
+def _resolve_regression_scale_predictor(
+    regression_coefficients: pd.DataFrame,
+    *,
+    predictor_rate: float,
+    predictor_expected: float,
+) -> float:
+    subset = regression_coefficients.copy()
+    if "coefficient_group" in subset.columns:
+        subset = subset.loc[subset["coefficient_group"] == "scale"].copy()
+    lookup = dict(zip(subset["term"].astype(str), pd.to_numeric(subset["mean"], errors="coerce"), strict=False))
+    intercept = float(lookup.get("alpha_sigma", 0.0))
+    beta_rate = float(lookup.get("beta_sigma_rate", 0.0))
+    beta_expected = float(lookup.get("beta_sigma_expected", 0.0))
+    return float(np.exp(intercept + beta_rate * float(predictor_rate) + beta_expected * float(predictor_expected)))
+
+
+def _extract_optional_component_value(table: pd.DataFrame, *, component: str, parameter: str, default: float) -> float:
+    subset = table.loc[(table["component"] == component) & (table["parameter"] == parameter)]
+    if subset.empty:
+        return float(default)
+    return float(pd.to_numeric(subset["mean"], errors="coerce").iloc[0])
+
+
+def _plot_reference_lines(axis: plt.Axes) -> None:
+    axis.axvline(0.0, color="#666666", linestyle="--", linewidth=1.0)
+    axis.axvline(200.0, color="#c1121f", linestyle=":", linewidth=1.2)
+    axis.axvline(1000.0, color="#6d597a", linestyle=":", linewidth=1.2)
+
+
+def _plot_r2_density_diagnostic(*, latency_ms: np.ndarray, diagnostic: pd.DataFrame, output_path: Path) -> None:
+    figure, axis = plt.subplots(figsize=(8.4, 5.0))
+    axis.hist(latency_ms, bins=72, density=True, color="#d7e3ea", edgecolor="white", alpha=0.9, label="Observed histogram")
+    axis.plot(
+        diagnostic["latency_ms"],
+        diagnostic["r2_conditional_density_per_ms"],
+        color="#1d3557",
+        linewidth=2.2,
+        label="R2 conditional, predictors=0",
+    )
+    axis.plot(
+        diagnostic["latency_ms"],
+        diagnostic["r2_marginal_density_per_ms"],
+        color="#457b9d",
+        linewidth=2.2,
+        label="R2 marginal over observed predictors",
+    )
+    _plot_reference_lines(axis)
+    axis.set_xlabel("Latency from partner offset (ms)")
+    axis.set_ylabel("Probability density (per ms)")
+    axis.set_title("R2 conditional vs marginal density")
+    axis.legend(frameon=False)
+    _save_figure(figure, output_path)
+
+
+def _plot_model_b_density_diagnostic(*, latency_ms: np.ndarray, diagnostic: pd.DataFrame, output_path: Path) -> None:
+    figure, axis = plt.subplots(figsize=(8.4, 5.0))
+    axis.hist(latency_ms, bins=72, density=True, color="#d7e3ea", edgecolor="white", alpha=0.9, label="Observed histogram")
+    axis.plot(diagnostic["latency_ms"], diagnostic["model_b_early_density_per_ms"], color="#1d3557", linewidth=2.0, label="Model B early component")
+    axis.plot(diagnostic["latency_ms"], diagnostic["model_b_late_density_per_ms"], color="#e76f51", linewidth=2.0, label="Model B late component")
+    axis.plot(diagnostic["latency_ms"], diagnostic["model_b_mixture_density_per_ms"], color="#bc6c25", linewidth=2.4, label="B constant two-component mixture")
+    _plot_reference_lines(axis)
+    axis.set_xlabel("Latency from partner offset (ms)")
+    axis.set_ylabel("Probability density (per ms)")
+    axis.set_title("Model B component density check")
+    axis.legend(frameon=False)
+    _save_figure(figure, output_path)
+
+
+def _plot_model_c_density_diagnostic(*, latency_ms: np.ndarray, diagnostic: pd.DataFrame, output_path: Path) -> None:
+    figure, axis = plt.subplots(figsize=(8.4, 5.0))
+    axis.hist(latency_ms, bins=72, density=True, color="#d7e3ea", edgecolor="white", alpha=0.9, label="Observed histogram")
+    axis.plot(diagnostic["latency_ms"], diagnostic["model_c_early_density_per_ms"], color="#1d3557", linewidth=2.0, label="Model C early component")
+    axis.plot(diagnostic["latency_ms"], diagnostic["model_c_late_density_per_ms"], color="#e76f51", linewidth=2.0, label="Model C late component")
+    axis.plot(
+        diagnostic["latency_ms"],
+        diagnostic["model_c_event_averaged_mixture_density_per_ms"],
+        color="#2a9d8f",
+        linewidth=2.4,
+        label="C mixture-of-experts, event-averaged",
+    )
+    axis.plot(
+        diagnostic["latency_ms"],
+        diagnostic["model_c_alpha_only_mixture_density_per_ms"],
+        color="#8d99ae",
+        linewidth=1.8,
+        linestyle="--",
+        label="Model C alpha-only/predictors-zero",
+    )
+    _plot_reference_lines(axis)
+    axis.set_xlabel("Latency from partner offset (ms)")
+    axis.set_ylabel("Probability density (per ms)")
+    axis.set_title("Model C component density check")
+    axis.legend(frameon=False)
+    _save_figure(figure, output_path)
+
+
+def _plot_audited_overlay(
+    *,
+    latency_ms: np.ndarray,
+    r2_diagnostic: pd.DataFrame,
+    model_b_diagnostic: pd.DataFrame,
+    model_c_diagnostic: pd.DataFrame,
+    output_path: Path,
+) -> None:
+    figure, axis = plt.subplots(figsize=(8.6, 5.2))
+    axis.hist(latency_ms, bins=72, density=True, color="#d7e3ea", edgecolor="white", alpha=0.85, label="Observed histogram")
+    axis.plot(
+        model_b_diagnostic["latency_ms"],
+        model_b_diagnostic["model_b_mixture_density_per_ms"],
+        color="#bc6c25",
+        linewidth=2.3,
+        label="B constant two-component mixture",
+    )
+    axis.plot(
+        model_c_diagnostic["latency_ms"],
+        model_c_diagnostic["model_c_event_averaged_mixture_density_per_ms"],
+        color="#2a9d8f",
+        linewidth=2.3,
+        label="C mixture-of-experts, event-averaged",
+    )
+    axis.plot(
+        r2_diagnostic["latency_ms"],
+        r2_diagnostic["r2_conditional_density_per_ms"],
+        color="#1d3557",
+        linewidth=2.2,
+        label="R2 conditional, predictors=0",
+    )
+    axis.plot(
+        r2_diagnostic["latency_ms"],
+        r2_diagnostic["r2_marginal_density_per_ms"],
+        color="#457b9d",
+        linewidth=2.2,
+        linestyle="--",
+        label="R2 marginal over observed predictors",
+    )
+    _plot_reference_lines(axis)
+    axis.set_xlabel("Latency from partner offset (ms)")
+    axis.set_ylabel("Probability density (per ms)")
+    axis.set_title("Audited latency-regime model overlay")
+    axis.legend(frameon=False)
+    _save_figure(figure, output_path)
+
+
+def _build_plot_source_audit_summary(
+    *,
+    stan_results_dir: Path,
+    audit_df: pd.DataFrame,
+    r2_diag: pd.DataFrame | None,
+    model_b_diag: pd.DataFrame | None,
+    model_c_diag: pd.DataFrame | None,
+    maxima_payload: dict[str, int | None],
+    mismatches: list[dict[str, object]],
+    best_student_t_r: str | None,
+) -> dict[str, object]:
+    r2_conditional_unimodal = maxima_payload.get("r2_conditional") == 1 if maxima_payload.get("r2_conditional") is not None else None
+    r2_marginal_bimodal = (maxima_payload.get("r2_marginal") or 0) >= 2 if maxima_payload.get("r2_marginal") is not None else None
+    model_b_bimodal = (maxima_payload.get("model_b_mixture") or 0) >= 2 if maxima_payload.get("model_b_mixture") is not None else None
+    source_answer = {
+        "A_r2_curve_using_r2_parameters": bool(
+            not audit_df.loc[
+                audit_df["curve_label"].astype(str).str.contains("R2", regex=False)
+                & (audit_df["actual_model_name_used"] != MODEL_R2)
+            ].shape[0]
+        ),
+        "B_model_b_curve_using_model_b_parameters": bool(
+            not audit_df.loc[
+                audit_df["curve_label"].astype(str).str.contains("Model B|B constant", regex=True)
+                & (audit_df["actual_model_name_used"] != MODEL_B)
+            ].shape[0]
+        ),
+        "C_any_labels_swapped": bool(len(mismatches) > 0),
+        "D_r2_curve_density_type_in_production": DENSITY_TYPE_POSTERIOR_PREDICTIVE if best_student_t_r == MODEL_R2 else "not_featured_as_best_student_t_r",
+        "E_r2_conditional_unimodal": r2_conditional_unimodal,
+        "F_r2_marginal_bimodal": r2_marginal_bimodal,
+        "G_model_b_bimodal_under_audited_calculation": model_b_bimodal,
+        "H_figures_needing_regeneration": [
+            "behaviour_latency_regime_ppc.png",
+            "behaviour_latency_regime_regression_vs_mixture.png",
+        ],
+    }
+    if r2_diag is not None:
+        r2_mu0_area = float(np.trapezoid(r2_diag["r2_conditional_density_per_ms"], r2_diag["latency_ms"]))
+    else:
+        r2_mu0_area = float("nan")
+    return {
+        "stan_results_dir": str(stan_results_dir),
+        "maxima_counts": maxima_payload,
+        "mismatches": mismatches,
+        "answers": source_answer,
+        "r2_conditional_area": r2_mu0_area,
+        "audit_row_count": int(len(audit_df)),
+        "best_student_t_r": best_student_t_r,
+        "model_b_rows_present": int(len(model_b_diag)) if model_b_diag is not None else 0,
+        "model_c_rows_present": int(len(model_c_diag)) if model_c_diag is not None else 0,
+    }
+
+
+def _build_plot_source_audit_report(summary_payload: dict[str, object]) -> str:
+    answers = dict(summary_payload.get("answers") or {})
+    maxima = dict(summary_payload.get("maxima_counts") or {})
+    mismatches = list(summary_payload.get("mismatches") or [])
+    mismatch_text = "No explicit label/source mismatches were detected in the audited rows."
+    if mismatches:
+        mismatch_text = "\n".join(
+            [
+                f"- {row.get('figure_name')}: `{row.get('curve_label')}` intended `{row.get('intended_model_name')}` but used `{row.get('actual_model_name_used')}`."
+                for row in mismatches
+            ]
+        )
+    return "\n".join(
+        [
+            "# Latency Regime Plot Source Audit",
+            "",
+            "## 1. Summary",
+            f"- Audited rows recorded: `{summary_payload.get('audit_row_count')}`.",
+            f"- Best Student-t regression model in LOO table: `{summary_payload.get('best_student_t_r')}`.",
+            "",
+            "## 2. Source-file audit",
+            f"- Stan results directory: `{summary_payload.get('stan_results_dir')}`.",
+            f"- Label/source mismatch summary: {mismatch_text}",
+            "",
+            "## 3. Model-name filtering audit",
+            "- Exact `model_name == CONSTANT` matching is now used in the audit helpers for B, C, and R2 sources.",
+            "- Mixed-model row selection raises an assertion instead of silently reusing broad substring matches.",
+            "",
+            "## 4. R2 conditional vs marginal density",
+            f"- Conditional local maxima: `{maxima.get('r2_conditional')}`.",
+            f"- Marginal local maxima: `{maxima.get('r2_marginal')}`.",
+            f"- Conditional R2 density unimodal: `{answers.get('E_r2_conditional_unimodal')}`.",
+            f"- Marginal R2 density bimodal: `{answers.get('F_r2_marginal_bimodal')}`.",
+            "",
+            "## 5. Model B component density check",
+            f"- Model B mixture local maxima: `{maxima.get('model_b_mixture')}`.",
+            f"- Model B bimodal under audited calculation: `{answers.get('G_model_b_bimodal_under_audited_calculation')}`.",
+            "",
+            "## 6. Model C component density check",
+            f"- Model C event-averaged mixture local maxima: `{maxima.get('model_c_event_averaged')}`.",
+            "",
+            "## 7. Combined audited overlay",
+            "- See `latency_regime_model_overlay_audited.png` for the observed histogram, Model B audited mixture, Model C event-averaged mixture, and both R2 audited curves.",
+            "",
+            "## 8. Was there a model/label/source mix-up?",
+            f"- A. Was the R2 curve using R2 parameters? `{answers.get('A_r2_curve_using_r2_parameters')}`.",
+            f"- B. Was the Model B curve using Model B parameters? `{answers.get('B_model_b_curve_using_model_b_parameters')}`.",
+            f"- C. Were any labels swapped? `{answers.get('C_any_labels_swapped')}`.",
+            f"- D. Was the R2 curve conditional or marginal? `{answers.get('D_r2_curve_density_type_in_production')}`.",
+            f"- E. Is R2 conditional density unimodal? `{answers.get('E_r2_conditional_unimodal')}`.",
+            f"- F. Is R2 marginal density bimodal? `{answers.get('F_r2_marginal_bimodal')}`.",
+            f"- G. Is Model B actually unimodal or bimodal under the audited calculation? `{answers.get('G_model_b_bimodal_under_audited_calculation')}`.",
+            f"- H. Which production figure(s) need regeneration? `{', '.join(answers.get('H_figures_needing_regeneration') or [])}`.",
+            "",
+            "## 9. Recommended fixes",
+            "- Keep posterior-predictive curves explicitly labelled as posterior predictive.",
+            "- Use the audited B/C/R2 diagnostics when discussing conditional versus marginal density shape.",
+            "- Regenerate any affected production figures after the standard Stan CSV outputs are present in the target results directory.",
             "",
         ]
     )

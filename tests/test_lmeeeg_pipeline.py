@@ -16,11 +16,14 @@ from cas.stats.lmeeeg_pipeline import (
     _prepare_model_inputs,
     _augment_lmeeeg_metadata,
     _fit_one_model,
+    _model_output_dir,
+    _normalize_effect_name,
     _run_permutation_inference,
     _resolve_test_effects,
     _run_model_inference,
     _row_from_epochs_path,
     _resolve_pooled_source_paths,
+    _resolve_project_out_dir,
     load_lmeeeg_config,
     load_epochs_with_metadata,
     run_pooled_lmeeeg_analysis,
@@ -208,6 +211,169 @@ def test_prepare_model_inputs_drops_formula_missing_rows_even_without_explicit_e
     assert cleaned_metadata["latency"].tolist() == [0.1, 0.3]
 
 
+def test_prepare_model_inputs_applies_fpp_spp_cycle_position_design_recipe():
+    runtime_config = {
+        "lmeeeg": {
+            "analysis_name": "fpp_spp_cycle_position",
+            "models": {
+                "cycle_position": {
+                    "formula": "power ~ pair_position + z_event_duration + z_latency + run + z_time_within_run + (1 | subject)",
+                }
+            },
+            "design": {
+                "column_mapping": {
+                    "subject": "subject_id",
+                    "pair_position": "event_family",
+                    "event_duration": "duration_s",
+                    "time_within_run": "event_onset_conversation_s",
+                },
+                "value_mapping": {
+                    "pair_position": {"fpp": "FPP", "spp": "SPP"},
+                },
+                "predictors": {
+                    "categorical": ["pair_position", "run"],
+                    "continuous": ["event_duration", "latency", "time_within_run"],
+                },
+                "zscore": {
+                    "event_duration": "z_event_duration",
+                    "latency": "z_latency",
+                    "time_within_run": "z_time_within_run",
+                },
+                "required_columns": [
+                    "subject",
+                    "run",
+                    "pair_position",
+                    "event_duration",
+                    "latency",
+                    "time_within_run",
+                ],
+                "reference_levels": {"pair_position": "SPP"},
+            },
+        }
+    }
+    eeg = np.arange(4, dtype=float).reshape(4, 1, 1)
+    metadata = pd.DataFrame(
+        {
+            "subject_id": ["sub-001", "sub-001", "sub-002", "sub-002"],
+            "run": ["1", "1", "2", "2"],
+            "event_family": ["fpp", "spp", "fpp", "spp"],
+            "duration_s": [0.4, 0.5, 0.6, 0.7],
+            "latency": [0.2, 0.2, 0.4, 0.4],
+            "event_onset_conversation_s": [1.0, 2.0, 3.0, 4.0],
+        }
+    )
+
+    cleaned_eeg, cleaned_metadata = _prepare_model_inputs(
+        runtime_config,
+        model_name="cycle_position",
+        eeg_data=eeg,
+        metadata=metadata,
+    )
+
+    assert cleaned_eeg.shape == (4, 1, 1)
+    assert {"z_event_duration", "z_latency", "z_time_within_run"}.issubset(cleaned_metadata.columns)
+    assert list(cleaned_metadata["pair_position"].cat.categories) == ["SPP", "FPP"]
+    assert cleaned_metadata["subject"].tolist() == ["sub-001", "sub-001", "sub-002", "sub-002"]
+    assert np.isclose(cleaned_metadata["z_event_duration"].mean(), 0.0)
+
+
+def test_prepare_model_inputs_rejects_invalid_pair_position_value():
+    runtime_config = {
+        "lmeeeg": {
+            "models": {"cycle_position": {"formula": "~ pair_position + latency"}},
+            "design": {
+                "column_mapping": {
+                    "subject": "subject_id",
+                    "pair_position": "event_family",
+                    "event_duration": "duration_s",
+                    "time_within_run": "event_onset_conversation_s",
+                },
+                "value_mapping": {"pair_position": {"fpp": "FPP", "spp": "SPP"}},
+                "predictors": {
+                    "categorical": ["pair_position", "run"],
+                    "continuous": ["event_duration", "latency", "time_within_run"],
+                },
+                "required_columns": ["subject", "run", "pair_position", "event_duration", "latency", "time_within_run"],
+                "reference_levels": {"pair_position": "SPP"},
+            },
+        }
+    }
+
+    metadata = pd.DataFrame(
+        {
+            "subject_id": ["sub-001", "sub-001"],
+            "run": ["1", "1"],
+            "event_family": ["fpp", "third"],
+            "duration_s": [0.4, 0.5],
+            "latency": [0.2, 0.3],
+            "event_onset_conversation_s": [1.0, 2.0],
+        }
+    )
+
+    with pytest.raises(ValueError, match="invalid levels"):
+        _prepare_model_inputs(
+            runtime_config,
+            model_name="cycle_position",
+            eeg_data=np.arange(2, dtype=float).reshape(2, 1, 1),
+            metadata=metadata,
+        )
+
+
+def test_prepare_model_inputs_rejects_missing_required_column():
+    runtime_config = {
+        "lmeeeg": {
+            "models": {"cycle_position": {"formula": "~ pair_position + latency"}},
+            "design": {
+                "required_columns": ["subject", "run", "pair_position", "event_duration", "latency", "time_within_run"],
+            },
+        }
+    }
+
+    metadata = pd.DataFrame({"subject": ["sub-001"], "run": ["1"], "pair_position": ["SPP"]})
+
+    with pytest.raises(ValueError, match="missing required design columns"):
+        _prepare_model_inputs(
+            runtime_config,
+            model_name="cycle_position",
+            eeg_data=np.arange(1, dtype=float).reshape(1, 1, 1),
+            metadata=metadata,
+        )
+
+
+def test_prepare_model_inputs_rejects_non_positive_event_duration():
+    runtime_config = {
+        "lmeeeg": {
+            "models": {"cycle_position": {"formula": "~ pair_position + latency"}},
+            "design": {
+                "predictors": {
+                    "categorical": ["pair_position", "run"],
+                    "continuous": ["event_duration", "latency", "time_within_run"],
+                },
+                "required_columns": ["subject", "run", "pair_position", "event_duration", "latency", "time_within_run"],
+                "reference_levels": {"pair_position": "SPP"},
+            },
+        }
+    }
+    metadata = pd.DataFrame(
+        {
+            "subject": ["sub-001", "sub-001"],
+            "run": ["1", "1"],
+            "pair_position": ["SPP", "FPP"],
+            "event_duration": [0.0, 0.5],
+            "latency": [0.2, 0.3],
+            "time_within_run": [1.0, 2.0],
+        }
+    )
+
+    with pytest.raises(ValueError, match="event_duration"):
+        _prepare_model_inputs(
+            runtime_config,
+            model_name="cycle_position",
+            eeg_data=np.arange(2, dtype=float).reshape(2, 1, 1),
+            metadata=metadata,
+        )
+
+
 def test_fit_one_model_uses_fixed_column_names(tmp_path, monkeypatch):
     class DummyDesignSpec:
         fixed_column_names = ["Intercept", "latency"]
@@ -262,6 +428,13 @@ def test_resolve_test_effects_expands_categorical_predictor():
     ]
 
 
+def test_resolve_test_effects_accepts_normalized_effect_name():
+    fixed_column_names = ["Intercept", "pair_position[T.FPP]", "z_latency"]
+
+    assert _resolve_test_effects(fixed_column_names, "pair_positionFPP") == ["pair_position[T.FPP]"]
+    assert _normalize_effect_name("pair_position[T.FPP]") == "pair_positionFPP"
+
+
 def test_run_model_inference_runs_each_expanded_effect(tmp_path, monkeypatch):
     runtime_config = {
         "paths": {"out_dir": str(tmp_path)},
@@ -308,6 +481,91 @@ def test_run_model_inference_runs_each_expanded_effect(tmp_path, monkeypatch):
     assert csv_rows["channel"].tolist() == ["Cz", "Cz"]
     assert csv_rows["time"].tolist() == [0.1, 0.2]
     assert csv_rows["p_values"].tolist() == [0.04, 0.04]
+
+
+def test_run_model_inference_skips_adjacency_for_maxstat(tmp_path, monkeypatch):
+    runtime_config = {
+        "paths": {"out_dir": str(tmp_path)},
+        "lmeeeg": {
+            "models": {"demo": {"formula": "~ pair_position", "test_predictors": ["pair_position"]}},
+            "test": {"method": "maxstat", "n_permutations": 8, "seed": 0, "tail": 0},
+        },
+    }
+    trial_data = SimpleNamespace(
+        eeg_data=np.ones((3, 1, 2), dtype=float),
+        trial_metadata=pd.DataFrame({"subject_id": ["sub-001", "sub-002", "sub-003"]}),
+        channel_names=["Cz"],
+        times=np.array([0.1, 0.2], dtype=float),
+    )
+
+    class DummyDesignSpec:
+        fixed_column_names = ["Intercept", "pair_position[T.FPP]"]
+
+    fit_result = SimpleNamespace(design_spec=DummyDesignSpec())
+
+    monkeypatch.setattr(
+        "cas.stats.lmeeeg_pipeline._refit_for_inference",
+        lambda runtime_config, trial_data, *, model_name: fit_result,
+    )
+    monkeypatch.setattr(
+        "cas.stats.lmeeeg_pipeline._build_adjacency",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("adjacency should not be built")),
+    )
+    monkeypatch.setattr(
+        "lmeeeg.permute_fixed_effect",
+        lambda fit_result, *, effect, **kwargs: SimpleNamespace(
+            observed_statistic=np.ones((1, 2), dtype=float),
+            corrected_p_values=np.full((1, 2), 0.04, dtype=float),
+        ),
+    )
+
+    results = _run_model_inference(runtime_config, trial_data, model_name="demo")
+
+    assert len(results) == 1
+    assert results[0]["effect"] == "pair_position[T.FPP]"
+
+
+def test_run_model_inference_reuses_existing_fit_result(tmp_path, monkeypatch):
+    runtime_config = {
+        "paths": {"out_dir": str(tmp_path)},
+        "lmeeeg": {
+            "models": {"demo": {"formula": "~ pair_position", "test_predictors": ["pair_position"]}},
+            "test": {"method": "maxstat", "n_permutations": 8, "seed": 0, "tail": 0},
+        },
+    }
+    trial_data = SimpleNamespace(
+        eeg_data=np.ones((3, 1, 2), dtype=float),
+        trial_metadata=pd.DataFrame({"subject_id": ["sub-001", "sub-002", "sub-003"]}),
+        channel_names=["Cz"],
+        times=np.array([0.1, 0.2], dtype=float),
+    )
+
+    class DummyDesignSpec:
+        fixed_column_names = ["Intercept", "pair_position[T.FPP]"]
+
+    fit_result = SimpleNamespace(design_spec=DummyDesignSpec())
+
+    monkeypatch.setattr(
+        "cas.stats.lmeeeg_pipeline._refit_for_inference",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not refit")),
+    )
+    monkeypatch.setattr(
+        "lmeeeg.permute_fixed_effect",
+        lambda fit_result, *, effect, **kwargs: SimpleNamespace(
+            observed_statistic=np.ones((1, 2), dtype=float),
+            corrected_p_values=np.full((1, 2), 0.04, dtype=float),
+        ),
+    )
+
+    results = _run_model_inference(
+        runtime_config,
+        trial_data,
+        model_name="demo",
+        fit_result=fit_result,
+    )
+
+    assert len(results) == 1
+    assert results[0]["effect"] == "pair_position[T.FPP]"
 
 
 def test_run_permutation_inference_skips_on_backend_failure(monkeypatch):
@@ -575,7 +833,7 @@ induced_epochs:
     )
     monkeypatch.setattr(
         "cas.stats.lmeeeg_pipeline._run_model_inference",
-        lambda runtime_config, trial_data, *, model_name, band_name=None: [],
+        lambda runtime_config, trial_data, *, model_name, band_name=None, fit_result=None: [],
     )
 
     summary = run_pooled_lmeeeg_analysis(
@@ -643,7 +901,7 @@ induced_epochs:
     monkeypatch.setattr("cas.stats.lmeeeg_pipeline._fit_one_model", fake_fit_one_model)
     monkeypatch.setattr(
         "cas.stats.lmeeeg_pipeline._run_model_inference",
-        lambda runtime_config, trial_data, *, model_name, band_name=None: [],
+        lambda runtime_config, trial_data, *, model_name, band_name=None, fit_result=None: [],
     )
 
     summary = run_pooled_lmeeeg_analysis(
@@ -677,3 +935,27 @@ def test_resolve_pooled_source_paths_keeps_evoked_input_path():
 
     assert epochs_path.as_posix().endswith("/tmp/out/epochs/sub-001/eeg/sub-001_task-conversation_run-1_desc-tasklocked_epo.fif")
     assert metadata_path is None
+
+
+def test_model_output_dir_namespaces_analysis_name():
+    runtime_config = {
+        "paths": {"out_dir": "/tmp/out"},
+        "lmeeeg": {
+            "analysis_name": "fpp_spp_cycle_position",
+            "models": {
+                "demo": {
+                    "formula": "~ run",
+                    "modality": "induced",
+                }
+            },
+        },
+    }
+
+    output_dir = _model_output_dir(runtime_config, model_name="demo", band_name="theta")
+
+    assert output_dir.as_posix().endswith("/tmp/out/lmeeeg/fpp_spp_cycle_position/induced/theta/demo")
+
+
+def test_resolve_project_out_dir_supports_namespaced_analysis_output():
+    assert _resolve_project_out_dir("/tmp/out/lmeeeg") == Path("/tmp/out")
+    assert _resolve_project_out_dir("/tmp/out/lmeeeg/fpp_spp_cycle_position") == Path("/tmp/out")

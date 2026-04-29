@@ -93,6 +93,45 @@ def test_build_lmeeeg_qc_manifest_from_model_payloads_keeps_band_metadata(tmp_pa
     assert manifest["plots"][0]["files"][0].endswith("/figures/lmeeeg/betas/induced_model__theta/latency.png")
 
 
+def test_build_lmeeeg_qc_manifest_from_model_payloads_supports_custom_figure_subdir(tmp_path, monkeypatch) -> None:
+    out_dir = tmp_path / "out"
+    captured_stems: list[Path] = []
+
+    def fake_plot_joint_model_weights(*args, output_stem: Path, significance_mask=None, **kwargs) -> list[Path]:
+        captured_stems.append(output_stem)
+        output_stem.parent.mkdir(parents=True, exist_ok=True)
+        written_path = output_stem.with_suffix(".png")
+        written_path.write_text("stub\n", encoding="utf-8")
+        return [written_path]
+
+    monkeypatch.setattr(lmeeeg_viz, "plot_joint_model_weights", fake_plot_joint_model_weights)
+
+    manifest = lmeeeg_viz.build_lmeeeg_qc_manifest_from_model_payloads(
+        out_dir=out_dir,
+        model_payloads={
+            "fpp_vs_spp_cycle_position__theta": {
+                "model_name": "fpp_vs_spp_cycle_position",
+                "band_name": "theta",
+                "model_label": "fpp_vs_spp_cycle_position [theta]",
+                "betas": np.asarray([[[0.1, 0.2], [0.3, 0.4]]], dtype=float),
+                "t_values": np.asarray([[[1.0, 2.0], [3.0, 4.0]]], dtype=float),
+                "times": np.asarray([-0.1, 0.0], dtype=float),
+                "channel_names": ["Fz", "Cz"],
+                "column_names": ["pair_positionFPP"],
+            }
+        },
+        manifest_path=out_dir / "figures" / "fpp_spp_cycle_position" / "figure_manifest.json",
+        figure_subdir="fpp_spp_cycle_position",
+        formats=("png",),
+        dpi=72,
+    )
+
+    assert manifest["plot_count"] == 2
+    assert captured_stems[0] == (
+        out_dir / "figures" / "fpp_spp_cycle_position" / "betas" / "fpp_vs_spp_cycle_position__theta" / "pair_positionFPP"
+    )
+
+
 def test_build_lmeeeg_qc_manifest_from_stats_writes_statistics_plot_with_overlay(tmp_path, monkeypatch) -> None:
     out_dir = tmp_path / "out"
     stats_effect_dir = out_dir / "stats" / "lmeeeg" / "demo_model" / "latency"

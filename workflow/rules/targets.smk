@@ -170,6 +170,12 @@ rule induced_lmeeeg_all:
         LMEEEG_INDUCED_SUMMARY_OUTPUT
 
 
+rule lme_eeg_fpp_spp_cycle_position:
+    input:
+        FPP_SPP_CYCLE_POSITION_LMEEEG_SUMMARY_OUTPUT,
+        *FPP_SPP_CYCLE_POSITION_LMEEEG_CONTRAST_OUTPUTS
+
+
 rule tde_hmm_all:
     input:
         GLHMM_FIT_SUMMARY_OUTPUT
@@ -200,7 +206,9 @@ rule hazard_behavior_latency_regime_all:
     input:
         *HAZARD_BEHAVIOR_LATENCY_REGIME_EXPORT_OUTPUTS,
         *HAZARD_BEHAVIOR_LATENCY_REGIME_MODEL_OUTPUTS,
-        *HAZARD_BEHAVIOR_LATENCY_REGIME_FIGURES
+        *HAZARD_BEHAVIOR_LATENCY_REGIME_FIGURES,
+        *HAZARD_BEHAVIOR_LATENCY_REGIME_BIMODALITY_FIGURES,
+        *HAZARD_BEHAVIOR_LATENCY_REGIME_BIMODALITY_DIAGNOSTICS
 
 
 rule hazard_neural_all:
@@ -218,9 +226,21 @@ rule hazard_neural_models_all:
         *HAZARD_NEURAL_MODEL_OUTPUTS
 
 
+rule hazard_neural_lag_selection_all:
+    # Aggregates the lag-selection-specific neural outputs so we can request one target
+    # instead of remembering the individual model, JSON, null-summary, and figure paths.
+    input:
+        *HAZARD_NEURAL_LAG_SELECTION_OUTPUTS
+
+
 rule hazard_neural_permutation_null_all:
     input:
         *HAZARD_NEURAL_PERMUTATION_NULL_OUTPUTS
+
+
+rule neural_clustering_fpp:
+    input:
+        *HAZARD_NEURAL_CLUSTERING_OUTPUTS
 
 
 rule hazard_neural_figures_all:
@@ -232,3 +252,9 @@ rule figures_lmeeeg_all:
     input:
         LMEEEG_FIGURE_MANIFEST,
         LMEEEG_INFERENCE_FIGURE_MANIFEST
+
+
+rule figures_lme_eeg_fpp_spp_cycle_position:
+    input:
+        FPP_SPP_CYCLE_POSITION_LMEEEG_FIGURE_MANIFEST,
+        FPP_SPP_CYCLE_POSITION_LMEEEG_INFERENCE_FIGURE_MANIFEST

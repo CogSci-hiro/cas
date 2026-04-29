@@ -22,11 +22,11 @@ induced_source_epochs:
   output:
     root: "induced_source_epochs"
   timing:
-    tmin_s: -0.5
-    tmax_s: 1.0
+    tmin_s: -2.0
+    tmax_s: 0.5
     baseline_s:
-      - -0.5
-      - 1.0
+      - -2.0
+      - 0.5
 
 induced_epochs:
   bands: ["theta", "alpha", "beta"]

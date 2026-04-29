@@ -276,7 +276,7 @@ def load_surprisal_table(surprisal_paths: tuple[Path, ...]) -> tuple[pd.DataFram
     for path in surprisal_paths:
         path_text = str(path)
         if any(symbol in path_text for symbol in ("*", "?", "[")):
-            resolved_paths.extend(sorted(Path(item) for item in glob(path_text)))
+            resolved_paths.extend(sorted(Path(item) for item in glob(path_text, recursive=True)))
         else:
             resolved_paths.append(Path(path))
     return read_surprisal_tables(tuple(resolved_paths), unmatched_surprisal_strategy="drop")
@@ -292,7 +292,7 @@ def load_lowlevel_neural_tables(neural_paths: tuple[Path, ...]) -> pd.DataFrame:
     for path in neural_paths:
         path_text = str(path)
         if any(symbol in path_text for symbol in ("*", "?", "[")):
-            resolved_paths.extend(sorted(Path(item) for item in glob(path_text)))
+            resolved_paths.extend(sorted(Path(item) for item in glob(path_text, recursive=True)))
         else:
             resolved_paths.append(Path(path))
     for path in resolved_paths:

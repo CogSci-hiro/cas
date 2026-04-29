@@ -6,11 +6,13 @@ over all frequency bands specified in config (``induced_epochs.bands``).
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 import json
 import importlib
 import logging
 import os
 import re
+import subprocess
 import traceback
 from pathlib import Path
 from typing import Any
@@ -21,6 +23,8 @@ import yaml
 from patsy import dmatrix
 
 LOGGER = logging.getLogger(__name__)
+
+_RANDOM_EFFECT_RE = re.compile(r"\+\s*\(\s*1\s*\|\s*([^)]+?)\s*\)")
 
 
 def _configure_mne_runtime() -> None:
@@ -266,12 +270,13 @@ def _prepare_model_inputs(
 
     lmeeeg_cfg = dict(runtime_config.get("lmeeeg") or {})
     model_cfg = dict((lmeeeg_cfg.get("models") or {}).get(model_name) or {})
-    group_column = str(
-        model_cfg.get("random_effect_group")
-        or (lmeeeg_cfg.get("random_effects") or {}).get("group", "subject_id")
+    _, formula_rhs, group_column = _resolve_model_formula(
+        runtime_config,
+        model_name=model_name,
     )
 
     prepared = metadata.reset_index(drop=True).copy()
+    prepared = _apply_model_design(prepared, runtime_config, model_name=model_name)
     keep_mask = pd.Series(True, index=prepared.index, dtype=bool)
 
     eligibility = dict(model_cfg.get("eligibility") or {})
@@ -298,7 +303,6 @@ def _prepare_model_inputs(
         else:
             prepared[column] = (values - mean) / std
 
-    formula_rhs = str(model_cfg.get("formula", "~ 1")).split("~", maxsplit=1)[-1].strip()
     formula = f"y ~ {formula_rhs} + (1|{group_column})"
     parsed_formula = parse_mixed_formula(formula)
     design_metadata = prepared.copy()
@@ -336,13 +340,7 @@ def _fit_one_model(
 
     lmeeeg_cfg = dict(runtime_config.get("lmeeeg") or {})
     model_cfg = dict((lmeeeg_cfg.get("models") or {}).get(model_name) or {})
-    group_column = str(
-        model_cfg.get("random_effect_group")
-        or (lmeeeg_cfg.get("random_effects") or {}).get("group", "subject_id")
-    )
-
-    formula_rhs = str(model_cfg.get("formula", "~ 1")).split("~", maxsplit=1)[-1].strip()
-    formula = f"y ~ {formula_rhs} + (1|{group_column})"
+    formula, _, group_column = _resolve_model_formula(runtime_config, model_name=model_name)
 
     metadata = trial_data.trial_metadata.reset_index(drop=True).copy()
     variable_types: dict[str, str] = {}
@@ -384,6 +382,29 @@ def _fit_one_model(
     (output_dir / "column_names.json").write_text(
         json.dumps(column_names) + "\n", encoding="utf-8"
     )
+    normalized_column_names = [_normalize_effect_name(name) for name in column_names]
+    (output_dir / "normalized_column_names.json").write_text(
+        json.dumps(normalized_column_names) + "\n", encoding="utf-8"
+    )
+    effect_name_map = {
+        "raw_to_normalized": dict(zip(column_names, normalized_column_names, strict=True)),
+        "normalized_to_raw": dict(zip(normalized_column_names, column_names, strict=True)),
+    }
+    (output_dir / "effect_name_map.json").write_text(
+        json.dumps(effect_name_map, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+    per_effect_outputs: dict[str, dict[str, str]] = {}
+    for raw_name, normalized_name in zip(column_names, normalized_column_names, strict=True):
+        beta_path = output_dir / f"{normalized_name}_beta.npy"
+        t_path = output_dir / f"{normalized_name}_t_values.npy"
+        np.save(beta_path, np.asarray(fit_result.ols_betas[raw_name], dtype=float))
+        np.save(t_path, np.asarray(fit_result.ols_t_values[raw_name], dtype=float))
+        per_effect_outputs[normalized_name] = {
+            "raw_name": raw_name,
+            "beta": str(beta_path),
+            "t_values": str(t_path),
+        }
 
     summary = {
         "status": "ok",
@@ -392,6 +413,7 @@ def _fit_one_model(
         "n_channels": len(trial_data.channel_names),
         "n_times": int(trial_data.times.shape[0]),
         "betas_shape": list(betas.shape),
+        "per_effect_outputs": per_effect_outputs,
         "summary_output": str(output_dir / "summary.json"),
     }
 
@@ -409,10 +431,20 @@ def _resolve_test_effects(fixed_column_names: list[str], predictor: str) -> list
     if predictor in fixed_column_names:
         return [predictor]
 
+    for name in fixed_column_names:
+        if _normalize_effect_name(name) == predictor:
+            return [name]
+
     prefix = f"{predictor}["
     matches = [name for name in fixed_column_names if name.startswith(prefix)]
     if matches:
         return matches
+
+    prefix_matches = [
+        name for name in fixed_column_names if _normalize_effect_name(name).startswith(predictor)
+    ]
+    if prefix_matches:
+        return prefix_matches
 
     raise ValueError(
         f"Unknown effect '{predictor}'. Available fixed effects: {', '.join(fixed_column_names)}"
@@ -457,7 +489,8 @@ def _run_permutation_inference(
     adjacency,
 ):
     """Run permutation inference and return a skipped status on backend failures."""
-    _patch_mne_cluster_level()
+    if correction in {"cluster", "tfce"}:
+        _patch_mne_cluster_level()
     from lmeeeg import permute_fixed_effect
 
     try:
@@ -497,6 +530,7 @@ def _run_model_inference(
     *,
     model_name: str,
     band_name: str | None = None,
+    fit_result=None,
 ) -> list[dict[str, Any]]:
     """Run permutation-based inference for each test predictor."""
     lmeeeg_cfg = dict(runtime_config.get("lmeeeg") or {})
@@ -534,10 +568,17 @@ def _run_model_inference(
         else:
             threshold = float(t_dist.ppf(1 - alpha, df=dof))
 
-    adjacency = _build_adjacency(trial_data.channel_names, int(trial_data.times.shape[0]), test_cfg)
+    adjacency = None
+    if correction in {"cluster", "tfce"}:
+        adjacency = _build_adjacency(
+            trial_data.channel_names,
+            int(trial_data.times.shape[0]),
+            test_cfg,
+        )
 
-    # Need the FitResult — refit (lightweight compared to permutations)
-    fit_result = _refit_for_inference(runtime_config, trial_data, model_name=model_name)
+    # Reuse the main fit when available so inference does not refit the same model.
+    if fit_result is None:
+        fit_result = _refit_for_inference(runtime_config, trial_data, model_name=model_name)
 
     fixed_column_names = list(fit_result.design_spec.fixed_column_names)
     results: list[dict[str, Any]] = []
@@ -577,7 +618,7 @@ def _run_model_inference(
             inference_result = inference_status["inference_result"]
             used_correction = inference_status["correction"]
 
-            safe_effect_name = effect_name.replace("/", "_")
+            safe_effect_name = _normalize_effect_name(effect_name)
             observed_path = output_dir / f"{safe_effect_name}_observed.npy"
             corrected_p_path = output_dir / f"{safe_effect_name}_corrected_p.npy"
             corrected_p_csv_path = output_dir / f"{safe_effect_name}_corrected_p.csv"
@@ -595,6 +636,7 @@ def _run_model_inference(
             results.append(
                 {
                     "effect": effect_name,
+                    "normalized_effect": safe_effect_name,
                     "requested_predictor": predictor,
                     "status": "ok",
                     "correction": used_correction,
@@ -613,15 +655,7 @@ def _refit_for_inference(runtime_config, trial_data, *, model_name):
     """Return the lmeeeg FitResult object needed by permute_fixed_effect."""
     from lmeeeg import fit_lmm_mass_univariate
 
-    lmeeeg_cfg = dict(runtime_config.get("lmeeeg") or {})
-    model_cfg = dict((lmeeeg_cfg.get("models") or {}).get(model_name) or {})
-    group_column = str(
-        model_cfg.get("random_effect_group")
-        or (lmeeeg_cfg.get("random_effects") or {}).get("group", "subject_id")
-    )
-
-    formula_rhs = str(model_cfg.get("formula", "~ 1")).split("~", maxsplit=1)[-1].strip()
-    formula = f"y ~ {formula_rhs} + (1|{group_column})"
+    formula, _, group_column = _resolve_model_formula(runtime_config, model_name=model_name)
 
     metadata = trial_data.trial_metadata.reset_index(drop=True).copy()
     variable_types: dict[str, str] = {}
@@ -666,9 +700,23 @@ def _model_output_dir(
 ) -> Path:
     """Return the output directory for one model (optionally band-specific)."""
     out_dir = Path(runtime_config["paths"]["out_dir"])
+    analysis_name = str((runtime_config.get("lmeeeg") or {}).get("analysis_name", "")).strip()
+    lmeeeg_root = out_dir / "lmeeeg"
+    if analysis_name:
+        lmeeeg_root = lmeeeg_root / analysis_name
     if band_name is not None:
-        return out_dir / "lmeeeg" / "induced" / band_name / model_name
-    return out_dir / "lmeeeg" / model_name
+        return lmeeeg_root / "induced" / band_name / model_name
+    return lmeeeg_root / model_name
+
+
+def _resolve_project_out_dir(output_dir: str | Path) -> Path:
+    """Return the project-level OUT_DIR from an lmeeeg analysis output path."""
+    output_dir = Path(output_dir)
+    if output_dir.name == "lmeeeg":
+        return output_dir.parent
+    if output_dir.parent.name == "lmeeeg":
+        return output_dir.parent.parent
+    return output_dir.parent
 
 
 # ---------------------------------------------------------------------------
@@ -689,11 +737,12 @@ def run_pooled_lmeeeg_analysis(
     config = load_lmeeeg_config(config_path)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    out_dir = output_dir.parent  # project-level OUT_DIR
+    out_dir = _resolve_project_out_dir(output_dir)
 
     runtime_config: dict[str, Any] = {
         "paths": {"out_dir": str(out_dir)},
         "lmeeeg": config,
+        "runtime": {"config_path": str(config_path)},
     }
     if "induced_epochs" in config:
         runtime_config["induced_epochs"] = config["induced_epochs"]
@@ -833,6 +882,12 @@ def _run_pooled_model(
         eeg_data=combined_eeg,
         metadata=combined_metadata,
     )
+    _write_model_design_artifacts(
+        runtime_config,
+        model_name=model_name,
+        band_name=band_name,
+        design_table=combined_metadata,
+    )
 
     trial_data = build_lmeeeg_trial_data_from_arrays(
         eeg_data=combined_eeg,
@@ -846,7 +901,11 @@ def _run_pooled_model(
     )
 
     inference = _run_model_inference(
-        runtime_config, trial_data, model_name=model_name, band_name=band_name
+        runtime_config,
+        trial_data,
+        model_name=model_name,
+        band_name=band_name,
+        fit_result=fit_summary.get("_fit_result"),
     )
 
     # Strip internal objects before serialising
@@ -860,3 +919,217 @@ def _run_pooled_model(
     if band_name is not None:
         entry["band_name"] = band_name
     return entry
+
+
+def _resolve_model_formula(
+    runtime_config: dict[str, Any],
+    *,
+    model_name: str,
+) -> tuple[str, str, str]:
+    """Return the backend formula, fixed-effect RHS, and random intercept group."""
+    lmeeeg_cfg = dict(runtime_config.get("lmeeeg") or {})
+    model_cfg = dict((lmeeeg_cfg.get("models") or {}).get(model_name) or {})
+    raw_formula = str(model_cfg.get("formula", "~ 1")).strip()
+    rhs = raw_formula.split("~", maxsplit=1)[-1].strip() if "~" in raw_formula else raw_formula
+    group_column = str(
+        model_cfg.get("random_effect_group")
+        or (lmeeeg_cfg.get("random_effects") or {}).get("group", "subject_id")
+    ).strip()
+    random_match = _RANDOM_EFFECT_RE.search(rhs)
+    if random_match is not None:
+        group_column = random_match.group(1).strip()
+        rhs = _RANDOM_EFFECT_RE.sub("", rhs)
+        rhs = re.sub(r"\s+", " ", rhs).strip()
+        rhs = re.sub(r"\+\s*$", "", rhs).strip()
+    formula_rhs = rhs or "1"
+    return f"y ~ {formula_rhs} + (1|{group_column})", formula_rhs, group_column
+
+
+def _normalize_effect_name(name: str) -> str:
+    """Normalize patsy/lmeEEG column names to stable file-safe effect names."""
+    text = str(name).strip()
+    text = re.sub(r"\[T\.([^\]]+)\]", r"\1", text)
+    text = re.sub(r"[^A-Za-z0-9_]+", "_", text).strip("_")
+    return text or "effect"
+
+
+def _apply_model_design(
+    metadata: pd.DataFrame,
+    runtime_config: dict[str, Any],
+    *,
+    model_name: str,
+) -> pd.DataFrame:
+    """Apply config-driven design-table mappings, validation, and z-scoring."""
+    lmeeeg_cfg = dict(runtime_config.get("lmeeeg") or {})
+    model_cfg = dict((lmeeeg_cfg.get("models") or {}).get(model_name) or {})
+    design_cfg = dict(lmeeeg_cfg.get("design") or {})
+    design_cfg.update(dict(model_cfg.get("design") or {}))
+    if not design_cfg:
+        return metadata
+
+    prepared = metadata.copy()
+
+    for target, source in dict(design_cfg.get("column_mapping") or {}).items():
+        if source in prepared.columns:
+            prepared[target] = prepared[source]
+
+    for column, mapping in dict(design_cfg.get("value_mapping") or {}).items():
+        if column not in prepared.columns:
+            continue
+        values = prepared[column]
+        mapped = values.map(mapping)
+        prepared[column] = mapped.where(mapped.notna(), values)
+
+    required_columns = [str(value) for value in design_cfg.get("required_columns") or []]
+    missing_columns = [column for column in required_columns if column not in prepared.columns]
+    if missing_columns:
+        raise ValueError(
+            f"Model '{model_name}' is missing required design columns: {', '.join(sorted(missing_columns))}"
+        )
+
+    invalid_reasons: list[str] = []
+    _require_non_missing(prepared, "subject", invalid_reasons)
+    _require_non_missing(prepared, "run", invalid_reasons)
+
+    pair_position = "pair_position"
+    if pair_position in prepared.columns:
+        levels = prepared[pair_position].astype(str)
+        valid_levels = {"FPP", "SPP"}
+        invalid_levels = sorted(
+            {value for value in levels.dropna().unique().tolist() if value not in valid_levels}
+        )
+        if invalid_levels:
+            invalid_reasons.append(
+                f"`pair_position` contains invalid levels: {', '.join(invalid_levels)}"
+            )
+        observed_levels = {value for value in levels.dropna().unique().tolist() if value in valid_levels}
+        if observed_levels != valid_levels:
+            invalid_reasons.append(
+                f"`pair_position` must contain both FPP and SPP after filtering; observed: {', '.join(sorted(observed_levels)) or 'none'}"
+            )
+
+    for column in list(((design_cfg.get("predictors") or {}).get("continuous") or [])):
+        if column not in prepared.columns:
+            continue
+        numeric = pd.to_numeric(prepared[column], errors="coerce")
+        if numeric.isna().any():
+            invalid_reasons.append(f"`{column}` must be numeric and non-missing.")
+        prepared[column] = numeric
+
+    _require_finite(prepared, "latency", invalid_reasons, label="`latency` must be finite.")
+    _require_positive(prepared, "event_duration", invalid_reasons, label="`event_duration` must be positive.")
+    _require_finite(
+        prepared,
+        "time_within_run",
+        invalid_reasons,
+        label="`time_within_run` must be finite.",
+    )
+
+    if invalid_reasons:
+        raise ValueError(
+            f"Model '{model_name}' design validation failed:\n- " + "\n- ".join(invalid_reasons)
+        )
+
+    for source, target in dict(design_cfg.get("zscore") or {}).items():
+        if source not in prepared.columns:
+            continue
+        values = pd.to_numeric(prepared[source], errors="coerce")
+        mean = values.mean()
+        std = values.std(ddof=0)
+        if pd.isna(std) or std == 0:
+            prepared[target] = 0.0
+        else:
+            prepared[target] = (values - mean) / std
+
+    reference_levels = {
+        str(column): str(value)
+        for column, value in dict(design_cfg.get("reference_levels") or {}).items()
+    }
+    for column in list(((design_cfg.get("predictors") or {}).get("categorical") or [])):
+        if column not in prepared.columns:
+            continue
+        series = prepared[column].astype(str)
+        if column in reference_levels:
+            reference = reference_levels[column]
+            categories = [reference] + [value for value in pd.unique(series) if value != reference]
+            if reference not in categories:
+                raise ValueError(
+                    f"Model '{model_name}' expected reference level {reference!r} for {column!r}."
+                )
+            prepared[column] = pd.Categorical(series, categories=categories, ordered=True)
+        else:
+            prepared[column] = pd.Categorical(series)
+
+    return prepared
+
+
+def _require_non_missing(frame: pd.DataFrame, column: str, reasons: list[str]) -> None:
+    if column not in frame.columns:
+        return
+    if frame[column].isna().any():
+        reasons.append(f"`{column}` must be non-missing.")
+
+
+def _require_finite(frame: pd.DataFrame, column: str, reasons: list[str], *, label: str) -> None:
+    if column not in frame.columns:
+        return
+    values = pd.to_numeric(frame[column], errors="coerce")
+    if not np.isfinite(values.to_numpy(dtype=float)).all():
+        reasons.append(label)
+    frame[column] = values
+
+
+def _require_positive(frame: pd.DataFrame, column: str, reasons: list[str], *, label: str) -> None:
+    if column not in frame.columns:
+        return
+    values = pd.to_numeric(frame[column], errors="coerce")
+    if (values <= 0).any() or values.isna().any():
+        reasons.append(label)
+    frame[column] = values
+
+
+def _write_model_design_artifacts(
+    runtime_config: dict[str, Any],
+    *,
+    model_name: str,
+    band_name: str | None,
+    design_table: pd.DataFrame,
+) -> None:
+    """Persist the auditable design table and run metadata for one fitted model."""
+    output_dir = _model_output_dir(runtime_config, model_name=model_name, band_name=band_name)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    design_table.to_csv(output_dir / "design_table.csv", index=False)
+
+    _, formula_rhs, group_column = _resolve_model_formula(runtime_config, model_name=model_name)
+    metadata_payload = {
+        "analysis_name": str((runtime_config.get("lmeeeg") or {}).get("analysis_name", "")).strip()
+        or None,
+        "model_name": model_name,
+        "band_name": band_name,
+        "config_path": str(((runtime_config.get("runtime") or {}).get("config_path")) or ""),
+        "formula": f"power ~ {formula_rhs} + (1 | {group_column})",
+        "timestamp_utc": datetime.now(UTC).isoformat(),
+        "git_commit": _git_commit_hash(),
+        "event_table": str(((runtime_config.get("lmeeeg") or {}).get("event_table")) or ""),
+        "n_events": int(len(design_table)),
+        "n_subjects": int(design_table["subject"].nunique()) if "subject" in design_table.columns else None,
+        "n_runs": int(design_table["run"].nunique()) if "run" in design_table.columns else None,
+    }
+    (output_dir / "run_metadata.json").write_text(
+        json.dumps(metadata_payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _git_commit_hash() -> str | None:
+    try:
+        return (
+            subprocess.check_output(
+                ["git", "rev-parse", "HEAD"],
+                stderr=subprocess.DEVNULL,
+                text=True,
+            ).strip()
+            or None
+        )
+    except Exception:
+        return None
