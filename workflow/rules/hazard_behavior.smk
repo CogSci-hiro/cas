@@ -760,3 +760,95 @@ if HAZARD_BEHAVIOR_FIT_TIMING_CONTROL_MODELS:
               --diagnostics-dir "{params.diagnostics_dir}" \
               --verbose
             """
+
+BEHAVIOR_FINAL_CONFIG_PATH = "config/behavior.yaml"
+with open(BEHAVIOR_FINAL_CONFIG_PATH, encoding="utf-8") as _f:
+    _BEHAVIOR_FINAL_CONFIG = yaml.safe_load(_f) or {}
+BEHAVIOR_FINAL_ROOT = str(
+    dict(_BEHAVIOR_FINAL_CONFIG.get("paths") or {}).get("out_dir") or "results/hazard_behavior/final"
+)
+
+rule behavior_final_lag_selection:
+    input:
+        config=BEHAVIOR_FINAL_CONFIG_PATH
+    output:
+        selected_lag=f"{BEHAVIOR_FINAL_ROOT}/lag_selection/selected_lag.json",
+        table=f"{BEHAVIOR_FINAL_ROOT}/lag_selection/fpp_lag_selection_table.csv"
+    shell:
+        r"""
+        set -euo pipefail
+        PYTHONPATH="{SRC_DIR}:{PROJECT_ROOT}" "{PYTHON_BIN}" -m cas.cli.main behavior-final-select-lag \
+          --config {input.config} \
+          --out-dir {BEHAVIOR_FINAL_ROOT}/lag_selection \
+          --verbose
+        """
+
+
+rule behavior_final_fpp:
+    input:
+        config=BEHAVIOR_FINAL_CONFIG_PATH,
+        selected_lag=f"{BEHAVIOR_FINAL_ROOT}/lag_selection/selected_lag.json"
+    output:
+        riskset=f"{BEHAVIOR_FINAL_ROOT}/fpp/riskset.parquet",
+        summary=f"{BEHAVIOR_FINAL_ROOT}/fpp/models/model_summary.csv"
+    shell:
+        r"""
+        set -euo pipefail
+        PYTHONPATH="{SRC_DIR}:{PROJECT_ROOT}" "{PYTHON_BIN}" -m cas.cli.main behavior-final-fit \
+          --config {input.config} \
+          --anchor-type fpp \
+          --selected-lag {input.selected_lag} \
+          --out-dir {BEHAVIOR_FINAL_ROOT}/fpp \
+          --verbose
+        """
+
+
+rule behavior_final_spp:
+    input:
+        config=BEHAVIOR_FINAL_CONFIG_PATH,
+        selected_lag=f"{BEHAVIOR_FINAL_ROOT}/lag_selection/selected_lag.json"
+    output:
+        riskset=f"{BEHAVIOR_FINAL_ROOT}/spp_control/riskset.parquet",
+        summary=f"{BEHAVIOR_FINAL_ROOT}/spp_control/models/model_summary.csv"
+    shell:
+        r"""
+        set -euo pipefail
+        PYTHONPATH="{SRC_DIR}:{PROJECT_ROOT}" "{PYTHON_BIN}" -m cas.cli.main behavior-final-fit \
+          --config {input.config} \
+          --anchor-type spp \
+          --selected-lag {input.selected_lag} \
+          --out-dir {BEHAVIOR_FINAL_ROOT}/spp_control \
+          --verbose
+        """
+
+
+rule behavior_final_fpp_vs_spp:
+    input:
+        config=BEHAVIOR_FINAL_CONFIG_PATH,
+        selected_lag=f"{BEHAVIOR_FINAL_ROOT}/lag_selection/selected_lag.json",
+        fpp=f"{BEHAVIOR_FINAL_ROOT}/fpp/riskset.parquet",
+        spp=f"{BEHAVIOR_FINAL_ROOT}/spp_control/riskset.parquet"
+    output:
+        summary=f"{BEHAVIOR_FINAL_ROOT}/fpp_vs_spp/interaction_model_summary.csv",
+        contrasts=f"{BEHAVIOR_FINAL_ROOT}/fpp_vs_spp/information_effect_contrasts.csv",
+        report=f"{BEHAVIOR_FINAL_ROOT}/fpp_vs_spp/fpp_vs_spp_report.md"
+    shell:
+        r"""
+        set -euo pipefail
+        PYTHONPATH="{SRC_DIR}:{PROJECT_ROOT}" "{PYTHON_BIN}" -m cas.cli.main behavior-final-compare \
+          --config {input.config} \
+          --selected-lag {input.selected_lag} \
+          --fpp-riskset {input.fpp} \
+          --spp-riskset {input.spp} \
+          --out-dir {BEHAVIOR_FINAL_ROOT}/fpp_vs_spp \
+          --verbose
+        """
+
+
+rule behavior_final_all:
+    input:
+        f"{BEHAVIOR_FINAL_ROOT}/lag_selection/selected_lag.json",
+        f"{BEHAVIOR_FINAL_ROOT}/fpp/models/model_summary.csv",
+        f"{BEHAVIOR_FINAL_ROOT}/spp_control/models/model_summary.csv",
+        f"{BEHAVIOR_FINAL_ROOT}/fpp_vs_spp/information_effect_contrasts.csv",
+        f"{BEHAVIOR_FINAL_ROOT}/fpp_vs_spp/fpp_vs_spp_report.md"

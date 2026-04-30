@@ -14,6 +14,14 @@ import yaml
 from scipy.io import wavfile
 
 from cas.cli.commands.annotations import add_annotations_parser, run_annotations_command
+from cas.cli.commands.behavior_final import (
+    add_behavior_final_compare_parser,
+    add_behavior_final_fit_parser,
+    add_behavior_final_select_lag_parser,
+    run_behavior_final_compare_command,
+    run_behavior_final_fit_command,
+    run_behavior_final_select_lag_command,
+)
 from cas.cli.commands.diagnose_behaviour_latency_regime import (
     add_diagnose_behaviour_latency_regime_parser,
     run_diagnose_behaviour_latency_regime_command,
@@ -188,6 +196,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="cas", description="CAS command line interface.")
     subparsers = parser.add_subparsers(dest="command", required=True)
     add_annotations_parser(subparsers)
+    add_behavior_final_compare_parser(subparsers)
+    add_behavior_final_fit_parser(subparsers)
+    add_behavior_final_select_lag_parser(subparsers)
     add_diagnose_behaviour_latency_regime_parser(subparsers)
     add_diagnose_behaviour_latency_regime_bimodality_parser(subparsers)
     add_diagnose_spp_neural_hazard_failure_parser(subparsers)
@@ -1384,6 +1395,12 @@ def main() -> int:
     args = parser.parse_args()
     if args.command == "annotations":
         return run_annotations_command(args)
+    if args.command == "behavior-final-compare":
+        return run_behavior_final_compare_command(args)
+    if args.command == "behavior-final-fit":
+        return run_behavior_final_fit_command(args)
+    if args.command == "behavior-final-select-lag":
+        return run_behavior_final_select_lag_command(args)
     if args.command == "diagnose-behaviour-latency-regime":
         return run_diagnose_behaviour_latency_regime_command(args)
     if args.command == "diagnose-behaviour-latency-regime-bimodality":
