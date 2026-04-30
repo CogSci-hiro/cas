@@ -10,6 +10,11 @@ HAZARD_NEURAL_PERMUTATION_WORKFLOW_CONFIG = (
 HAZARD_NEURAL_PERMUTATION_INPUT_CONFIG = dict(HAZARD_NEURAL_PERMUTATION_WORKFLOW_CONFIG.get("input") or {})
 HAZARD_NEURAL_PERMUTATION_OUTPUT_CONFIG = dict(HAZARD_NEURAL_PERMUTATION_WORKFLOW_CONFIG.get("output") or {})
 HAZARD_NEURAL_PERMUTATION_RUN_CONFIG = dict(HAZARD_NEURAL_PERMUTATION_WORKFLOW_CONFIG.get("permutation") or {})
+NEURAL_HAZARD_FPP_SPP_WORKFLOW_CONFIG = (
+    NEURAL_HAZARD_FPP_SPP_CONFIG if isinstance(NEURAL_HAZARD_FPP_SPP_CONFIG, dict) else {}
+)
+NEURAL_HAZARD_FPP_SPP_INPUT_CONFIG = dict(NEURAL_HAZARD_FPP_SPP_WORKFLOW_CONFIG.get("input") or {})
+NEURAL_HAZARD_FPP_SPP_OUTPUT_CONFIG = dict(NEURAL_HAZARD_FPP_SPP_WORKFLOW_CONFIG.get("output") or {})
 
 
 def _resolve_hazard_behavior_output_dir(config_value: str | None, default_subdir: str) -> str:
@@ -18,6 +23,22 @@ def _resolve_hazard_behavior_output_dir(config_value: str | None, default_subdir
     if os.path.isabs(config_value):
         return config_value
     return f"{OUT_DIR}/{config_value.lstrip('/')}"
+
+
+def _resolve_project_input_path(path_value: str | None) -> str | None:
+    if not isinstance(path_value, str) or not path_value.strip():
+        return None
+    if os.path.isabs(path_value):
+        return path_value
+    return os.path.join(PROJECT_ROOT, path_value.lstrip("/"))
+
+
+def _resolve_project_output_dir(path_value: str | None, default_subdir: str) -> str:
+    if not isinstance(path_value, str) or not path_value.strip():
+        return os.path.join(PROJECT_ROOT, default_subdir)
+    if os.path.isabs(path_value):
+        return path_value
+    return os.path.join(PROJECT_ROOT, path_value.lstrip("/"))
 
 
 LM_FEATURE_DIR = PATHS_CONFIG.get("lm_feature_dir")
@@ -36,8 +57,9 @@ HAZARD_BEHAVIOR_R_GLMM_LAG_GRID = ",".join(
     str(int(lag_ms))
     for lag_ms in (HAZARD_BEHAVIOR_TIMING_CONTROL_CONFIG.get("r_glmm_lag_grid_ms") or [0, 50, 100, 150, 200, 300, 500, 700, 1000])
 )
-HAZARD_BEHAVIOR_R_GLMM_ONSET_SPLINE_DF = int(HAZARD_BEHAVIOR_TIMING_CONTROL_CONFIG.get("r_glmm_onset_spline_df", 5))
-HAZARD_BEHAVIOR_R_GLMM_OFFSET_SPLINE_DF = int(HAZARD_BEHAVIOR_TIMING_CONTROL_CONFIG.get("r_glmm_offset_spline_df", 4))
+HAZARD_BEHAVIOR_R_GLMM_INCLUDE_QUADRATIC_OFFSET_TIMING = bool(
+    HAZARD_BEHAVIOR_TIMING_CONTROL_CONFIG.get("r_glmm_include_quadratic_offset_timing", True)
+)
 HAZARD_BEHAVIOR_R_GLMM_BACKEND = str(HAZARD_BEHAVIOR_TIMING_CONTROL_CONFIG.get("r_glmm_backend", "glmmTMB"))
 HAZARD_BEHAVIOR_R_GLMM_INCLUDE_RUN_RANDOM_EFFECT = bool(
     HAZARD_BEHAVIOR_TIMING_CONTROL_CONFIG.get("r_glmm_include_run_random_effect", False)
@@ -236,6 +258,18 @@ HAZARD_NEURAL_PERMUTATION_NULL_OUTPUT_DIR = _resolve_hazard_behavior_output_dir(
     HAZARD_NEURAL_PERMUTATION_OUTPUT_CONFIG.get("output_dir"),
     "reports/hazard_neural_fpp/permutation_null",
 )
+NEURAL_HAZARD_FPP_SPP_OUTPUT_DIR = _resolve_hazard_behavior_output_dir(
+    NEURAL_HAZARD_FPP_SPP_OUTPUT_CONFIG.get("out_dir"),
+    "reports/neural_hazard/fpp_spp",
+)
+NEURAL_HAZARD_FPP_SPP_OUTPUTS = [
+    f"{NEURAL_HAZARD_FPP_SPP_OUTPUT_DIR}/tables/model_comparison.csv",
+    f"{NEURAL_HAZARD_FPP_SPP_OUTPUT_DIR}/tables/M2_entropy_coefficients.csv",
+    f"{NEURAL_HAZARD_FPP_SPP_OUTPUT_DIR}/tables/circular_shift_summary.csv",
+    f"{NEURAL_HAZARD_FPP_SPP_OUTPUT_DIR}/figures/predicted_hazard_by_entropy_anchor_type.png",
+    f"{NEURAL_HAZARD_FPP_SPP_OUTPUT_DIR}/figures/circular_shift_null_delta_loglik.png",
+    f"{NEURAL_HAZARD_FPP_SPP_OUTPUT_DIR}/summary.json",
+]
 HAZARD_NEURAL_PERMUTATION_NULL_INPUT_RISKSET = (
     HAZARD_NEURAL_PERMUTATION_INPUT_CONFIG.get("riskset_path")
     if isinstance(HAZARD_NEURAL_PERMUTATION_INPUT_CONFIG.get("riskset_path"), str)
@@ -493,6 +527,29 @@ rule hazard_neural_permutation_null:
         """
 
 
+rule run_neural_hazard_fpp_spp:
+    input:
+        config_path=f"{PROJECT_ROOT}/config/neural_hazard_fpp_spp.yaml",
+        fpp_riskset=lambda wildcards: f"{BEHAVIOR_FINAL_ROOT}/fpp/riskset.parquet",
+        spp_riskset=lambda wildcards: f"{BEHAVIOR_FINAL_ROOT}/spp_control/riskset.parquet",
+        neural_features=GLHMM_ENTROPY_FEATURES_OUTPUT,
+    output:
+        model_comparison=NEURAL_HAZARD_FPP_SPP_OUTPUTS[0],
+        coefficients=NEURAL_HAZARD_FPP_SPP_OUTPUTS[1],
+        circular_shift_summary=NEURAL_HAZARD_FPP_SPP_OUTPUTS[2],
+        predicted_hazard=NEURAL_HAZARD_FPP_SPP_OUTPUTS[3],
+        circular_shift_histogram=NEURAL_HAZARD_FPP_SPP_OUTPUTS[4],
+        summary_json=NEURAL_HAZARD_FPP_SPP_OUTPUTS[5],
+    shell:
+        r"""
+        set -euo pipefail
+        mkdir -p "{resources.tmpdir}/mpl" "{resources.tmpdir}/cache"
+        MPLCONFIGDIR="{resources.tmpdir}/mpl" XDG_CACHE_HOME="{resources.tmpdir}/cache" \
+        PYTHONPATH="{SRC_DIR}:{PROJECT_ROOT}" "{PYTHON_BIN}" -m cas.cli.main neural-hazard-fpp-spp \
+          --config "{input.config_path}"
+        """
+
+
 rule hazard_behavior_fpp:
     input:
         events_csv=EVENTS_CSV_OUTPUT,
@@ -554,6 +611,11 @@ if HAZARD_BEHAVIOR_FIT_TIMING_CONTROL_MODELS:
             prediction_information=HAZARD_BEHAVIOR_GLMM_MODEL_OUTPUTS[6],
         params:
             output_dir=f"{HAZARD_BEHAVIOR_OUTPUT_DIR}/models",
+            quadratic_timing_flag=(
+                "--r-glmm-include-quadratic-offset-timing"
+                if HAZARD_BEHAVIOR_R_GLMM_INCLUDE_QUADRATIC_OFFSET_TIMING
+                else "--no-r-glmm-include-quadratic-offset-timing"
+            ),
         shell:
             r"""
             set -euo pipefail
@@ -561,8 +623,7 @@ if HAZARD_BEHAVIOR_FIT_TIMING_CONTROL_MODELS:
               --input-csv "{input.export_csv}" \
               --output-dir "{params.output_dir}" \
               --lag-grid-ms "{HAZARD_BEHAVIOR_R_GLMM_LAG_GRID}" \
-              --onset-spline-df "{HAZARD_BEHAVIOR_R_GLMM_ONSET_SPLINE_DF}" \
-              --offset-spline-df "{HAZARD_BEHAVIOR_R_GLMM_OFFSET_SPLINE_DF}" \
+              {params.quadratic_timing_flag} \
               --backend "{HAZARD_BEHAVIOR_R_GLMM_BACKEND}" \
               --include-run-random-effect "{HAZARD_BEHAVIOR_R_GLMM_INCLUDE_RUN_RANDOM_EFFECT_TEXT}" \
               --prop-expected-mode "{HAZARD_BEHAVIOR_R_GLMM_PROP_EXPECTED_MODE}" \
@@ -764,8 +825,9 @@ if HAZARD_BEHAVIOR_FIT_TIMING_CONTROL_MODELS:
 BEHAVIOR_FINAL_CONFIG_PATH = "config/behavior.yaml"
 with open(BEHAVIOR_FINAL_CONFIG_PATH, encoding="utf-8") as _f:
     _BEHAVIOR_FINAL_CONFIG = yaml.safe_load(_f) or {}
-BEHAVIOR_FINAL_ROOT = str(
-    dict(_BEHAVIOR_FINAL_CONFIG.get("paths") or {}).get("out_dir") or "results/hazard_behavior/final"
+BEHAVIOR_FINAL_ROOT = _resolve_hazard_behavior_output_dir(
+    dict(_BEHAVIOR_FINAL_CONFIG.get("paths") or {}).get("out_dir"),
+    "reports/hazard_behavior_final",
 )
 
 rule behavior_final_lag_selection:
@@ -773,7 +835,8 @@ rule behavior_final_lag_selection:
         config=BEHAVIOR_FINAL_CONFIG_PATH
     output:
         selected_lag=f"{BEHAVIOR_FINAL_ROOT}/lag_selection/selected_lag.json",
-        table=f"{BEHAVIOR_FINAL_ROOT}/lag_selection/fpp_lag_selection_table.csv"
+        table=f"{BEHAVIOR_FINAL_ROOT}/lag_selection/fpp_lag_selection_table.csv",
+        qc_manifest=f"{BEHAVIOR_FINAL_ROOT}/lag_selection/qc_plot_manifest.json"
     shell:
         r"""
         set -euo pipefail
@@ -831,7 +894,8 @@ rule behavior_final_fpp_vs_spp:
     output:
         summary=f"{BEHAVIOR_FINAL_ROOT}/fpp_vs_spp/interaction_model_summary.csv",
         contrasts=f"{BEHAVIOR_FINAL_ROOT}/fpp_vs_spp/information_effect_contrasts.csv",
-        report=f"{BEHAVIOR_FINAL_ROOT}/fpp_vs_spp/fpp_vs_spp_report.md"
+        report=f"{BEHAVIOR_FINAL_ROOT}/fpp_vs_spp/fpp_vs_spp_report.md",
+        qc_manifest=f"{BEHAVIOR_FINAL_ROOT}/fpp_vs_spp/qc_plot_manifest.json"
     shell:
         r"""
         set -euo pipefail
@@ -851,4 +915,5 @@ rule behavior_final_all:
         f"{BEHAVIOR_FINAL_ROOT}/fpp/models/model_summary.csv",
         f"{BEHAVIOR_FINAL_ROOT}/spp_control/models/model_summary.csv",
         f"{BEHAVIOR_FINAL_ROOT}/fpp_vs_spp/information_effect_contrasts.csv",
-        f"{BEHAVIOR_FINAL_ROOT}/fpp_vs_spp/fpp_vs_spp_report.md"
+        f"{BEHAVIOR_FINAL_ROOT}/fpp_vs_spp/fpp_vs_spp_report.md",
+        f"{BEHAVIOR_FINAL_ROOT}/fpp_vs_spp/qc_plot_manifest.json"

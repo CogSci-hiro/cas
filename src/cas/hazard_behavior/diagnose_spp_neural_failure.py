@@ -414,8 +414,7 @@ def infer_lag_metadata(riskset: pd.DataFrame, *, models_dir: Path | None) -> dic
                 enabled=True,
                 model=neural_config.model.__class__(
                     fitting_backend=neural_config.model.fitting_backend,
-                    baseline_spline_df=neural_config.model.baseline_spline_df,
-                    baseline_spline_degree=neural_config.model.baseline_spline_degree,
+                    include_quadratic_offset_timing=neural_config.model.include_quadratic_offset_timing,
                     information_rate_lag_ms=int(info_match.group(1)),
                     prop_expected_lag_ms=neural_config.model.prop_expected_lag_ms,
                 ),
@@ -427,8 +426,7 @@ def infer_lag_metadata(riskset: pd.DataFrame, *, models_dir: Path | None) -> dic
                 enabled=True,
                 model=neural_config.model.__class__(
                     fitting_backend=neural_config.model.fitting_backend,
-                    baseline_spline_df=neural_config.model.baseline_spline_df,
-                    baseline_spline_degree=neural_config.model.baseline_spline_degree,
+                    include_quadratic_offset_timing=neural_config.model.include_quadratic_offset_timing,
                     information_rate_lag_ms=neural_config.model.information_rate_lag_ms,
                     prop_expected_lag_ms=int(prop_match.group(1)),
                 ),
@@ -493,8 +491,7 @@ def infer_lag_metadata_from_columns(columns: list[str], *, models_dir: Path | No
         enabled=True,
         model=template.model.__class__(
             fitting_backend=template.model.fitting_backend,
-            baseline_spline_df=template.model.baseline_spline_df,
-            baseline_spline_degree=template.model.baseline_spline_degree,
+            include_quadratic_offset_timing=template.model.include_quadratic_offset_timing,
             information_rate_lag_ms=int(info_match.group(1)) if info_match else template.model.information_rate_lag_ms,
             prop_expected_lag_ms=int(prop_match.group(1)) if prop_match else template.model.prop_expected_lag_ms,
         ),
@@ -1244,17 +1241,13 @@ def fit_diagnostic_formula_model(
 
 
 def build_timing_only_formula(*, event_column: str, neural_config: NeuralHazardConfig) -> str:
-    """Build a timing-only spline formula."""
+    """Build a timing-only parametric formula."""
 
-    onset_spline = (
-        f"bs(time_from_partner_onset, df={neural_config.model.baseline_spline_df}, "
-        f"degree={neural_config.model.baseline_spline_degree}, include_intercept=False)"
+    del neural_config
+    return (
+        f"{event_column} ~ time_from_partner_onset + time_from_partner_offset"
+        f" + I(time_from_partner_offset ** 2)"
     )
-    offset_spline = (
-        f"bs(time_from_partner_offset, df={neural_config.model.baseline_spline_df}, "
-        f"degree={neural_config.model.baseline_spline_degree}, include_intercept=False)"
-    )
-    return f"{event_column} ~ {onset_spline} + {offset_spline}"
 
 
 def incremental_failure_row(

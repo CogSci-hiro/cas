@@ -45,15 +45,8 @@ def primary_z_column_name(feature_name: str, lag_ms: int) -> str:
 
 
 def build_timing_control_baseline_terms(config: BehaviourHazardConfig) -> str:
-    onset_spline = (
-        f"bs(time_from_partner_onset, df={config.primary_model_baseline_spline_df}, "
-        f"degree={config.primary_model_baseline_spline_degree}, include_intercept=False)"
-    )
-    offset_spline = (
-        f"bs(time_from_partner_offset, df={config.primary_model_baseline_spline_df}, "
-        f"degree={config.primary_model_baseline_spline_degree}, include_intercept=False)"
-    )
-    return f"{onset_spline} + {offset_spline}"
+    del config
+    return "z_time_from_partner_onset + z_time_from_partner_offset + z_time_from_partner_offset_sq"
 
 
 def build_timing_control_model_formulas(config: BehaviourHazardConfig) -> dict[str, str]:
@@ -165,8 +158,15 @@ def select_timing_control_best_lags(
         primary_unscaled_column_name("prop_expected_cumulative_info", lag_ms) for lag_ms in lag_grid
     ]
     validated = _ensure_z_predictors_available(validated, predictors=lagged_predictors)
+    validated = _prepare_timing_control_model_table(validated, config=config)
     baseline_terms = build_timing_control_baseline_terms(config)
-    baseline_columns = ["event", "episode_id", "time_from_partner_onset", "time_from_partner_offset"]
+    baseline_columns = [
+        "event",
+        "episode_id",
+        "z_time_from_partner_onset",
+        "z_time_from_partner_offset",
+        "z_time_from_partner_offset_sq",
+    ]
 
     selection_rows: list[dict[str, Any]] = []
 
@@ -506,16 +506,34 @@ def _prepare_timing_control_model_table(
     riskset_table: pd.DataFrame,
     *,
     config: BehaviourHazardConfig,
+    extra_required_columns: list[str] | None = None,
 ) -> pd.DataFrame:
+    working = riskset_table.copy()
+    onset_numeric = pd.to_numeric(working["time_from_partner_onset"], errors="coerce")
+    offset_numeric = pd.to_numeric(working["time_from_partner_offset"], errors="coerce")
+    onset_sd = float(onset_numeric.std(ddof=0))
+    offset_sd = float(offset_numeric.std(ddof=0))
+    if not np.isfinite(onset_sd) or onset_sd <= 0.0:
+        raise ValueError("`time_from_partner_onset` must have non-zero finite variance for timing-control models.")
+    if not np.isfinite(offset_sd) or offset_sd <= 0.0:
+        raise ValueError("`time_from_partner_offset` must have non-zero finite variance for timing-control models.")
+    working["z_time_from_partner_onset"] = (onset_numeric - float(onset_numeric.mean())) / onset_sd
+    working["z_time_from_partner_offset"] = (offset_numeric - float(offset_numeric.mean())) / offset_sd
+    working["z_time_from_partner_offset_sq"] = working["z_time_from_partner_offset"] ** 2
     required_columns = [
         "event",
         "episode_id",
-        "time_from_partner_onset",
-        "time_from_partner_offset",
-        primary_z_column_name("information_rate", config.primary_information_rate_lag_ms),
-        primary_z_column_name("prop_expected_cumulative_info", config.primary_prop_expected_lag_ms),
+        "z_time_from_partner_onset",
+        "z_time_from_partner_offset",
+        "z_time_from_partner_offset_sq",
     ]
-    return _shared_complete_case_subset(riskset_table, required_columns=required_columns)
+    if extra_required_columns is None:
+        extra_required_columns = [
+            primary_z_column_name("information_rate", config.primary_information_rate_lag_ms),
+            primary_z_column_name("prop_expected_cumulative_info", config.primary_prop_expected_lag_ms),
+        ]
+    required_columns.extend(extra_required_columns)
+    return _shared_complete_case_subset(working, required_columns=required_columns)
 
 
 def _ensure_z_predictors_available(

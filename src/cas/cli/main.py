@@ -22,6 +22,10 @@ from cas.cli.commands.behavior_final import (
     run_behavior_final_fit_command,
     run_behavior_final_select_lag_command,
 )
+from cas.cli.commands.build_tde_hmm_entropy_features import (
+    add_build_tde_hmm_entropy_features_parser,
+    run_build_tde_hmm_entropy_features_command,
+)
 from cas.cli.commands.diagnose_behaviour_latency_regime import (
     add_diagnose_behaviour_latency_regime_parser,
     run_diagnose_behaviour_latency_regime_command,
@@ -50,6 +54,10 @@ from cas.cli.commands.hazard_behavior_fpp import (
 from cas.cli.commands.hazard_fpp_tde_hmm import (
     add_hazard_fpp_tde_hmm_parser,
     run_hazard_fpp_tde_hmm_command,
+)
+from cas.cli.commands.neural_hazard_fpp_spp import (
+    add_neural_hazard_fpp_spp_parser,
+    run_neural_hazard_fpp_spp_command,
 )
 from cas.cli.commands.plot_behaviour_glmm_results import (
     add_plot_behaviour_glmm_results_parser,
@@ -199,6 +207,7 @@ def _build_parser() -> argparse.ArgumentParser:
     add_behavior_final_compare_parser(subparsers)
     add_behavior_final_fit_parser(subparsers)
     add_behavior_final_select_lag_parser(subparsers)
+    add_build_tde_hmm_entropy_features_parser(subparsers)
     add_diagnose_behaviour_latency_regime_parser(subparsers)
     add_diagnose_behaviour_latency_regime_bimodality_parser(subparsers)
     add_diagnose_spp_neural_hazard_failure_parser(subparsers)
@@ -207,6 +216,7 @@ def _build_parser() -> argparse.ArgumentParser:
     add_fit_tde_hmm_parser(subparsers)
     add_hazard_behavior_fpp_parser(subparsers)
     add_hazard_fpp_tde_hmm_parser(subparsers)
+    add_neural_hazard_fpp_spp_parser(subparsers)
     add_plot_behaviour_glmm_results_parser(subparsers)
     add_plot_behaviour_latency_regime_results_parser(subparsers)
     add_plot_tde_hmm_qc_parser(subparsers)
@@ -1407,6 +1417,8 @@ def main() -> int:
         return run_diagnose_behaviour_latency_regime_bimodality_command(args)
     if args.command == "diagnose-spp-neural-hazard-failure":
         return run_diagnose_spp_neural_hazard_failure_command(args)
+    if args.command == "build-tde-hmm-entropy-features":
+        return run_build_tde_hmm_entropy_features_command(args)
     if args.command == "export-behaviour-glmm-data":
         return run_export_behaviour_glmm_data_command(args)
     if args.command == "export-behaviour-latency-regime-data":
@@ -1417,6 +1429,8 @@ def main() -> int:
         return run_hazard_behavior_fpp_command(args)
     if args.command == "hazard-fpp-tde-hmm":
         return run_hazard_fpp_tde_hmm_command(args)
+    if args.command == "neural-hazard-fpp-spp":
+        return run_neural_hazard_fpp_spp_command(args)
     if args.command in {"plot-behaviour-glmm-results", "plot-behaviour-hazard-results"}:
         return run_plot_behaviour_glmm_results_command(args)
     if args.command == "plot-behaviour-latency-regime-results":

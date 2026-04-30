@@ -34,8 +34,7 @@ neural:
     variance_threshold: 0.90
   model:
     fitting_backend: "glmmTMB"
-    baseline_spline_df: 6
-    baseline_spline_degree: 3
+    include_quadratic_offset_timing: true
     information_rate_lag_ms: 150
     prop_expected_lag_ms: 700
 

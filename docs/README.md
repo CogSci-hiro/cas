@@ -24,7 +24,7 @@ Grouping, random effects, GEE clusters, grouped train/test splits, and participa
 
 The final R model sequence is:
 
-- `M0_timing`: onset and offset timing splines plus `(1 | participant_speaker_id)`
+- `M0_timing`: onset time, offset time, and quadratic offset time plus `(1 | participant_speaker_id)`
 - `M1_rate`: `M0_timing` plus `z_information_rate_lag_best`
 - `M2_expected`: `M1_rate` plus `z_prop_expected_cumulative_info_lag_best`
 
@@ -121,8 +121,9 @@ Both analyses use the same episode construction, risk grid, timing controls, beh
 
 Each neural baseline includes:
 
-- `bs(time_from_partner_onset, df=6, degree=3)`
-- `bs(time_from_partner_offset, df=6, degree=3)`
+- `time_from_partner_onset`
+- `time_from_partner_offset`
+- `I(time_from_partner_offset ** 2)`
 - `z_information_rate_lag_150ms`
 - `z_prop_expected_cumulative_info_lag_700ms`
 - participant and dyad grouping IDs retained for mixed-effects compatibility

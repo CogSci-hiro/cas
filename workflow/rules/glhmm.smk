@@ -4,6 +4,7 @@ GLHMM_SPEECH_INTERVALS_DIR = f"{GLHMM_OUTPUT_DIR}/speech_intervals"
 GLHMM_MODEL_SELECTION_OUTPUT = f"{GLHMM_OUTPUT_DIR}/model_selection.csv"
 GLHMM_CHUNKS_OUTPUT = f"{GLHMM_OUTPUT_DIR}/chunks.csv"
 GLHMM_FIT_SUMMARY_OUTPUT = f"{GLHMM_OUTPUT_DIR}/fit_summary.json"
+GLHMM_ENTROPY_FEATURES_OUTPUT = f"{OUT_DIR}/features/entropy/tde_hmm_entropy_features.parquet"
 HMM_SETTINGS = dict(HMM_CONFIG.get("hmm", HMM_CONFIG))
 
 
@@ -133,4 +134,21 @@ rule fit_tde_hmm:
             --input-manifest "{input.manifest}" \
             --output-dir "{params.output_dir}" \
             {params.cli_args}
+        """
+
+
+rule build_tde_hmm_entropy_features:
+    input:
+        fit_summary=GLHMM_FIT_SUMMARY_OUTPUT,
+        chunks=GLHMM_CHUNKS_OUTPUT,
+        manifest=GLHMM_INPUT_MANIFEST,
+    output:
+        GLHMM_ENTROPY_FEATURES_OUTPUT
+    params:
+        glhmm_output_dir=GLHMM_OUTPUT_DIR,
+    shell:
+        """
+        PYTHONPATH="{SRC_DIR}" python -m cas.cli.main build-tde-hmm-entropy-features \
+            --glhmm-output-dir "{params.glhmm_output_dir}" \
+            --output-path "{output}"
         """

@@ -243,6 +243,11 @@ rule hazard_neural_figures_all:
         *HAZARD_NEURAL_FIGURES
 
 
+rule neural_hazard_fpp_spp:
+    input:
+        *NEURAL_HAZARD_FPP_SPP_OUTPUTS
+
+
 rule figures_lmeeeg_all:
     input:
         LMEEEG_FIGURE_MANIFEST,

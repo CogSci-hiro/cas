@@ -170,7 +170,7 @@ def test_active_coefficient_plot_filters_obsolete_terms() -> None:
         {
             "term": [
                 "Intercept",
-                "bs(time_from_partner_onset, df = 6)[1]",
+                "time_from_partner_onset",
                 "z_prop_actual_cumulative_info_lag_best",
                 "z_cumulative_info_lag_best",
                 "z_information_rate_lag_best",

@@ -35,10 +35,6 @@ class BehaviourHazardConfig:
         Minimum valid episode duration in seconds.
     unmatched_surprisal_strategy
         How to treat unmatched surprisal rows.
-    baseline_spline_df
-        Degrees of freedom for the baseline spline.
-    baseline_spline_degree
-        Spline degree for the baseline spline.
     ipu_gap_threshold_s
         Maximum gap between adjacent partner tokens when inferring IPUs.
     max_followup_s
@@ -87,8 +83,7 @@ class BehaviourHazardConfig:
     information_rate_window_s: float = 0.500
     minimum_episode_duration_s: float = 0.100
     unmatched_surprisal_strategy: UnmatchedSurprisalStrategy = "drop"
-    baseline_spline_df: int = 6
-    baseline_spline_degree: int = 3
+    include_quadratic_offset_timing: bool = True
     ipu_gap_threshold_s: float = 0.300
     max_followup_s: float = 6.0
     episode_anchor: EpisodeAnchor = "partner_ipu"
@@ -110,16 +105,14 @@ class BehaviourHazardConfig:
     select_lags_with_timing_controls: bool = True
     run_r_glmm_lag_sweep: bool = False
     r_glmm_lag_grid_ms: tuple[int, ...] = (0, 50, 100, 150, 200, 300, 500, 700, 1000)
-    r_glmm_onset_spline_df: int = 5
-    r_glmm_offset_spline_df: int = 4
+    r_glmm_include_quadratic_offset_timing: bool = True
     r_glmm_backend: RGlmmBackend = "glmmTMB"
     r_glmm_include_run_random_effect: bool = False
     r_glmm_prop_expected_mode: RGlmmPropExpectedMode = "after_best_rate"
     r_glmm_include_prop_expected_in_final: bool = False
     primary_information_rate_lag_ms: int = 0
     primary_prop_expected_lag_ms: int = 300
-    primary_model_baseline_spline_df: int = 6
-    primary_model_baseline_spline_degree: int = 3
+    primary_model_include_quadratic_offset_timing: bool = True
     save_lagged_feature_table: bool = False
     default_output_prefix: str = "hazard_behavior_fpp"
     default_expected_info_group_column: str = "partner_ipu_class"
@@ -140,10 +133,6 @@ class BehaviourHazardConfig:
             raise ValueError("`information_rate_window_s` must be positive.")
         if self.minimum_episode_duration_s <= 0.0:
             raise ValueError("`minimum_episode_duration_s` must be positive.")
-        if self.baseline_spline_df < 3:
-            raise ValueError("`baseline_spline_df` must be at least 3.")
-        if self.baseline_spline_degree < 1:
-            raise ValueError("`baseline_spline_degree` must be at least 1.")
         if self.ipu_gap_threshold_s < 0.0:
             raise ValueError("`ipu_gap_threshold_s` must be non-negative.")
         if self.max_followup_s <= 0.0:
@@ -173,10 +162,6 @@ class BehaviourHazardConfig:
             raise ValueError("`r_glmm_lag_grid_ms` must contain at least one lag.")
         if any(int(lag_ms) < 0 for lag_ms in self.r_glmm_lag_grid_ms):
             raise ValueError("`r_glmm_lag_grid_ms` must contain only non-negative integers.")
-        if self.r_glmm_onset_spline_df < 1:
-            raise ValueError("`r_glmm_onset_spline_df` must be at least 1.")
-        if self.r_glmm_offset_spline_df < 1:
-            raise ValueError("`r_glmm_offset_spline_df` must be at least 1.")
         if self.r_glmm_backend not in {"glmmTMB", "glmer"}:
             raise ValueError("`r_glmm_backend` must be one of glmmTMB, glmer.")
         if self.r_glmm_prop_expected_mode not in {"after_best_rate", "matched_lag"}:
@@ -187,10 +172,6 @@ class BehaviourHazardConfig:
             raise ValueError("`primary_information_rate_lag_ms` must be non-negative.")
         if self.primary_prop_expected_lag_ms < 0:
             raise ValueError("`primary_prop_expected_lag_ms` must be non-negative.")
-        if self.primary_model_baseline_spline_df < 3:
-            raise ValueError("`primary_model_baseline_spline_df` must be at least 3.")
-        if self.primary_model_baseline_spline_degree < 1:
-            raise ValueError("`primary_model_baseline_spline_degree` must be at least 1.")
 
     @property
     def include_censored_episodes(self) -> bool:

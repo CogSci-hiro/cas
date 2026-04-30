@@ -24,8 +24,17 @@ def add_hazard_behavior_fpp_parser(
     parser.add_argument("--out-dir", required=True, help="Output directory.")
     parser.add_argument("--bin-size-s", type=float, default=0.050)
     parser.add_argument("--information-rate-window-s", type=float, default=0.500)
-    parser.add_argument("--baseline-spline-df", type=int, default=6)
-    parser.add_argument("--baseline-spline-degree", type=int, default=3)
+    parser.add_argument(
+        "--include-quadratic-offset-timing",
+        dest="include_quadratic_offset_timing",
+        action="store_true",
+    )
+    parser.add_argument(
+        "--no-include-quadratic-offset-timing",
+        dest="include_quadratic_offset_timing",
+        action="store_false",
+    )
+    parser.set_defaults(include_quadratic_offset_timing=True)
     parser.add_argument("--ipu-gap-threshold-s", type=float, default=0.300)
     parser.add_argument("--max-followup-s", type=float, default=6.0)
     parser.add_argument(
@@ -80,8 +89,8 @@ def add_hazard_behavior_fpp_parser(
         dest="fit_timing_control_models",
         action="store_true",
         help=(
-            "Fit partner-IPU anchored timing-control models that add a spline over "
-            "`time_from_partner_offset` alongside the existing onset-time spline."
+            "Fit partner-IPU anchored timing-control models with linear onset time, "
+            "linear offset time, and a quadratic offset-time term."
         ),
     )
     parser.add_argument(
@@ -115,8 +124,17 @@ def add_hazard_behavior_fpp_parser(
         default="0,50,100,150,200,300,500,700,1000",
         help="Comma-separated lag grid in milliseconds for the R GLMM lag sweep.",
     )
-    parser.add_argument("--r-glmm-onset-spline-df", type=int, default=5)
-    parser.add_argument("--r-glmm-offset-spline-df", type=int, default=4)
+    parser.add_argument(
+        "--r-glmm-include-quadratic-offset-timing",
+        dest="r_glmm_include_quadratic_offset_timing",
+        action="store_true",
+    )
+    parser.add_argument(
+        "--no-r-glmm-include-quadratic-offset-timing",
+        dest="r_glmm_include_quadratic_offset_timing",
+        action="store_false",
+    )
+    parser.set_defaults(r_glmm_include_quadratic_offset_timing=True)
     parser.add_argument("--r-glmm-backend", choices=["glmmTMB", "glmer"], default="glmmTMB")
     parser.add_argument(
         "--r-glmm-include-run-random-effect",
@@ -160,8 +178,7 @@ def run_hazard_behavior_fpp_command(args: argparse.Namespace) -> int:
         out_dir=Path(args.out_dir),
         bin_size_s=float(args.bin_size_s),
         information_rate_window_s=float(args.information_rate_window_s),
-        baseline_spline_df=int(args.baseline_spline_df),
-        baseline_spline_degree=int(args.baseline_spline_degree),
+        include_quadratic_offset_timing=bool(args.include_quadratic_offset_timing),
         ipu_gap_threshold_s=float(args.ipu_gap_threshold_s),
         max_followup_s=float(args.max_followup_s),
         episode_anchor=str(args.episode_anchor),
@@ -181,8 +198,7 @@ def run_hazard_behavior_fpp_command(args: argparse.Namespace) -> int:
         select_lags_with_timing_controls=bool(args.select_lags_with_timing_controls),
         run_r_glmm_lag_sweep=bool(args.run_r_glmm_lag_sweep),
         r_glmm_lag_grid_ms=_parse_lag_grid_ms(args.r_glmm_lag_grid_ms),
-        r_glmm_onset_spline_df=int(args.r_glmm_onset_spline_df),
-        r_glmm_offset_spline_df=int(args.r_glmm_offset_spline_df),
+        r_glmm_include_quadratic_offset_timing=bool(args.r_glmm_include_quadratic_offset_timing),
         r_glmm_backend=str(args.r_glmm_backend),
         r_glmm_include_run_random_effect=bool(args.r_glmm_include_run_random_effect),
         r_glmm_prop_expected_mode=str(args.r_glmm_prop_expected_mode),

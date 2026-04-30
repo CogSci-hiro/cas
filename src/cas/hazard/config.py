@@ -167,8 +167,7 @@ class NeuralModelConfig:
     """Low-level neural model settings."""
 
     fitting_backend: Literal["python_glm", "glmmTMB"] = "glmmTMB"
-    baseline_spline_df: int = 6
-    baseline_spline_degree: int = 3
+    include_quadratic_offset_timing: bool = True
     information_rate_lag_ms: int = 150
     prop_expected_lag_ms: int = 700
 
@@ -227,10 +226,6 @@ class NeuralHazardConfig:
             raise ValueError("`neural.pca.n_components` must be at least 1.")
         if not 0.0 < self.pca.variance_threshold <= 1.0:
             raise ValueError("`neural.pca.variance_threshold` must be in (0, 1].")
-        if self.model.baseline_spline_df < 3:
-            raise ValueError("`neural.model.baseline_spline_df` must be at least 3.")
-        if self.model.baseline_spline_degree < 1:
-            raise ValueError("`neural.model.baseline_spline_degree` must be at least 1.")
         if self.model.information_rate_lag_ms < 0 or self.model.prop_expected_lag_ms < 0:
             raise ValueError("Neural behavioural-control lags must be non-negative.")
         if self.neural_lag_selection_criterion != "bic":
@@ -468,8 +463,9 @@ def load_hazard_analysis_config(config_path: str | Path) -> HazardAnalysisConfig
             ),
             model=NeuralModelConfig(
                 fitting_backend=str(neural_model_payload.get("fitting_backend", "glmmTMB")),
-                baseline_spline_df=int(neural_model_payload.get("baseline_spline_df", 6)),
-                baseline_spline_degree=int(neural_model_payload.get("baseline_spline_degree", 3)),
+                include_quadratic_offset_timing=bool(
+                    neural_model_payload.get("include_quadratic_offset_timing", True)
+                ),
                 information_rate_lag_ms=int(neural_model_payload.get("information_rate_lag_ms", 150)),
                 prop_expected_lag_ms=int(neural_model_payload.get("prop_expected_lag_ms", 700)),
             ),
@@ -628,8 +624,7 @@ def config_to_metadata_dict(config: HazardAnalysisConfig) -> dict[str, Any]:
             },
             "model": {
                 "fitting_backend": config.neural.model.fitting_backend,
-                "baseline_spline_df": config.neural.model.baseline_spline_df,
-                "baseline_spline_degree": config.neural.model.baseline_spline_degree,
+                "include_quadratic_offset_timing": config.neural.model.include_quadratic_offset_timing,
                 "information_rate_lag_ms": config.neural.model.information_rate_lag_ms,
                 "prop_expected_lag_ms": config.neural.model.prop_expected_lag_ms,
             },

@@ -867,15 +867,11 @@ def _build_baseline_formula(
     prop_expected_column: str,
     neural_config: NeuralHazardConfig,
 ) -> str:
-    onset_spline = (
-        f"bs(time_from_partner_onset, df={neural_config.model.baseline_spline_df}, "
-        f"degree={neural_config.model.baseline_spline_degree}, include_intercept=False)"
+    del neural_config
+    return (
+        f"{event_column} ~ time_from_partner_onset + time_from_partner_offset"
+        f" + I(time_from_partner_offset ** 2) + {information_rate_column} + {prop_expected_column}"
     )
-    offset_spline = (
-        f"bs(time_from_partner_offset, df={neural_config.model.baseline_spline_df}, "
-        f"degree={neural_config.model.baseline_spline_degree}, include_intercept=False)"
-    )
-    return f"{event_column} ~ {onset_spline} + {offset_spline} + {information_rate_column} + {prop_expected_column}"
 
 
 def _replace_formula_lhs(formula: str, event_column: str) -> str:

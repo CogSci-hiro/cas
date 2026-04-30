@@ -524,17 +524,15 @@ def fit_neural_hazard_model_family(
 
 
 def _build_neural_baseline_formula(*, event_column: str, neural_config: NeuralHazardConfig) -> str:
-    onset_spline = (
-        f"bs(time_from_partner_onset, df={neural_config.model.baseline_spline_df}, "
-        f"degree={neural_config.model.baseline_spline_degree}, include_intercept=False)"
-    )
-    offset_spline = (
-        f"bs(time_from_partner_offset, df={neural_config.model.baseline_spline_df}, "
-        f"degree={neural_config.model.baseline_spline_degree}, include_intercept=False)"
-    )
+    onset_term = "time_from_partner_onset"
+    offset_term = "time_from_partner_offset"
+    offset_quadratic_term = "I(time_from_partner_offset ** 2)"
     information_rate = f"z_information_rate_lag_{int(neural_config.model.information_rate_lag_ms)}ms"
     prop_expected = f"z_prop_expected_cumulative_info_lag_{int(neural_config.model.prop_expected_lag_ms)}ms"
-    return f"{event_column} ~ {onset_spline} + {offset_spline} + {information_rate} + {prop_expected}"
+    return (
+        f"{event_column} ~ {onset_term} + {offset_term} + {offset_quadratic_term}"
+        f" + {information_rate} + {prop_expected}"
+    )
 
 
 def _discover_band_pc_terms(riskset_table: pd.DataFrame, *, band_name: str) -> list[str]:

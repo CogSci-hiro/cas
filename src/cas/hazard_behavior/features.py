@@ -359,7 +359,7 @@ def zscore_predictors(
     *,
     predictors: list[str] | tuple[str, ...] | None = None,
 ) -> ZScoreResult:
-    """Z-score the main non-spline continuous predictors."""
+    """Z-score the main continuous predictors."""
 
     LOGGER.info("Z-scoring continuous predictors for %d risk-set rows.", len(riskset_table))
     selected_predictors = list(predictors) if predictors is not None else list(_discover_predictors_for_zscoring(riskset_table))
