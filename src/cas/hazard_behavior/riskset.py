@@ -228,6 +228,7 @@ def _build_episode_bins(
                 "phase": "during_partner_ipu" if bin_end < partner_ipu_offset else "post_partner_ipu",
                 "event": int(event_bin_index is not None and bin_index == event_bin_index),
                 "episode_has_event": int(episode_has_event),
+                "source_event_id": int(episode["source_event_id"]) if pd.notna(episode.get("source_event_id")) else np.nan,
                 "own_fpp_onset": float(episode["own_fpp_onset"]) if pd.notna(episode["own_fpp_onset"]) else np.nan,
                 "own_fpp_label": str(episode.get("own_fpp_label", "")),
                 "event_phase": str(episode.get("event_phase", "censored")),

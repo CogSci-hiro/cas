@@ -1,7 +1,8 @@
 input:
-  fpp_risk_set_path: "results/hazard_behavior/final/fpp/riskset.parquet"
-  spp_risk_set_path: "results/hazard_behavior/final/spp_control/riskset.parquet"
+  fpp_risk_set_path: "reports/hazard_behavior_final/fpp/riskset.parquet"
+  spp_risk_set_path: "reports/hazard_behavior_final/spp_control/riskset.parquet"
   neural_features_path: "features/entropy/tde_hmm_entropy_features.parquet"
+  dyads_csv_path: "config/dyads.csv"
 
 output:
   out_dir: "reports/neural_hazard/fpp_spp"
@@ -33,7 +34,7 @@ lag_selection:
 
 circular_shift_null:
   minimum_shift_duration_s: 1.0
-  n_permutations: 1000
+  n_permutations: 100
   seed: 12345
   interaction_test: "one_sided_negative"
 

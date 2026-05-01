@@ -88,11 +88,23 @@ def extract_fpp_events(
     else:
         working["fpp_label"] = ""
 
-    extracted = working.loc[
-        working["fpp_onset"].notna(),
-        ["dyad_id", "run", "fpp_speaker", "fpp_onset", "fpp_offset", "fpp_label"],
-    ].copy()
-    extracted["source_event_id"] = np.arange(len(extracted), dtype=int)
+    keep_columns = ["dyad_id", "run", "fpp_speaker", "fpp_onset", "fpp_offset", "fpp_label"]
+    for optional in ("source_event_id", "pair_id", "source_anchor_type"):
+        if optional in working.columns:
+            keep_columns.append(optional)
+    extracted = working.loc[working["fpp_onset"].notna(), keep_columns].copy()
+    if "source_event_id" in extracted.columns:
+        extracted["source_event_id"] = pd.to_numeric(extracted["source_event_id"], errors="coerce")
+        missing_ids = extracted["source_event_id"].isna()
+        if missing_ids.any():
+            start_id = 0
+            present_ids = extracted.loc[~missing_ids, "source_event_id"]
+            if not present_ids.empty:
+                start_id = int(present_ids.max()) + 1
+            extracted.loc[missing_ids, "source_event_id"] = np.arange(start_id, start_id + int(missing_ids.sum()), dtype=int)
+        extracted["source_event_id"] = extracted["source_event_id"].astype(int)
+    else:
+        extracted["source_event_id"] = np.arange(len(extracted), dtype=int)
     extracted = extracted.sort_values(["dyad_id", "run", "fpp_speaker", "fpp_onset"], kind="mergesort").reset_index(drop=True)
     return extracted
 
@@ -250,6 +262,7 @@ def build_partner_ipu_anchored_episodes(
             "episode_end": float(window_end),
             "censor_time": float(censor_time),
             "episode_has_event": bool(has_event),
+            "source_event_id": int(event_row["source_event_id"]) if event_row is not None else np.nan,
             "own_fpp_onset": own_fpp_onset,
             "own_fpp_offset": own_fpp_offset,
             "own_fpp_label": own_fpp_label,

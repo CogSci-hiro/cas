@@ -45,6 +45,7 @@ REQUIRED_FINAL_COLUMNS = [
     "information_rate",
     "prop_expected_cumulative_info",
 ]
+EXPECTED_ANCHOR_TYPES = {"fpp", "spp"}
 FINAL_MODEL_NAMES = (
     "timing_only",
     "information_rate",
@@ -134,23 +135,282 @@ def _base_config(cfg: FinalBehaviorConfig, out_dir: Path, anchor: str) -> Behavi
     )
 
 
+def _normalize_anchor_type(anchor: str) -> str:
+    normalized = str(anchor).strip().lower()
+    if normalized not in EXPECTED_ANCHOR_TYPES:
+        raise ValueError(f"Unexpected anchor_type {anchor!r}; expected one of: fpp, spp.")
+    return normalized
+
+
+def _project_behavior_final_events(events: pd.DataFrame, *, anchor: str) -> pd.DataFrame:
+    normalized_anchor = _normalize_anchor_type(anchor)
+    working = events.copy()
+    if "dyad_id" not in working.columns and "recording_id" in working.columns:
+        working["dyad_id"] = working["recording_id"]
+    if "speaker_fpp" not in working.columns and "participant_speaker" in working.columns:
+        working["speaker_fpp"] = working["participant_speaker"]
+    if "speaker_spp" not in working.columns and "partner_speaker" in working.columns:
+        working["speaker_spp"] = working["partner_speaker"]
+    required = {
+        "dyad_id",
+        "run",
+        "speaker_fpp",
+        "speaker_spp",
+        "fpp_label",
+        "spp_label",
+        "fpp_onset",
+        "fpp_offset",
+        "spp_onset",
+        "spp_offset",
+    }
+    missing = sorted(required - set(working.columns))
+    if missing:
+        raise ValueError(f"Behavior-final events table is missing required columns for paired FPP/SPP projection: {missing}")
+
+    if normalized_anchor == "fpp":
+        participant_col = "speaker_fpp"
+        partner_col = "speaker_spp"
+        event_label_col = "fpp_label"
+        event_onset_col = "fpp_onset"
+        event_offset_col = "fpp_offset"
+        partner_onset_col = "spp_onset"
+        partner_offset_col = "spp_offset"
+        partner_label_col = "spp_label"
+    else:
+        participant_col = "speaker_spp"
+        partner_col = "speaker_fpp"
+        event_label_col = "spp_label"
+        event_onset_col = "spp_onset"
+        event_offset_col = "spp_offset"
+        partner_onset_col = "fpp_onset"
+        partner_offset_col = "fpp_offset"
+        partner_label_col = "fpp_label"
+
+    projected = pd.DataFrame(
+        {
+            "dyad_id": working["dyad_id"].astype(str),
+            "run": working["run"].astype(str),
+            "participant_speaker": working[participant_col],
+            "partner_speaker": working[partner_col],
+            "fpp_label": working[event_label_col],
+            "fpp_onset": pd.to_numeric(working[event_onset_col], errors="coerce"),
+            "fpp_offset": pd.to_numeric(working[event_offset_col], errors="coerce"),
+            "spp_label": working[partner_label_col],
+            "spp_onset": pd.to_numeric(working[partner_onset_col], errors="coerce"),
+            "spp_offset": pd.to_numeric(working[partner_offset_col], errors="coerce"),
+            "source_anchor_type": normalized_anchor,
+            "source_event_id": np.arange(len(working), dtype=int),
+        }
+    )
+    if "pair_id" in working.columns:
+        projected["pair_id"] = working["pair_id"].astype(str)
+    return projected
+
+
+def _detect_possible_millisecond_units(source_events: pd.DataFrame) -> bool:
+    if source_events.empty or "fpp_onset" not in source_events.columns or "spp_onset" not in source_events.columns:
+        return False
+    relative = pd.to_numeric(source_events["fpp_onset"], errors="coerce") - pd.to_numeric(source_events["spp_onset"], errors="coerce")
+    finite = relative[np.isfinite(relative)]
+    if finite.empty:
+        return False
+    return bool(float(np.nanpercentile(np.abs(finite.to_numpy(dtype=float)), 95)) > 50.0)
+
+
+def _validate_anchor_labels(table: pd.DataFrame, *, expected_anchor: str | None = None) -> pd.DataFrame:
+    working = table.copy()
+    if "anchor_type" not in working.columns:
+        if expected_anchor is None:
+            raise ValueError("Risk set is missing required `anchor_type` column.")
+        working["anchor_type"] = _normalize_anchor_type(expected_anchor)
+    working["anchor_type"] = working["anchor_type"].astype(str).str.strip().str.lower()
+    labels = set(working["anchor_type"].dropna().unique())
+    unexpected = sorted(labels - EXPECTED_ANCHOR_TYPES)
+    if unexpected:
+        raise ValueError(f"Unexpected anchor_type labels in risk set: {unexpected}. Expected lowercase fpp/spp.")
+    if expected_anchor is not None:
+        normalized_expected = _normalize_anchor_type(expected_anchor)
+        wrong = sorted(labels - {normalized_expected})
+        if wrong:
+            raise ValueError(f"Risk set for anchor `{normalized_expected}` contains mismatched anchor_type labels: {wrong}")
+    return working
+
+
+def _summarize_anchor_riskset(
+    *,
+    anchor: str,
+    riskset: pd.DataFrame,
+    episodes: pd.DataFrame,
+    source_events: pd.DataFrame,
+) -> pd.DataFrame:
+    event_values = pd.to_numeric(riskset["event_bin"], errors="coerce").fillna(0).astype(int)
+    if riskset.empty:
+        n_episodes_with_event = 0
+    else:
+        n_episodes_with_event = int(
+            riskset.assign(_event_bin=event_values)
+            .groupby("episode_id", sort=False)["_event_bin"]
+            .max()
+            .sum()
+        )
+    return pd.DataFrame(
+        [
+            {
+                "anchor_type": _normalize_anchor_type(anchor),
+                "n_rows": int(len(riskset)),
+                "n_episodes": int(len(episodes)),
+                "n_source_events": int(len(source_events)),
+                "n_event_bins": int(event_values.sum()),
+                "n_episodes_with_event": n_episodes_with_event,
+            }
+        ]
+    )
+
+
+def _build_event_alignment_diagnostics(
+    *,
+    anchor: str,
+    source_events: pd.DataFrame,
+    episodes: pd.DataFrame,
+    riskset: pd.DataFrame,
+) -> pd.DataFrame:
+    normalized_anchor = _normalize_anchor_type(anchor)
+    episode_lookup = episodes.copy()
+    if "source_event_id" in episode_lookup.columns:
+        episode_lookup["source_event_id"] = pd.to_numeric(episode_lookup["source_event_id"], errors="coerce")
+    event_rows = riskset.loc[pd.to_numeric(riskset["event_bin"], errors="coerce") == 1].copy()
+    if "source_event_id" in event_rows.columns:
+        event_rows["source_event_id"] = pd.to_numeric(event_rows["source_event_id"], errors="coerce")
+
+    rows: list[dict[str, Any]] = []
+    for _, source_row in source_events.iterrows():
+        source_event_id = pd.to_numeric(pd.Series([source_row.get("source_event_id")]), errors="coerce").iloc[0]
+        source_onset = pd.to_numeric(pd.Series([source_row.get("fpp_onset")]), errors="coerce").iloc[0]
+        episode_match = episode_lookup.loc[episode_lookup["source_event_id"] == source_event_id] if "source_event_id" in episode_lookup.columns else pd.DataFrame()
+        matched_bin_start = np.nan
+        matched_bin_end = np.nan
+        matched_event_bin = 0
+        matched_success = False
+        failure_reason = ""
+        episode_id = np.nan
+
+        if not np.isfinite(source_onset):
+            failure_reason = "missing_source_event_onset"
+        elif episode_match.empty:
+            failure_reason = "no_episode_assigned"
+        elif len(episode_match) > 1:
+            failure_reason = "multiple_episodes_assigned"
+            episode_id = str(episode_match.iloc[0]["episode_id"])
+        else:
+            episode_id = str(episode_match.iloc[0]["episode_id"])
+            matched_event_rows = event_rows.loc[event_rows["episode_id"].astype(str) == episode_id]
+            if matched_event_rows.empty:
+                failure_reason = "no_event_bin_assigned"
+            elif len(matched_event_rows) > 1:
+                failure_reason = "multiple_event_bins_assigned"
+                matched_bin_start = float(matched_event_rows.iloc[0]["bin_start_s"])
+                matched_bin_end = float(matched_event_rows.iloc[0]["bin_end_s"])
+                matched_event_bin = 1
+            else:
+                matched = matched_event_rows.iloc[0]
+                matched_bin_start = float(matched["bin_start_s"])
+                matched_bin_end = float(matched["bin_end_s"])
+                matched_event_bin = int(matched["event_bin"])
+                matched_success = bool(matched_bin_start <= float(source_onset) < matched_bin_end)
+                if not matched_success:
+                    failure_reason = "source_onset_outside_event_bin"
+
+        rows.append(
+            {
+                "anchor_type": normalized_anchor,
+                "source_event_id": int(source_event_id) if np.isfinite(source_event_id) else np.nan,
+                "episode_id": episode_id,
+                "source_event_onset_s": float(source_onset) if np.isfinite(source_onset) else np.nan,
+                "matched_bin_start_s": matched_bin_start,
+                "matched_bin_end_s": matched_bin_end,
+                "matched_event_bin": matched_event_bin,
+                "matched_success": bool(matched_success),
+                "failure_reason": failure_reason,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _validate_behavior_final_anchor_riskset(
+    *,
+    anchor: str,
+    riskset: pd.DataFrame,
+    episodes: pd.DataFrame,
+    source_events: pd.DataFrame,
+    out_dir: Path,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    diagnostics_dir = out_dir / "riskset"
+    diagnostics_dir.mkdir(parents=True, exist_ok=True)
+    summary = _summarize_anchor_riskset(anchor=anchor, riskset=riskset, episodes=episodes, source_events=source_events)
+    summary["possible_millisecond_units"] = _detect_possible_millisecond_units(source_events)
+    alignment = _build_event_alignment_diagnostics(anchor=anchor, source_events=source_events, episodes=episodes, riskset=riskset)
+    summary.to_csv(diagnostics_dir / "validation_summary.csv", index=False)
+    alignment.to_csv(diagnostics_dir / "event_alignment_diagnostics.csv", index=False)
+    n_source_events = int(summary.iloc[0]["n_source_events"])
+    n_event_bins = int(summary.iloc[0]["n_event_bins"])
+    if n_source_events > 0 and n_event_bins == 0:
+        raise ValueError(
+            f"Behavior-final {anchor} risk set is invalid: {n_source_events} source events were present but zero event bins were assigned."
+    )
+    return summary, alignment
+
+
+def _raw_riskset_for_alignment_qc(riskset: pd.DataFrame, *, anchor: str) -> pd.DataFrame:
+    working = riskset.copy()
+    working["anchor_type"] = _normalize_anchor_type(anchor)
+    rename_map = {
+        "event": "event_bin",
+        "bin_start": "bin_start_s",
+        "bin_end": "bin_end_s",
+        "time_from_partner_onset": "time_from_partner_onset_s",
+        "time_from_partner_offset": "time_from_partner_offset_s",
+    }
+    for source_column, target_column in rename_map.items():
+        if source_column in working.columns and target_column not in working.columns:
+            working[target_column] = working[source_column]
+    return working
+
+
+def _guard_nonzero_event_bins_for_modeling(riskset: pd.DataFrame, *, anchor: str) -> None:
+    n_rows = int(len(riskset))
+    n_event_bins = int(pd.to_numeric(riskset["event_bin"], errors="coerce").fillna(0).sum())
+    if n_rows > 0 and n_event_bins == 0:
+        normalized_anchor = _normalize_anchor_type(anchor)
+        if normalized_anchor == "spp":
+            raise ValueError(
+                "SPP negative-control comparison could not be evaluated because the SPP risk set contained zero event bins."
+            )
+        raise ValueError(
+            f"{normalized_anchor.upper()} risk set contained zero event bins; modeling was aborted."
+        )
+
+
 def _build_anchor_riskset(cfg: FinalBehaviorConfig, anchor: str, out_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
-    LOGGER.info("Building %s anchor risk set.", anchor)
-    bcfg = _base_config(cfg, out_dir=out_dir, anchor=anchor)
+    normalized_anchor = _normalize_anchor_type(anchor)
+    LOGGER.info("Building %s anchor risk set.", normalized_anchor)
+    bcfg = _base_config(cfg, out_dir=out_dir, anchor=normalized_anchor)
     from cas.hazard_behavior.io import read_events_table, read_surprisal_tables
+    from cas.hazard_behavior.episodes import extract_fpp_events
 
     events, event_warnings = read_events_table(bcfg.events_path)
     surprisal, surprisal_warnings = read_surprisal_tables(
         bcfg.surprisal_paths,
         unmatched_surprisal_strategy=bcfg.unmatched_surprisal_strategy,
     )
+    projected_events = _project_behavior_final_events(events, anchor=normalized_anchor)
+    source_events = extract_fpp_events(projected_events, bcfg)
 
-    positive = build_event_positive_episodes(events_table=events, surprisal_table=surprisal, config=bcfg)
+    positive = build_event_positive_episodes(events_table=projected_events, surprisal_table=surprisal, config=bcfg)
     episodes = positive.episodes
     warnings_list: list[str] = [*event_warnings, *surprisal_warnings, *positive.warnings]
     if bcfg.include_censored:
         censored = build_censored_episodes(
-            events_table=events,
+            events_table=projected_events,
             surprisal_table=surprisal,
             positive_episodes=positive.episodes,
             config=bcfg,
@@ -159,6 +419,14 @@ def _build_anchor_riskset(cfg: FinalBehaviorConfig, anchor: str, out_dir: Path) 
             episodes = pd.concat([episodes, censored], ignore_index=True, sort=False)
 
     riskset_result = build_discrete_time_riskset(episodes, config=bcfg)
+    qc_riskset = _raw_riskset_for_alignment_qc(riskset_result.riskset_table, anchor=normalized_anchor)
+    summary, _alignment = _validate_behavior_final_anchor_riskset(
+        anchor=normalized_anchor,
+        riskset=qc_riskset,
+        episodes=episodes,
+        source_events=source_events,
+        out_dir=out_dir,
+    )
     riskset_with_info, _ = add_information_features_to_riskset(
         riskset_table=riskset_result.riskset_table,
         episodes_table=episodes,
@@ -166,12 +434,18 @@ def _build_anchor_riskset(cfg: FinalBehaviorConfig, anchor: str, out_dir: Path) 
         config=bcfg,
     )
     warnings_list.extend(riskset_result.warnings)
-    return _normalize_final_riskset(riskset_with_info, anchor), episodes, warnings_list
+    normalized_riskset = _normalize_final_riskset(riskset_with_info, normalized_anchor)
+    if bool(summary.iloc[0]["possible_millisecond_units"]):
+        warnings_list.append(
+            f"Behavior-final {normalized_anchor} source event latencies appear unusually large; check whether event onset columns are in milliseconds instead of seconds."
+        )
+    return normalized_riskset, episodes, warnings_list
 
 
 def _normalize_final_riskset(table: pd.DataFrame, anchor: str) -> pd.DataFrame:
     out = table.copy()
-    out["anchor_type"] = anchor
+    normalized_anchor = _normalize_anchor_type(anchor)
+    out["anchor_type"] = normalized_anchor
     out["subject_id"] = out["participant_speaker"].astype(str)
     out["run_id"] = out["run"].astype(str)
     out = out.rename(
@@ -191,6 +465,7 @@ def _normalize_final_riskset(table: pd.DataFrame, anchor: str) -> pd.DataFrame:
     keep = list(dict.fromkeys(REQUIRED_FINAL_COLUMNS + [c for c in out.columns if c not in REQUIRED_FINAL_COLUMNS]))
     normalized = out.loc[:, keep].copy()
     normalized["event_bin"] = pd.to_numeric(normalized["event_bin"], errors="coerce").astype(int)
+    normalized = _validate_anchor_labels(normalized, expected_anchor=normalized_anchor)
     return normalized
 
 
@@ -619,6 +894,8 @@ def build_information_effect_contrasts(summary: pd.DataFrame, covariance: pd.Dat
 
 
 def _conclusion_text(contrasts: pd.DataFrame) -> str:
+    if "contrast" not in contrasts.columns:
+        return "SPP negative-control comparison could not be evaluated because the SPP risk set contained zero event bins."
     inferential = contrasts.loc[contrasts["contrast"].astype(str).str.startswith("FPP - SPP"), :].copy()
     if inferential.empty:
         return "Information predictors were not selectively associated with FPP initiation relative to SPP response timing."
@@ -882,7 +1159,13 @@ def build_fpp_vs_spp_report(
     warnings_list = sorted(dict.fromkeys(warnings_list))
     spp_stable = bool(pd.Series(spp_summary["stable"]).fillna(False).all())
     interpretable = _is_interpretable(contrasts, pooled_summary, spp_summary)
-    conclusion = _conclusion_text(contrasts)
+    conclusion = (
+        "SPP negative-control comparison could not be evaluated because the SPP risk set contained zero event bins."
+        if spp_events == 0
+        else _conclusion_text(contrasts)
+    )
+    if spp_events == 0:
+        interpretable = False
 
     md_lines = [
         "# Behavioral Final Hazard Report",
@@ -1024,6 +1307,7 @@ def run_behavior_final_fit(
 
     riskset, episodes, warnings_list = _build_anchor_riskset(cfg, anchor_type, out_dir)
     riskset, standardization = _prepare_final_riskset(riskset, cfg.lag_grid_ms)
+    _guard_nonzero_event_bins_for_modeling(riskset, anchor=anchor_type)
     riskset.to_parquet(out_dir / "riskset.parquet", index=False)
     episodes.to_csv(out_dir / "episodes.csv", index=False)
     standardization.to_csv(out_dir / "standardization_stats.csv", index=False)
@@ -1090,9 +1374,18 @@ def run_behavior_final_compare(
 
     fpp = pd.read_parquet(fpp_riskset_path)
     spp = pd.read_parquet(spp_riskset_path)
+    fpp = _validate_anchor_labels(fpp, expected_anchor="fpp")
+    spp = _validate_anchor_labels(spp, expected_anchor="spp")
     for column_name in REQUIRED_FINAL_COLUMNS + list(TIMING_COLUMNS):
         if column_name not in fpp.columns or column_name not in spp.columns:
             raise ValueError(f"Missing required column in pooled compare inputs: {column_name}")
+    _guard_nonzero_event_bins_for_modeling(fpp, anchor="fpp")
+    _guard_nonzero_event_bins_for_modeling(spp, anchor="spp")
+    spp_events = int(pd.to_numeric(spp["event_bin"], errors="coerce").sum())
+    if int(len(spp)) > 0 and spp_events == 0:
+        raise ValueError(
+            "SPP negative-control comparison could not be evaluated because the SPP risk set contained zero event bins."
+        )
 
     out_dir.mkdir(parents=True, exist_ok=True)
     combined = pd.concat([fpp, spp], ignore_index=True, sort=False)

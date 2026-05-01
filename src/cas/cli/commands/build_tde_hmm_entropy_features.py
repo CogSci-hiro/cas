@@ -19,6 +19,12 @@ def add_build_tde_hmm_entropy_features_parser(
     )
     parser.add_argument("--glhmm-output-dir", required=True)
     parser.add_argument("--output-path", required=True)
+    parser.add_argument(
+        "--instability-window-s",
+        type=float,
+        default=0.25,
+        help="Centered smoothing window in seconds for derived instability controls.",
+    )
 
 
 def run_build_tde_hmm_entropy_features_command(args: argparse.Namespace) -> int:
@@ -27,6 +33,7 @@ def run_build_tde_hmm_entropy_features_command(args: argparse.Namespace) -> int:
     output_path = build_entropy_features_table_from_glhmm_output(
         Path(args.glhmm_output_dir),
         Path(args.output_path),
+        instability_window_s=float(args.instability_window_s),
     )
     print(output_path)
     return 0

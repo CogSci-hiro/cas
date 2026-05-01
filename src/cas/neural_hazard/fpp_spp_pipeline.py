@@ -7,6 +7,7 @@ import json
 import logging
 import math
 from pathlib import Path
+import re
 from typing import Any
 import warnings
 
@@ -22,6 +23,7 @@ import yaml
 
 TABLES_DIRNAME = "tables"
 FIGURES_DIRNAME = "figures"
+DEFAULT_INSTABILITY_WINDOW_S = 0.25
 RISKSET_REQUIRED_COLUMNS = (
     "episode_id",
     "dyad_id",
@@ -71,6 +73,7 @@ class NeuralHazardFppSppConfig:
     event_triggered_window_end_s: float = 0.5
     overwrite: bool = True
     verbose: bool = True
+    dyads_csv_path: Path | None = None
 
     def validate(self) -> None:
         """Validate config values before running the pipeline."""
@@ -112,15 +115,64 @@ class NeuralHazardFppSppResult:
     summary_json_path: Path
 
 
-def build_entropy_features_table_from_glhmm_output(glhmm_output_dir: Path, output_path: Path) -> Path:
-    """Aggregate per-run GLHMM entropy CSV exports into one parquet/CSV table."""
+def build_entropy_features_table_from_glhmm_output(
+    glhmm_output_dir: Path,
+    output_path: Path,
+    *,
+    instability_window_s: float = DEFAULT_INSTABILITY_WINDOW_S,
+) -> Path:
+    """Aggregate per-run GLHMM entropy CSV exports and derived instability features."""
+
+    from cas.hmm.tde_hmm import load_source_data
 
     input_dir = glhmm_output_dir.resolve()
     csv_paths = sorted(input_dir.glob("subject-*_run-*_state_entropy.csv"))
     if not csv_paths:
         raise FileNotFoundError(f"No per-run state entropy CSVs were found in {input_dir}")
-    LOGGER.info("Aggregating %d per-run entropy CSVs from %s", int(len(csv_paths)), input_dir)
+
+    fit_summary_path = input_dir / "fit_summary.json"
+    chunks_path = input_dir / "chunks.csv"
+    input_manifest_path = input_dir / "input_manifest.csv"
+    if not fit_summary_path.exists():
+        raise FileNotFoundError(f"Missing GLHMM fit summary: {fit_summary_path}")
+    if not chunks_path.exists():
+        raise FileNotFoundError(f"Missing GLHMM chunks table: {chunks_path}")
+    if not input_manifest_path.exists():
+        raise FileNotFoundError(f"Missing GLHMM input manifest: {input_manifest_path}")
+
+    fit_summary = json.loads(fit_summary_path.read_text(encoding="utf-8"))
+    selected_k = int(fit_summary["selected_k"])
+    gamma_path = input_dir / f"gamma_k{selected_k}.npy"
+    if not gamma_path.exists():
+        raise FileNotFoundError(f"Missing GLHMM posterior probabilities: {gamma_path}")
+
+    gamma = np.asarray(np.load(gamma_path), dtype=float)
+    if gamma.ndim != 2:
+        raise ValueError(f"Expected 2D gamma array at {gamma_path}")
+
+    chunk_table = pd.read_csv(chunks_path)
+    input_manifest = pd.read_csv(input_manifest_path)
+    manifest_columns = {"subject", "run", "source_path"}
+    if not manifest_columns.issubset(input_manifest.columns):
+        raise ValueError(
+            "GLHMM input manifest is missing required columns: "
+            + ", ".join(sorted(manifest_columns.difference(input_manifest.columns)))
+        )
+
+    if float(instability_window_s) <= 0.0:
+        raise ValueError("`instability_window_s` must be positive.")
+
+    lag_span_samples = _infer_glhmm_lag_span_samples(fit_summary)
+    LOGGER.info(
+        "Aggregating %d per-run entropy CSVs and instability features from %s",
+        int(len(csv_paths)),
+        input_dir,
+    )
     frames: list[pd.DataFrame] = []
+    manifest_by_key = {
+        (str(row["subject"]), str(row["run"])): dict(row)
+        for row in input_manifest.to_dict(orient="records")
+    }
     for csv_path in _progress(
         csv_paths,
         total=len(csv_paths),
@@ -134,16 +186,49 @@ def build_entropy_features_table_from_glhmm_output(glhmm_output_dir: Path, outpu
         subject_id = subject_part.removeprefix("subject-")
         run_id = run_part
         frame = pd.read_csv(csv_path)
-        required = {"time_s", "state_entropy"}
+        required = {"sample", "time_s", "state_entropy"}
         if not required.issubset(frame.columns):
             raise ValueError(f"Entropy CSV is missing required columns: {csv_path}")
+        manifest_row = manifest_by_key.get((str(subject_id), str(run_id)))
+        if manifest_row is None:
+            raise ValueError(
+                f"Could not find source_path in input_manifest.csv for subject={subject_id}, run={run_id}"
+            )
+
+        entropy_time_s = pd.to_numeric(frame["time_s"], errors="coerce").to_numpy(dtype=float)
+        entropy_values = pd.to_numeric(frame["state_entropy"], errors="coerce").to_numpy(dtype=float)
+        if not np.isfinite(entropy_time_s).all():
+            raise ValueError(f"Entropy CSV contains non-finite time_s values: {csv_path}")
+
+        source_data, source_sampling_rate_hz = load_source_data(Path(str(manifest_row["source_path"])))
+        if source_sampling_rate_hz is None or not np.isfinite(source_sampling_rate_hz):
+            source_sampling_rate_hz = float(fit_summary["sampling_rate_hz"])
+        eeg_features = _compute_eeg_instability_features(
+            source_data=source_data,
+            source_sampling_rate_hz=float(source_sampling_rate_hz),
+            target_time_s=entropy_time_s,
+            window_duration_s=float(instability_window_s),
+        )
+        posterior_features = _compute_hmm_instability_features(
+            gamma=gamma,
+            chunk_table=chunk_table,
+            subject_id=str(subject_id),
+            run_id=str(run_id),
+            original_n_samples=int(len(frame)),
+            lag_span_samples=lag_span_samples,
+            sampling_rate_hz=float(fit_summary["sampling_rate_hz"]),
+            target_time_s=entropy_time_s,
+            window_duration_s=float(instability_window_s),
+        )
         frames.append(
             pd.DataFrame(
                 {
                     "subject_id": str(subject_id),
                     "run_id": str(run_id),
-                    "time_s": pd.to_numeric(frame["time_s"], errors="coerce"),
-                    "entropy": pd.to_numeric(frame["state_entropy"], errors="coerce"),
+                    "time_s": entropy_time_s,
+                    "entropy": entropy_values,
+                    **eeg_features,
+                    **posterior_features,
                 }
             )
         )
@@ -157,6 +242,162 @@ def build_entropy_features_table_from_glhmm_output(glhmm_output_dir: Path, outpu
         combined.to_csv(output_path, index=False)
     LOGGER.info("Wrote aggregated entropy features to %s (%d rows).", output_path, int(len(combined)))
     return output_path
+
+
+def _infer_glhmm_lag_span_samples(fit_summary: dict[str, Any]) -> int:
+    """Infer the causal lag span in processed samples from saved GLHMM metadata."""
+
+    lags = [int(value) for value in fit_summary.get("lags", [])]
+    if not lags:
+        raise ValueError("GLHMM fit summary did not contain saved lags.")
+    if max(lags) != 0:
+        raise ValueError("Expected causal GLHMM lags ending at 0.")
+    if lags != list(range(min(lags), max(lags) + 1)):
+        raise ValueError("Expected contiguous causal GLHMM lags for processed-to-original reconstruction.")
+    return int(max(lags) - min(lags))
+
+
+def _compute_eeg_instability_features(
+    *,
+    source_data: np.ndarray,
+    source_sampling_rate_hz: float,
+    target_time_s: np.ndarray,
+    window_duration_s: float,
+) -> dict[str, np.ndarray]:
+    """Compute EEG-derived instability features and resample them to the target timeline."""
+
+    data = np.asarray(source_data, dtype=float)
+    if data.ndim != 2:
+        raise ValueError("Expected 2D source EEG array with shape (n_samples, n_channels).")
+    if data.shape[0] == 0:
+        return {
+            "signal_variance": np.full(len(target_time_s), np.nan, dtype=float),
+            "broadband_power": np.full(len(target_time_s), np.nan, dtype=float),
+        }
+    source_time_s = np.arange(data.shape[0], dtype=float) / float(source_sampling_rate_hz)
+    global_field_power = np.nanstd(data, axis=1, ddof=0)
+    mean_squared_amplitude = np.nanmean(np.square(data), axis=1)
+    source_window_samples = max(1, int(round(float(window_duration_s) * float(source_sampling_rate_hz))))
+    signal_variance_raw = _rolling_nanvar(global_field_power, source_window_samples)
+    broadband_power_raw = _rolling_nanmean(mean_squared_amplitude, source_window_samples)
+    return {
+        "signal_variance": _interpolate_to_target_times(source_time_s, signal_variance_raw, target_time_s),
+        "broadband_power": _interpolate_to_target_times(source_time_s, broadband_power_raw, target_time_s),
+    }
+
+
+def _compute_hmm_instability_features(
+    *,
+    gamma: np.ndarray,
+    chunk_table: pd.DataFrame,
+    subject_id: str,
+    run_id: str,
+    original_n_samples: int,
+    lag_span_samples: int,
+    sampling_rate_hz: float,
+    target_time_s: np.ndarray,
+    window_duration_s: float,
+) -> dict[str, np.ndarray]:
+    """Compute HMM-derived instability features aligned to original run coordinates."""
+
+    run_chunks = chunk_table.loc[
+        (chunk_table["subject"].astype(str) == str(subject_id))
+        & (chunk_table["run"].astype(str) == str(run_id))
+    ].sort_values("original_start_sample", kind="mergesort")
+    hard_state_timeline = np.full(original_n_samples, np.nan, dtype=float)
+    switching_timeline = np.full(original_n_samples, np.nan, dtype=float)
+    posterior_volatility_timeline = np.full(original_n_samples, np.nan, dtype=float)
+    if run_chunks.empty:
+        return {
+            "state_switching_rate": np.full(len(target_time_s), np.nan, dtype=float),
+            "model_badness": np.full(len(target_time_s), np.nan, dtype=float),
+        }
+    for chunk in run_chunks.to_dict(orient="records"):
+        processed_start = int(chunk["processed_start_sample"])
+        processed_stop = int(chunk["processed_stop_sample"])
+        original_start = int(chunk["original_start_sample"])
+        posterior = np.asarray(gamma[processed_start:processed_stop], dtype=float)
+        if posterior.ndim != 2 or posterior.shape[0] == 0:
+            continue
+        hard_state = np.argmax(posterior, axis=1).astype(float)
+        switching = np.full(posterior.shape[0], np.nan, dtype=float)
+        volatility = np.full(posterior.shape[0], np.nan, dtype=float)
+        if posterior.shape[0] > 1:
+            switching[1:] = (hard_state[1:] != hard_state[:-1]).astype(float)
+            volatility[1:] = 0.5 * np.sum(np.abs(np.diff(posterior, axis=0)), axis=1)
+        mapped_original_start = int(original_start) + int(lag_span_samples)
+        mapped_original_stop = mapped_original_start + posterior.shape[0]
+        if mapped_original_stop > original_n_samples:
+            raise ValueError(
+                "HMM posterior mapping exceeded the original run length for "
+                f"subject={subject_id}, run={run_id}."
+            )
+        hard_state_timeline[mapped_original_start:mapped_original_stop] = hard_state
+        switching_timeline[mapped_original_start:mapped_original_stop] = switching
+        posterior_volatility_timeline[mapped_original_start:mapped_original_stop] = volatility
+    timeline_window_samples = max(1, int(round(float(window_duration_s) * float(sampling_rate_hz))))
+    switching_rate = _rolling_nanmean(switching_timeline, timeline_window_samples)
+    model_badness = _rolling_nanmean(posterior_volatility_timeline, timeline_window_samples)
+    source_time_s = np.arange(original_n_samples, dtype=float) / float(sampling_rate_hz)
+    return {
+        "state_switching_rate": _interpolate_to_target_times(source_time_s, switching_rate, target_time_s),
+        "model_badness": _interpolate_to_target_times(source_time_s, model_badness, target_time_s),
+    }
+
+
+def _rolling_nanmean(values: np.ndarray, window_samples: int) -> np.ndarray:
+    """Compute a centered rolling mean while ignoring NaN values."""
+
+    array = np.asarray(values, dtype=float)
+    if array.ndim != 1:
+        raise ValueError("Expected a one-dimensional array for rolling mean.")
+    if len(array) == 0:
+        return np.asarray(array, dtype=float)
+    kernel = np.ones(int(max(window_samples, 1)), dtype=float)
+    valid = np.isfinite(array).astype(float)
+    weighted = np.where(np.isfinite(array), array, 0.0)
+    numer = np.convolve(weighted, kernel, mode="same")
+    denom = np.convolve(valid, kernel, mode="same")
+    out = np.full(len(array), np.nan, dtype=float)
+    mask = denom > 0.0
+    out[mask] = numer[mask] / denom[mask]
+    return out
+
+
+def _rolling_nanvar(values: np.ndarray, window_samples: int) -> np.ndarray:
+    """Compute a centered rolling variance while ignoring NaN values."""
+
+    array = np.asarray(values, dtype=float)
+    mean = _rolling_nanmean(array, window_samples)
+    mean_sq = _rolling_nanmean(np.square(array), window_samples)
+    variance = mean_sq - np.square(mean)
+    variance[variance < 0.0] = 0.0
+    variance[~np.isfinite(mean)] = np.nan
+    return variance
+
+
+def _interpolate_to_target_times(
+    source_time_s: np.ndarray,
+    source_values: np.ndarray,
+    target_time_s: np.ndarray,
+) -> np.ndarray:
+    """Interpolate a one-dimensional source series to target times, preserving NaN gaps conservatively."""
+
+    x = np.asarray(source_time_s, dtype=float)
+    y = np.asarray(source_values, dtype=float)
+    target = np.asarray(target_time_s, dtype=float)
+    valid = np.isfinite(x) & np.isfinite(y)
+    out = np.full(len(target), np.nan, dtype=float)
+    if np.count_nonzero(valid) == 0:
+        return out
+    if np.count_nonzero(valid) == 1:
+        out[:] = y[valid][0]
+        return out
+    valid_x = x[valid]
+    valid_y = y[valid]
+    in_bounds = (target >= valid_x.min()) & (target <= valid_x.max())
+    out[in_bounds] = np.interp(target[in_bounds], valid_x, valid_y)
+    return out
 
 
 @dataclass(frozen=True, slots=True)
@@ -226,6 +467,15 @@ def load_neural_hazard_fpp_spp_config(path: Path) -> NeuralHazardFppSppConfig:
             str(input_payload["neural_features_path"]),
             project_root=project_root,
             derivatives_root=derivatives_root,
+        ),
+        dyads_csv_path=(
+            _resolve_config_path(
+                str(input_payload.get("dyads_csv_path", "config/dyads.csv")),
+                project_root=project_root,
+                derivatives_root=derivatives_root,
+            )
+            if input_payload.get("dyads_csv_path", "config/dyads.csv") is not None
+            else None
         ),
         out_dir=_resolve_output_path(
             str(output_payload["out_dir"]),
@@ -334,6 +584,11 @@ def run_neural_hazard_fpp_spp_pipeline(config: NeuralHazardFppSppConfig) -> Neur
         _write_table(pca_warnings, output_dirs[TABLES_DIRNAME] / "pca_warnings.csv")
     lag_selection = _run_fpp_lag_selection(enriched, config)
     _write_table(lag_selection, output_dirs[TABLES_DIRNAME] / "fpp_lag_selection.csv")
+    if lag_selection.empty or int(pd.to_numeric(lag_selection["n_rows"], errors="coerce").fillna(0).max()) <= 0:
+        raise ValueError(
+            "FPP lag selection produced no complete-case rows at any lag. "
+            "The neural features table likely failed to align to the FPP risk set."
+        )
     selected_lag_ms = _select_entropy_lag(lag_selection, config)
     LOGGER.info("Selected entropy lag: %d ms.", int(selected_lag_ms))
     selected_lag_table = pd.DataFrame(
@@ -466,10 +721,11 @@ def _write_table(table: pd.DataFrame, path: Path) -> Path:
 
 
 def _load_and_combine_risk_sets(config: NeuralHazardFppSppConfig) -> pd.DataFrame:
+    dyad_mapping = _load_dyad_speaker_mapping(config.dyads_csv_path)
     fpp = _load_table(config.fpp_risk_set_path).copy()
     spp = _load_table(config.spp_risk_set_path).copy()
-    fpp = _normalize_risk_set(fpp, anchor_type="FPP")
-    spp = _normalize_risk_set(spp, anchor_type="SPP")
+    fpp = _normalize_risk_set(fpp, anchor_type="FPP", dyad_mapping=dyad_mapping)
+    spp = _normalize_risk_set(spp, anchor_type="SPP", dyad_mapping=dyad_mapping)
     combined = pd.concat([fpp, spp], ignore_index=True, sort=False)
     combined["anchor_type"] = pd.Categorical(
         combined["anchor_type"].astype(str),
@@ -490,10 +746,65 @@ def _load_and_combine_risk_sets(config: NeuralHazardFppSppConfig) -> pd.DataFram
     ).reset_index(drop=True)
 
 
-def _normalize_risk_set(table: pd.DataFrame, *, anchor_type: str) -> pd.DataFrame:
+DYAD_ID_PATTERN = re.compile(r"^dyad-(?P<number>\d+)$", flags=re.IGNORECASE)
+
+
+def _load_dyad_speaker_mapping(dyads_csv_path: Path | None) -> dict[str, dict[str, str]]:
+    """Load optional dyad speaker-to-subject mappings from CSV."""
+
+    if dyads_csv_path is None or not dyads_csv_path.exists():
+        if dyads_csv_path is not None:
+            LOGGER.warning("Dyads CSV was not found; falling back to dyad-number speaker mapping: %s", dyads_csv_path)
+        return {}
+    dyads = pd.read_csv(dyads_csv_path)
+    if not {"dyad_id", "subject_id"}.issubset(dyads.columns):
+        LOGGER.warning(
+            "Dyads CSV is missing `dyad_id`/`subject_id`; falling back to dyad-number speaker mapping: %s",
+            dyads_csv_path,
+        )
+        return {}
+    mapping: dict[str, dict[str, str]] = {}
+    for dyad_id, frame in dyads.groupby("dyad_id", sort=False):
+        subject_ids = sorted(str(value) for value in frame["subject_id"].tolist())
+        if len(subject_ids) != 2:
+            continue
+        mapping[str(dyad_id)] = {"A": subject_ids[0], "B": subject_ids[1]}
+    LOGGER.info("Loaded dyad speaker mapping for %d dyads from %s", int(len(mapping)), dyads_csv_path)
+    return mapping
+
+
+def _resolve_subject_id(
+    *,
+    dyad_id: str,
+    speaker_label: str,
+    dyad_mapping: dict[str, dict[str, str]],
+) -> str | None:
+    """Resolve canonical subject IDs from dyad/speaker labels."""
+
+    speaker = str(speaker_label).strip().upper()
+    if speaker in {"A", "B"}:
+        mapped = dyad_mapping.get(str(dyad_id), {}).get(speaker)
+        if mapped is not None:
+            return mapped
+        match = DYAD_ID_PATTERN.match(str(dyad_id).strip())
+        if match is None:
+            return None
+        dyad_number = int(match.group("number"))
+        subject_number = (2 * dyad_number) - 1 if speaker == "A" else 2 * dyad_number
+        return f"sub-{subject_number:03d}"
+    if speaker.startswith("SUB-"):
+        return speaker.lower()
+    return str(speaker_label)
+
+
+def _normalize_risk_set(
+    table: pd.DataFrame,
+    *,
+    anchor_type: str,
+    dyad_mapping: dict[str, dict[str, str]],
+) -> pd.DataFrame:
     working = table.copy()
-    if "anchor_type" not in working.columns:
-        working["anchor_type"] = anchor_type
+    working["anchor_type"] = anchor_type
     if "time_within_run_s" not in working.columns:
         if "bin_start_s" in working.columns and "bin_end_s" in working.columns:
             working["time_within_run_s"] = (
@@ -509,6 +820,32 @@ def _normalize_risk_set(table: pd.DataFrame, *, anchor_type: str) -> pd.DataFram
         )
     for column in ("subject_id", "run_id", "episode_id", "dyad_id"):
         working[column] = working[column].astype(str)
+    original_subject = working["subject_id"].astype(str)
+    canonical_subject = [
+        _resolve_subject_id(
+            dyad_id=str(dyad_id),
+            speaker_label=str(subject_id),
+            dyad_mapping=dyad_mapping,
+        )
+        for dyad_id, subject_id in zip(working["dyad_id"], original_subject, strict=False)
+    ]
+    canonical_subject_series = pd.Series(canonical_subject, index=working.index, dtype="object")
+    unresolved_mask = canonical_subject_series.isna()
+    if unresolved_mask.any():
+        unresolved_examples = (
+            working.loc[unresolved_mask, ["dyad_id", "subject_id"]]
+            .drop_duplicates()
+            .head(5)
+            .to_dict(orient="records")
+        )
+        LOGGER.warning(
+            "Could not canonicalize %d `%s` subject IDs; keeping original values. Examples: %s",
+            int(unresolved_mask.sum()),
+            anchor_type,
+            unresolved_examples,
+        )
+    working["subject_id_original"] = original_subject
+    working["subject_id"] = canonical_subject_series.where(~unresolved_mask, original_subject).astype(str)
     return working
 
 
@@ -530,6 +867,18 @@ def _load_neural_features(config: NeuralHazardFppSppConfig) -> pd.DataFrame:
         raise ValueError(
             "Neural features table is missing required columns: " + ", ".join(missing)
         )
+    requested_pca_columns = tuple(
+        column for column in config.pca_input_columns if column not in {"entropy", "max_state_probability"}
+    )
+    if requested_pca_columns:
+        present_pca_columns = [column for column in requested_pca_columns if column in neural.columns]
+        if not present_pca_columns:
+            raise ValueError(
+                "Neural features table does not contain any of the configured instability PCA columns. "
+                f"Requested: {', '.join(requested_pca_columns)}. "
+                f"Available columns: {', '.join(str(column) for column in neural.columns)}. "
+                "The final FPP-vs-SPP pipeline requires real instability controls and will not substitute zeros."
+            )
     neural["subject_id"] = neural["subject_id"].astype(str)
     neural["run_id"] = neural["run_id"].astype(str)
     neural["time_s"] = pd.to_numeric(neural["time_s"], errors="coerce")
@@ -697,30 +1046,18 @@ def _add_instability_pc1_by_lag(
             if feature_name != "entropy" and f"{feature_name}_lag_{lag_ms}ms_z" in out.columns
         ]
         if not lag_columns:
-            out[f"instability_pc1_lag_{lag_ms}ms"] = 0.0
-            out[f"instability_pc1_lag_{lag_ms}ms_z"] = 0.0
-            warning_rows.append(
-                {
-                    "lag_ms": int(lag_ms),
-                    "warning": (
-                        "No configured PCA input columns were available; instability_pc1 was set to 0.0 "
-                        "for this lag. Provide a neural features table with instability columns to enable "
-                        "the intended M1_instability control model."
-                    ),
-                }
+            raise ValueError(
+                "No configured PCA input columns were available after lagging and z-scoring. "
+                f"Lag {int(lag_ms)} ms requested columns derived from: {', '.join(config.pca_input_columns)}. "
+                "The final FPP-vs-SPP pipeline requires real instability controls and will not substitute zeros."
             )
-            continue
         fit_table = out.loc[:, lag_columns].apply(pd.to_numeric, errors="coerce")
         fit_mask = fit_table.notna().all(axis=1)
         if not fit_mask.any():
-            out[f"instability_pc1_lag_{lag_ms}ms_z"] = np.nan
-            warning_rows.append(
-                {
-                    "lag_ms": int(lag_ms),
-                    "warning": "No complete rows were available to fit PCA.",
-                }
+            raise ValueError(
+                "No complete rows were available to fit instability PCA. "
+                f"Lag {int(lag_ms)} ms columns: {', '.join(lag_columns)}."
             )
-            continue
         pca = PCA(n_components=min(config.pca_n_components, len(lag_columns)))
         scores = pca.fit_transform(fit_table.loc[fit_mask, lag_columns].to_numpy(dtype=float))
         pc1_scores = np.full(len(out), np.nan, dtype=float)
@@ -924,6 +1261,23 @@ def _fit_pooled_models(table: pd.DataFrame, selected_lag_ms: int) -> dict[str, A
     ]
     fit_table = _complete_case_subset(table, required_columns)
     LOGGER.info("Fitting pooled models on %d complete-case rows.", int(len(fit_table)))
+    if fit_table.empty:
+        available_subject_run = (
+            table.loc[:, ["subject_id", "run_id"]]
+            .drop_duplicates()
+            .sort_values(["subject_id", "run_id"], kind="mergesort")
+        )
+        observed_anchor_counts = (
+            table.groupby("anchor_type", observed=True)["event_bin"]
+            .agg(n_rows="size", n_events="sum")
+            .reset_index()
+        )
+        raise ValueError(
+            "No complete-case rows were available for the pooled M0/M1/M2 models after neural merging. "
+            f"Observed subject/run combinations: {len(available_subject_run)}. "
+            f"Anchor counts: {observed_anchor_counts.to_dict(orient='records')}. "
+            "This usually means the neural features table did not align to the risk-set subject_id/run_id/time axes."
+        )
     models = {name: _fit_glm(fit_table, model_name=name, formula=formula) for name, formula in formulas.items()}
     coefficients = {name: _coefficient_table(model) for name, model in models.items()}
     pairwise = {
@@ -1197,7 +1551,10 @@ def _plot_lag_selection(table: pd.DataFrame, out_path: Path) -> None:
 
 
 def _plot_pca_variance(table: pd.DataFrame, out_path: Path) -> None:
-    plotted = table.loc[pd.to_numeric(table["component"], errors="coerce") == 1].copy()
+    if "component" not in table.columns:
+        plotted = pd.DataFrame()
+    else:
+        plotted = table.loc[pd.to_numeric(table["component"], errors="coerce") == 1].copy()
     plt.figure(figsize=(6.8, 4.4))
     if plotted.empty:
         plt.text(0.5, 0.5, "No PCA variance rows available.", ha="center", va="center")
@@ -1341,8 +1698,13 @@ def _write_summary_json(
     m2 = models["M2_entropy"]
     entropy_column = f"entropy_lag_{selected_lag_ms}ms_z"
     interaction_term = f"C(anchor_type)[T.SPP]:{entropy_column}"
-    selected_pc1 = pca_variance.loc[pd.to_numeric(pca_variance["component"], errors="coerce") == 1].copy()
-    selected_pc1 = selected_pc1.loc[pd.to_numeric(selected_pc1["lag_ms"], errors="coerce") == int(selected_lag_ms)]
+    if {"component", "lag_ms", "explained_variance_ratio"}.issubset(pca_variance.columns):
+        selected_pc1 = pca_variance.loc[pd.to_numeric(pca_variance["component"], errors="coerce") == 1].copy()
+        selected_pc1 = selected_pc1.loc[
+            pd.to_numeric(selected_pc1["lag_ms"], errors="coerce") == int(selected_lag_ms)
+        ]
+    else:
+        selected_pc1 = pd.DataFrame()
     payload = {
         "selected_lag_ms": int(selected_lag_ms),
         "n_rows": int(len(riskset)),

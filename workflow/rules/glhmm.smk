@@ -146,9 +146,11 @@ rule build_tde_hmm_entropy_features:
         GLHMM_ENTROPY_FEATURES_OUTPUT
     params:
         glhmm_output_dir=GLHMM_OUTPUT_DIR,
+        instability_window_s=0.25,
     shell:
         """
         PYTHONPATH="{SRC_DIR}" python -m cas.cli.main build-tde-hmm-entropy-features \
             --glhmm-output-dir "{params.glhmm_output_dir}" \
-            --output-path "{output}"
+            --output-path "{output}" \
+            --instability-window-s "{params.instability_window_s}"
         """
