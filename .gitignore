@@ -4,5 +4,11 @@ src/cas.egg-info
 dev/tmp
 __pycache__/
 *.py[cod]
+*$py.class
 .DS_Store
 .snakemake/
+.claude/
+dev
+data/validation_log/
+legacy/
+scripts/
