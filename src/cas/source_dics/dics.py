@@ -25,6 +25,17 @@ class SourcePowerResult:
     stcs: list[object]
 
 
+def _average_band_csd(csd, *, band_name: str, band: BandConfig):
+    averaged = csd.mean(fmin=band.fmin, fmax=band.fmax)
+    LOGGER.info(
+        "Averaged multitaper CSD across %.1f..%.1f Hz to build one common %s filter.",
+        band.fmin,
+        band.fmax,
+        band_name,
+    )
+    return averaged
+
+
 def _resolve_fsaverage_subjects_root(subjects_dir: Path, *, subject: str) -> tuple[Path, Path]:
     resolved = subjects_dir.resolve()
     if (resolved / subject).exists():
@@ -151,6 +162,7 @@ def compute_common_dics_filters(epochs, *, band_name: str, band: BandConfig, for
         n_jobs=config.dics.n_jobs,
         verbose="ERROR",
     )
+    csd = _average_band_csd(csd, band_name=band_name, band=band)
     return mne.beamformer.make_dics(
         epochs.info,
         forward,
@@ -166,10 +178,13 @@ def compute_common_dics_filters(epochs, *, band_name: str, band: BandConfig, for
 
 def save_filters(filters, output_path: Path, *, overwrite: bool) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path.exists() and not overwrite:
+        LOGGER.info("Reusing existing HDF5 filter export at %s.", output_path)
+        return output_path
     try:
         filters.save(output_path, overwrite=overwrite)
         return output_path
-    except RuntimeError as exc:
+    except (RuntimeError, OSError) as exc:
         fallback_path = output_path.with_suffix(".pkl")
         LOGGER.warning(
             "Falling back to pickle filter export because HDF5 beamformer saving is unavailable: %s",
@@ -245,6 +260,7 @@ def apply_common_filters_to_epochs(
 ) -> SourcePowerResult:
     configure_mne_runtime()
     import mne
+    import mne.beamformer._dics as mne_dics
 
     LOGGER.info(
         "Applying pooled DICS filter to anchor=%s band=%s and cropping final output to %.3f..%.3f s.",
@@ -272,8 +288,34 @@ def apply_common_filters_to_epochs(
         # (epochs, channels, tapers, freqs, times), but apply_dics_tfr_epochs
         # expects the tapers to already be combined.
         tfr._data = tfr.data.mean(axis=2)
-    tfr_stcs = mne.beamformer.apply_dics_tfr_epochs(tfr, filters, return_generator=False, verbose="ERROR")
-    averaged_stcs = [_average_frequency_stcs(stcs_for_epoch) for stcs_for_epoch in tfr_stcs]
+    if len(filters["weights"]) != 1:
+        raise ValueError(
+            "Expected one band-averaged DICS filter per band. "
+            f"Observed {len(filters['weights'])} filters for band={band_name}."
+        )
+
+    freq_stcs_per_epoch: list[list[object]] = [[] for _ in range(len(epochs))]
+    for frequency_index, frequency_hz in enumerate(frequencies):
+        LOGGER.info(
+            "Applying common %s filter to anchor=%s at sampled frequency %.2f Hz (%d/%d).",
+            band_name,
+            anchor_type,
+            float(frequency_hz),
+            frequency_index + 1,
+            len(frequencies),
+        )
+        single_frequency_data = tfr.data[:, :, frequency_index : frequency_index + 1, :]
+        per_epoch_generator = mne_dics._apply_dics(
+            single_frequency_data,
+            filters,
+            tfr.info,
+            tfr.tmin,
+            tfr=True,
+        )
+        for epoch_index, stc in enumerate(per_epoch_generator):
+            freq_stcs_per_epoch[epoch_index].append(stc)
+
+    averaged_stcs = [_average_frequency_stcs(stcs_for_epoch) for stcs_for_epoch in freq_stcs_per_epoch]
     power, source_ids = _aggregate_to_labels(averaged_stcs, forward=forward, config=config)
     times = np.asarray(averaged_stcs[0].times, dtype=float)
     time_mask = (times >= config.dics.analysis_tmin) & (times <= config.dics.analysis_tmax)

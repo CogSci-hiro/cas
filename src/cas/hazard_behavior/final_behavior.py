@@ -998,7 +998,10 @@ def build_timing_information_anchor_contrasts(coefficients: pd.DataFrame, *, inf
     mask = (
         coefficients["term"].astype(str).str.contains("anchor_type", regex=False)
         & coefficients["term"].astype(str).str.contains(info_rate_col, regex=False)
-        & coefficients["term"].astype(str).str.contains("bs(", regex=False)
+        & (
+            coefficients["term"].astype(str).str.contains("z_time_from_partner_onset_s", regex=False)
+            | coefficients["term"].astype(str).str.contains("z_time_from_partner_offset_s", regex=False)
+        )
     )
     contrasts = coefficients.loc[mask].copy()
     if contrasts.empty:
@@ -1132,7 +1135,15 @@ def _interaction_plot_grid(
             if varying_column == "time_from_partner_offset_s":
                 row["time_from_partner_onset_s"] = float(pd.to_numeric(riskset["time_from_partner_onset_s"], errors="coerce").median())
             rows.append(row)
-    return pd.DataFrame(rows)
+    grid = pd.DataFrame(rows)
+    onset_mean = float(pd.to_numeric(riskset["time_from_partner_onset_s"], errors="coerce").mean())
+    onset_sd = float(pd.to_numeric(riskset["time_from_partner_onset_s"], errors="coerce").std(ddof=0))
+    offset_mean = float(pd.to_numeric(riskset["time_from_partner_offset_s"], errors="coerce").mean())
+    offset_sd = float(pd.to_numeric(riskset["time_from_partner_offset_s"], errors="coerce").std(ddof=0))
+    grid["z_time_from_partner_onset_s"] = (pd.to_numeric(grid["time_from_partner_onset_s"], errors="coerce") - onset_mean) / onset_sd
+    grid["z_time_from_partner_offset_s"] = (pd.to_numeric(grid["time_from_partner_offset_s"], errors="coerce") - offset_mean) / offset_sd
+    grid["z_time_from_partner_offset_s_squared"] = grid["z_time_from_partner_offset_s"] ** 2
+    return grid
 
 
 def _save_interaction_line_figure(
@@ -1182,6 +1193,13 @@ def _save_interaction_surface_figure(
             prop_col: 0.0,
         }
     )
+    onset_mean = float(pd.to_numeric(riskset["time_from_partner_onset_s"], errors="coerce").mean())
+    onset_sd = float(pd.to_numeric(riskset["time_from_partner_onset_s"], errors="coerce").std(ddof=0))
+    offset_mean = float(pd.to_numeric(riskset["time_from_partner_offset_s"], errors="coerce").mean())
+    offset_sd = float(pd.to_numeric(riskset["time_from_partner_offset_s"], errors="coerce").std(ddof=0))
+    pred_grid["z_time_from_partner_onset_s"] = (pd.to_numeric(pred_grid["time_from_partner_onset_s"], errors="coerce") - onset_mean) / onset_sd
+    pred_grid["z_time_from_partner_offset_s"] = (pd.to_numeric(pred_grid["time_from_partner_offset_s"], errors="coerce") - offset_mean) / offset_sd
+    pred_grid["z_time_from_partner_offset_s_squared"] = pred_grid["z_time_from_partner_offset_s"] ** 2
     predicted = np.asarray(fitted.result.predict(pred_grid), dtype=float).reshape(onset_mesh.shape)
     plt.figure(figsize=(6.5, 4.75))
     contour = plt.contourf(onset_mesh, info_mesh, predicted, levels=24, cmap="viridis")
@@ -1453,7 +1471,7 @@ def build_fpp_vs_spp_report(
         f"- Bin size: {cfg.bin_size_ms} ms",
         f"- FPP rows/events: {fpp_rows}/{fpp_events}",
         f"- SPP rows/events: {spp_rows}/{spp_events}",
-        "- Primary timing control: spline timing terms for time from partner onset and time from partner offset.",
+        "- Primary timing control: linear/quadratic parametric timing using z-scored onset, z-scored offset, and squared z-scored offset.",
         "- FPP and SPP use the same primary timing controls.",
         "- Lag policy: FPP selected the shared lag by minimum BIC; SPP did not reselect lag.",
         f"- SPP models stable: {spp_stable}",
@@ -1490,7 +1508,7 @@ def build_fpp_vs_spp_report(
         "selected_lag_ms": int(selected_lag_ms),
         "bin_size_ms": int(cfg.bin_size_ms),
         "lag_selection_policy": "FPP selected one shared lag by minimum BIC; SPP did not reselect lag.",
-        "primary_timing_rationale": "Primary behavioural-final models use shared spline timing controls for time from partner onset and offset.",
+        "primary_timing_rationale": "Primary behavioural-final models use a shared linear/quadratic timing baseline for FPP and SPP.",
         "formulas": {
             "timing_terms": _timing_terms(cfg),
             "full_information": _formula_sequence(selected_lag_ms, cfg)["full_information"],

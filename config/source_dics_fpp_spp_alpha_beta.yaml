@@ -3,9 +3,9 @@ paths:
   epochs_dir: /Users/hiro/Datasets/working/cas/current/induced_source_epochs
   bids_root: /Users/hiro/Datasets/hyperscanning-bids
   preprocessed_eeg_root: /Users/hiro/Datasets/working/cas/derivatives/preprocessed_eeg
-  source_dir: data/source_dics_fpp_spp_alpha_beta
-  derivatives_dir: results/source_dics_fpp_spp_alpha_beta
-  lmeeeg_dir: results/source_dics_fpp_spp_alpha_beta/lmeeeg
+  source_dir: /Users/hiro/Datasets/working/cas/derivatives/source_dics_fpp_spp_alpha_beta/source
+  derivatives_dir: /Users/hiro/Datasets/working/cas/derivatives/source_dics_fpp_spp_alpha_beta
+  lmeeeg_dir: /Users/hiro/Datasets/working/cas/derivatives/source_dics_fpp_spp_alpha_beta/lmeeeg
 
 events:
   anchor_types:

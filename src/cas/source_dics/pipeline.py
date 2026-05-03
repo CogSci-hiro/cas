@@ -290,7 +290,7 @@ def run_source_dics_pipeline(
     if missing_inputs:
         write_missing_inputs(missing_inputs, qc_dir=config.paths.qc_dir)
         raise FileNotFoundError(
-            "Source DICS input validation failed. See results/source_dics_fpp_spp_alpha_beta/qc/missing_inputs.csv."
+            f"Source DICS input validation failed. See {config.paths.qc_dir / 'missing_inputs.csv'}."
         )
 
     LOGGER.info("Discovering subjects/runs for source DICS processing.")

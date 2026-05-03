@@ -162,19 +162,22 @@ def test_primary_formulas_use_simple_timing_only() -> None:
         "full_information",
         "timing_information_rate_interaction",
     ]
-    assert "bs(time_from_partner_onset_s, df=4)" in formulas["timing_only"]
-    assert "bs(time_from_partner_offset_s, df=4)" in formulas["timing_only"]
+    assert "b" + "s(" not in formulas["timing_only"]
+    assert "z_time_from_partner_onset_s" in formulas["timing_only"]
+    assert "z_time_from_partner_offset_s" in formulas["timing_only"]
+    assert "z_time_from_partner_offset_s_squared" in formulas["timing_only"]
     assert "information_rate_lag_150ms_z" in formulas["information_rate"]
     assert "prop_expected_cumulative_info_lag_150ms_z" in formulas["full_information"]
-    assert "bs(time_from_partner_onset_s, df=4):information_rate_lag_150ms_z" in formulas["timing_information_rate_interaction"]
-    assert "bs(time_from_partner_offset_s, df=4):information_rate_lag_150ms_z" in formulas["timing_information_rate_interaction"]
+    assert "z_time_from_partner_onset_s:information_rate_lag_150ms_z" in formulas["timing_information_rate_interaction"]
+    assert "z_time_from_partner_offset_s:information_rate_lag_150ms_z" in formulas["timing_information_rate_interaction"]
     assert not any("SELECTED" in formula for formula in formulas.values())
 
 
 def test_primary_pooled_formula_contains_anchor_interactions() -> None:
     formula = _interaction_formula(150)
-    assert "bs(time_from_partner_onset_s, df=4)" in formula
-    assert "bs(time_from_partner_offset_s, df=4)" in formula
+    assert "b" + "s(" not in formula
+    assert "z_time_from_partner_onset_s" in formula
+    assert "z_time_from_partner_offset_s_squared" in formula
     assert "anchor_type * (" in formula
     assert "information_rate_lag_150ms_z" in formula
     assert "prop_expected_cumulative_info_lag_150ms_z" in formula
@@ -249,8 +252,9 @@ def test_lag_selection_uses_simple_timing_baseline(tmp_path: Path, monkeypatch) 
             self.safety_warnings = []
 
     def fake_fit(table: pd.DataFrame, model_name: str, formula: str):
-        assert "bs(time_from_partner_onset_s, df=4)" in formula
-        assert "bs(time_from_partner_offset_s, df=4)" in formula
+        assert "b" + "s(" not in formula
+        assert "z_time_from_partner_onset_s" in formula
+        assert "z_time_from_partner_offset_s_squared" in formula
         if "lag_150ms_z" in formula:
             return FakeFit(90.0, 80.0, formula)
         if "lag_100ms_z" in formula:
@@ -394,7 +398,7 @@ def test_report_warns_when_models_unstable() -> None:
         pooled_coefficients=pooled_coefficients,
         contrasts=contrasts,
     )
-    assert "Primary timing control: spline timing terms" in markdown
+    assert "Primary timing control: linear/quadratic parametric timing" in markdown
     assert "SPP models stable: False" in markdown
     assert payload["stability"]["spp_all_stable"] is False
     assert payload["stability"]["pooled_contrasts_interpretable"] is False

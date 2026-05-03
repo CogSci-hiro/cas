@@ -211,6 +211,11 @@ rule hazard_behavior_latency_regime_all:
         *HAZARD_BEHAVIOR_LATENCY_REGIME_BIMODALITY_DIAGNOSTICS
 
 
+rule hazard_behavior_final_all:
+    input:
+        rules.behavior_final_all.input
+
+
 rule hazard_neural_all:
     input:
         *HAZARD_NEURAL_ALL_OUTPUTS
