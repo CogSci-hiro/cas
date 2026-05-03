@@ -39,6 +39,7 @@ dependencies = [
 
     # IO
     "pyarrow>=14.0",
+    "h5io",
 
     # Utility
     "tqdm",

@@ -111,7 +111,9 @@ def lag_col_z(base: str, lag_ms: int) -> str:
 
 
 def _expand_selected_lag_placeholders(text: str, selected_lag: int) -> str:
-    expanded = str(text).replace("SELECTED", format_lag_ms(selected_lag))
+    expanded = str(text)
+    expanded = expanded.replace("SELECTED_ms", format_lag_ms(selected_lag))
+    expanded = expanded.replace("SELECTED", str(int(selected_lag)))
     if "SELECTED" in expanded:
         raise ValueError(f"Unresolved selected-lag placeholder remained in formula term: {text}")
     return expanded
