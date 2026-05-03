@@ -4,7 +4,6 @@ import os
 from typing import Any, Mapping
 
 import numpy as np
-from scipy.signal import hilbert
 
 
 DEFAULT_BANDS_HZ: dict[str, tuple[float, float]] = {
@@ -41,24 +40,63 @@ def resolve_induced_band_limits_hz(band_name: str, config: Mapping[str, Any]) ->
 
 
 def build_induced_epochs(source_epochs, *, band_name: str, config: Mapping[str, Any]):
-    """Compute band-limited Hilbert envelope epochs while preserving structure."""
+    """Compute single-trial Morlet induced-power epochs while preserving structure.
+
+    The returned epochs contain band-averaged induced power (mean across sampled
+    frequencies within the requested band), not evoked power from averaged ERPs.
+    """
     _configure_mne_runtime()
     import mne
 
     low_hz, high_hz = resolve_induced_band_limits_hz(band_name, config)
+    induced_cfg = dict(config.get("induced_epochs") or {})
+    morlet_cfg = dict(induced_cfg.get("morlet") or {})
+    freq_step_hz = float(morlet_cfg.get("freq_step_hz", 1.0))
+    if freq_step_hz <= 0.0:
+        raise ValueError("induced_epochs.morlet.freq_step_hz must be positive.")
+    n_cycles_cfg = morlet_cfg.get("n_cycles", {"mode": "frequency_divisor", "divisor": 2.0})
+    use_fft = bool(morlet_cfg.get("use_fft", True))
+    decim = int(morlet_cfg.get("decim", 1))
+
+    frequencies = np.arange(low_hz, high_hz + (0.5 * freq_step_hz), freq_step_hz, dtype=float)
+    if frequencies.size == 0:
+        frequencies = np.asarray([0.5 * (low_hz + high_hz)], dtype=float)
+
+    if isinstance(n_cycles_cfg, dict):
+        mode = str(n_cycles_cfg.get("mode", "frequency_divisor"))
+        if mode != "frequency_divisor":
+            raise ValueError("induced_epochs.morlet.n_cycles.mode must be 'frequency_divisor'.")
+        divisor = float(n_cycles_cfg.get("divisor", 2.0))
+        if divisor <= 0.0:
+            raise ValueError("induced_epochs.morlet.n_cycles.divisor must be positive.")
+        n_cycles = frequencies / divisor
+    elif isinstance(n_cycles_cfg, (int, float)):
+        n_cycles = np.full(frequencies.shape, float(n_cycles_cfg), dtype=float)
+    else:
+        n_cycles = np.asarray(n_cycles_cfg, dtype=float)
+        if n_cycles.shape != frequencies.shape:
+            raise ValueError(
+                "induced_epochs.morlet.n_cycles must be scalar or match the frequency grid length."
+            )
+
     data = source_epochs.get_data(copy=True)
     sfreq = float(source_epochs.info["sfreq"])
-    filtered = mne.filter.filter_data(
+    power = mne.time_frequency.tfr_array_morlet(
         data,
         sfreq=sfreq,
-        l_freq=low_hz,
-        h_freq=high_hz,
+        freqs=frequencies,
+        n_cycles=n_cycles,
+        output="power",
+        use_fft=use_fft,
+        decim=decim,
+        zero_mean=True,
         verbose="ERROR",
     )
-    envelope = np.abs(hilbert(filtered, axis=-1))
+    # Average over sampled frequencies to keep a band-level trial x channel x time array.
+    band_power = power.mean(axis=2)
 
     induced = mne.EpochsArray(
-        envelope,
+        band_power.astype(np.float32, copy=False),
         source_epochs.info.copy(),
         events=source_epochs.events.copy(),
         tmin=float(source_epochs.times[0]),

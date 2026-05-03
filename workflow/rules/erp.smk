@@ -333,6 +333,7 @@ def _write_tasklocked_epochs(*, input_eeg, input_raw, events_csv, output_epochs,
 
 LMEEEG_CONFIG_PATH = f"{CONFIG_DIR}/lmeeeg.yaml"
 FPP_SPP_CYCLE_POSITION_LMEEEG_CONFIG_PATH = f"{CONFIG_DIR}/lmeeeg_fpp_spp_cycle_position.yaml"
+INFO_RATE_INDUCED_LMEEEG_CONFIG_PATH = f"{CONFIG_DIR}/info_rate_induced_lmeeg.yaml"
 LMEEEG_OUTPUT_DIR = f"{OUT_DIR}/lmeeeg"
 LMEEEG_SUMMARY_OUTPUT = f"{LMEEEG_OUTPUT_DIR}/lmeeeg_analysis_summary.json"
 LMEEEG_INDUCED_SUMMARY_OUTPUT = f"{LMEEEG_OUTPUT_DIR}/induced_lmeeeg_analysis_summary.json"
@@ -368,6 +369,24 @@ def _lmeeeg_analysis_root_from_config(config_path: str) -> str:
     return f"{OUT_DIR}/lmeeeg/{analysis_name}" if analysis_name else f"{OUT_DIR}/lmeeeg"
 
 
+def _resolve_erp_output_dir(path_value: str | None, default_subdir: str) -> str:
+    if not isinstance(path_value, str) or not path_value.strip():
+        return f"{OUT_DIR}/{default_subdir}"
+    if os.path.isabs(path_value):
+        return path_value
+    return f"{OUT_DIR}/{path_value.lstrip('/')}"
+
+
+def _resolve_erp_input_path(path_value: str | None, default_relative: str) -> str:
+    path_text = default_relative if not isinstance(path_value, str) or not path_value.strip() else path_value
+    if os.path.isabs(path_text):
+        return path_text
+    project_candidate = os.path.join(PROJECT_ROOT, path_text.lstrip("/"))
+    if os.path.exists(project_candidate):
+        return project_candidate
+    return os.path.join(OUT_DIR, path_text.lstrip("/"))
+
+
 FPP_SPP_CYCLE_POSITION_LMEEEG_OUTPUT_DIR = _lmeeeg_analysis_root_from_config(
     FPP_SPP_CYCLE_POSITION_LMEEEG_CONFIG_PATH
 )
@@ -384,6 +403,30 @@ FPP_SPP_CYCLE_POSITION_LMEEEG_CONTRAST_OUTPUTS = expand(
     ),
     band=[str(band) for band in FPP_SPP_CYCLE_POSITION_LMEEEG_INDUCED_BANDS],
 )
+
+with open(INFO_RATE_INDUCED_LMEEEG_CONFIG_PATH, encoding="utf-8") as _info_rate_handle:
+    _INFO_RATE_INDUCED_LMEEEG_CONFIG = yaml.safe_load(_info_rate_handle) or {}
+_INFO_RATE_INDUCED_LMEEEG_INPUT = dict(_INFO_RATE_INDUCED_LMEEEG_CONFIG.get("input") or {})
+_INFO_RATE_INDUCED_LMEEEG_OUTPUT = dict(_INFO_RATE_INDUCED_LMEEEG_CONFIG.get("output") or {})
+INFO_RATE_INDUCED_LMEEEG_OUTPUT_DIR = _resolve_erp_output_dir(
+    _INFO_RATE_INDUCED_LMEEEG_OUTPUT.get("out_dir"),
+    "results/info_rate_induced_lmeeg",
+)
+INFO_RATE_INDUCED_LMEEEG_BEHAVIOUR_RISKSET_INPUT = _resolve_erp_input_path(
+    _INFO_RATE_INDUCED_LMEEEG_INPUT.get("behaviour_riskset_path"),
+    "reports/hazard_behavior_final/fpp_vs_spp/combined_riskset.parquet",
+)
+INFO_RATE_INDUCED_LMEEEG_OUTPUTS = [
+    f"{INFO_RATE_INDUCED_LMEEEG_OUTPUT_DIR}/induced_power_trials.parquet",
+    f"{INFO_RATE_INDUCED_LMEEEG_OUTPUT_DIR}/model_input_binned.parquet",
+    f"{INFO_RATE_INDUCED_LMEEEG_OUTPUT_DIR}/model_results_long.csv",
+    f"{INFO_RATE_INDUCED_LMEEEG_OUTPUT_DIR}/model_diagnostics.csv",
+    f"{INFO_RATE_INDUCED_LMEEEG_OUTPUT_DIR}/config_used.yaml",
+    f"{INFO_RATE_INDUCED_LMEEEG_OUTPUT_DIR}/alpha_anchor_x_information_rate_tmap.png",
+    f"{INFO_RATE_INDUCED_LMEEEG_OUTPUT_DIR}/beta_anchor_x_information_rate_tmap.png",
+    f"{INFO_RATE_INDUCED_LMEEEG_OUTPUT_DIR}/alpha_anchor_x_prop_expected_cum_info_tmap.png",
+    f"{INFO_RATE_INDUCED_LMEEEG_OUTPUT_DIR}/beta_anchor_x_prop_expected_cum_info_tmap.png",
+]
 
 
 rule make_epochs:
@@ -517,3 +560,20 @@ rule run_fpp_spp_cycle_position_lmeeeg:
             config_path=input.config,
             output_dir=os.path.dirname(output.summary),
         )
+
+
+rule run_info_rate_induced_lmeeg:
+    input:
+        epochs=INDUCED_SOURCE_EPOCH_OUTPUTS,
+        config=INFO_RATE_INDUCED_LMEEEG_CONFIG_PATH,
+        behaviour_riskset=INFO_RATE_INDUCED_LMEEEG_BEHAVIOUR_RISKSET_INPUT,
+    output:
+        INFO_RATE_INDUCED_LMEEEG_OUTPUTS,
+    shell:
+        r"""
+        set -euo pipefail
+        mkdir -p "{resources.tmpdir}/mpl" "{resources.tmpdir}/cache"
+        MPLCONFIGDIR="{resources.tmpdir}/mpl" XDG_CACHE_HOME="{resources.tmpdir}/cache" \
+        PYTHONPATH="{SRC_DIR}:{PROJECT_ROOT}" "{PYTHON_BIN}" -m cas.cli.main info-rate-induced-lmeeg \
+          --config "{input.config}"
+        """

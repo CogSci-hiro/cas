@@ -34,6 +34,11 @@ def add_source_dics_fpp_spp_parser(
         help="Optional comma-separated subject list, e.g. sub-001,sub-002.",
     )
     parser.add_argument(
+        "--runs",
+        default=None,
+        help="Optional comma-separated run list, e.g. 1,2.",
+    )
+    parser.add_argument(
         "--bands",
         default=None,
         help="Optional comma-separated band list, e.g. alpha,beta.",
@@ -48,6 +53,11 @@ def add_source_dics_fpp_spp_parser(
         action="store_true",
         help="Enable verbose logging for the source DICS run.",
     )
+    parser.add_argument(
+        "--qc-subdir",
+        default=None,
+        help="Optional QC subdirectory under the configured qc root for record-specific runs.",
+    )
 
 
 def run_source_dics_fpp_spp_command(args: argparse.Namespace) -> int:
@@ -57,9 +67,11 @@ def run_source_dics_fpp_spp_command(args: argparse.Namespace) -> int:
     result = run_source_dics_pipeline(
         config,
         subjects=_parse_csv_argument(args.subjects),
+        runs=_parse_csv_argument(args.runs),
         bands=_parse_csv_argument(args.bands),
         overwrite=bool(args.overwrite),
         verbose=True if args.verbose else None,
+        qc_subdir=args.qc_subdir,
     )
     print(result.summary_path)
     return 0

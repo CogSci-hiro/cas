@@ -13,6 +13,18 @@ DEFAULT_LONG_TABLE_CHUNK_ROWS = 250_000
 DEFAULT_TFR_FREQ_SAMPLES = 5
 DEFAULT_TFR_N_CYCLES = 7.0
 DEFAULT_TFR_TIME_BANDWIDTH = 4.0
+DEFAULT_SIGNIFICANCE_ALPHA = 0.05
+
+DEFAULT_PREDICTOR_LABELS: dict[str, str] = {
+    "anchor_type": "FPP vs SPP",
+    "duration": "Utterance duration",
+    "latency": "Latency",
+    "time_within_run": "Time within run",
+    "information_rate_lag_200ms_z": "Information rate, lagged 200 ms",
+    "prop_expected_cumulative_info_lag_200ms_z": "Proportion expected cumulative information, lagged 200 ms",
+    "upcoming_utterance_information_content": "Upcoming utterance information content",
+    "n_tokens": "Number of tokens",
+}
 
 
 def _resolve_path(path_value: str | None, *, config_dir: Path) -> Path | None:
@@ -154,6 +166,75 @@ class LoggingConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class PlotSignificanceConfig:
+    alpha: float
+    use_cluster_mask_if_available: bool
+    fallback_p_column: str
+    fallback_corrected_p_column: str
+    mask_non_significant: bool
+
+
+@dataclass(frozen=True, slots=True)
+class PlotTimeWindowConfig:
+    tmin: float
+    tmax: float
+
+
+@dataclass(frozen=True, slots=True)
+class PlotTimeSummaryConfig:
+    mode: str
+    windows: dict[str, PlotTimeWindowConfig]
+
+
+@dataclass(frozen=True, slots=True)
+class SurfacePlotConfig:
+    cmap: str
+    symmetric_clim: bool
+    background: str
+    transparent_background: bool
+    dpi: int
+    show_colorbar: bool
+    non_significant_style: str
+
+
+@dataclass(frozen=True, slots=True)
+class RoiPlotConfig:
+    enabled: bool
+    atlas: str
+    broad_roi_scheme: str
+    aggregation: str
+    significance_weighted: bool
+    include_n_vertices: bool
+    sort_by: tuple[str, ...]
+    dpi: int
+
+
+@dataclass(frozen=True, slots=True)
+class PlotReportConfig:
+    write_markdown_index: bool
+    write_csv_index: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SourceDicsPlotConfig:
+    enabled: bool
+    output_dir: Path
+    statistics_dir: Path
+    source_space: str
+    surface: str
+    views: tuple[str, ...]
+    hemispheres: tuple[str, ...]
+    bands: tuple[str, ...]
+    predictors: tuple[str, ...]
+    predictor_labels: dict[str, str]
+    significance: PlotSignificanceConfig
+    time_summary: PlotTimeSummaryConfig
+    surface_plot: SurfacePlotConfig
+    roi_plot: RoiPlotConfig
+    report: PlotReportConfig
+
+
+@dataclass(frozen=True, slots=True)
 class SourceDicsConfig:
     config_path: Path
     paths: PathConfig
@@ -164,6 +245,7 @@ class SourceDicsConfig:
     output: OutputConfig
     lmeeeg: LmEEGConfig
     logging: LoggingConfig
+    plots: SourceDicsPlotConfig
 
     def to_dict(self) -> dict[str, Any]:
         return _json_ready(asdict(self))
@@ -251,6 +333,119 @@ def _create_output_dirs(paths: PathConfig) -> None:
         path.mkdir(parents=True, exist_ok=True)
 
 
+def _parse_plot_windows(payload: Any) -> dict[str, PlotTimeWindowConfig]:
+    mapping = _require_mapping(payload, label="plots.time_summary.windows")
+    if not mapping:
+        mapping = {
+            "pre_event_full": {"tmin": -1.5, "tmax": -0.1},
+            "early": {"tmin": -1.5, "tmax": -0.8},
+            "middle": {"tmin": -0.8, "tmax": -0.4},
+            "late": {"tmin": -0.4, "tmax": -0.1},
+        }
+    windows: dict[str, PlotTimeWindowConfig] = {}
+    for name, window_payload in mapping.items():
+        window = _require_mapping(window_payload, label=f"plots.time_summary.windows.{name}")
+        tmin = float(window["tmin"])
+        tmax = float(window["tmax"])
+        if tmin >= tmax:
+            raise ValueError(f"plots.time_summary.windows.{name} must satisfy tmin < tmax.")
+        windows[str(name)] = PlotTimeWindowConfig(tmin=tmin, tmax=tmax)
+    return windows
+
+
+def _parse_plot_config(
+    payload: Any,
+    *,
+    config_dir: Path,
+    derivatives_dir: Path,
+    lmeeeg_dir: Path,
+    dics_bands: tuple[str, ...],
+    lmeeeg_predictors: tuple[str, ...],
+) -> SourceDicsPlotConfig:
+    plots_payload = _require_mapping(payload, label="plots")
+
+    output_dir = _resolve_path(
+        str(plots_payload.get("output_dir", str(derivatives_dir / "figures"))),
+        config_dir=config_dir,
+    )
+    statistics_dir = _resolve_path(
+        str(plots_payload.get("statistics_dir", str(lmeeeg_dir))),
+        config_dir=config_dir,
+    )
+    predictors_payload = tuple(str(value) for value in plots_payload.get("predictors", ()))
+    predictors = predictors_payload or lmeeeg_predictors
+    if not predictors:
+        predictors = tuple(DEFAULT_PREDICTOR_LABELS.keys())
+
+    labels_payload = _require_mapping(plots_payload.get("predictor_labels"), label="plots.predictor_labels")
+    predictor_labels = dict(DEFAULT_PREDICTOR_LABELS)
+    predictor_labels.update({str(key): str(value) for key, value in labels_payload.items()})
+
+    significance_payload = _require_mapping(plots_payload.get("significance"), label="plots.significance")
+    significance = PlotSignificanceConfig(
+        alpha=float(significance_payload.get("alpha", DEFAULT_SIGNIFICANCE_ALPHA)),
+        use_cluster_mask_if_available=bool(significance_payload.get("use_cluster_mask_if_available", True)),
+        fallback_p_column=str(significance_payload.get("fallback_p_column", "p_value")),
+        fallback_corrected_p_column=str(
+            significance_payload.get("fallback_corrected_p_column", "p_value_corrected")
+        ),
+        mask_non_significant=bool(significance_payload.get("mask_non_significant", True)),
+    )
+
+    time_summary_payload = _require_mapping(plots_payload.get("time_summary"), label="plots.time_summary")
+    time_summary = PlotTimeSummaryConfig(
+        mode=str(time_summary_payload.get("mode", "cluster_peak_and_mean")),
+        windows=_parse_plot_windows(time_summary_payload.get("windows")),
+    )
+
+    surface_plot_payload = _require_mapping(plots_payload.get("surface_plot"), label="plots.surface_plot")
+    surface_plot = SurfacePlotConfig(
+        cmap=str(surface_plot_payload.get("cmap", "RdBu_r")),
+        symmetric_clim=bool(surface_plot_payload.get("symmetric_clim", True)),
+        background=str(surface_plot_payload.get("background", "white")),
+        transparent_background=bool(surface_plot_payload.get("transparent_background", False)),
+        dpi=int(surface_plot_payload.get("dpi", 300)),
+        show_colorbar=bool(surface_plot_payload.get("show_colorbar", True)),
+        non_significant_style=str(surface_plot_payload.get("non_significant_style", "transparent")),
+    )
+
+    roi_plot_payload = _require_mapping(plots_payload.get("roi_plot"), label="plots.roi_plot")
+    roi_plot = RoiPlotConfig(
+        enabled=bool(roi_plot_payload.get("enabled", True)),
+        atlas=str(roi_plot_payload.get("atlas", "aparc")),
+        broad_roi_scheme=str(roi_plot_payload.get("broad_roi_scheme", "source_dics_broad")),
+        aggregation=str(roi_plot_payload.get("aggregation", "mean")),
+        significance_weighted=bool(roi_plot_payload.get("significance_weighted", False)),
+        include_n_vertices=bool(roi_plot_payload.get("include_n_vertices", True)),
+        sort_by=tuple(str(value) for value in roi_plot_payload.get("sort_by", ("hemisphere", "broad_roi"))),
+        dpi=int(roi_plot_payload.get("dpi", 300)),
+    )
+
+    report_payload = _require_mapping(plots_payload.get("report"), label="plots.report")
+    report = PlotReportConfig(
+        write_markdown_index=bool(report_payload.get("write_markdown_index", True)),
+        write_csv_index=bool(report_payload.get("write_csv_index", True)),
+    )
+
+    return SourceDicsPlotConfig(
+        enabled=bool(plots_payload.get("enabled", True)),
+        output_dir=output_dir,
+        statistics_dir=statistics_dir,
+        source_space=str(plots_payload.get("source_space", "fsaverage")),
+        surface=str(plots_payload.get("surface", "inflated")),
+        views=tuple(str(value) for value in plots_payload.get("views", ("lateral",))),
+        hemispheres=tuple(str(value) for value in plots_payload.get("hemispheres", ("lh", "rh"))),
+        bands=tuple(str(value) for value in plots_payload.get("bands", dics_bands)),
+        predictors=predictors,
+        predictor_labels=predictor_labels,
+        significance=significance,
+        time_summary=time_summary,
+        surface_plot=surface_plot,
+        roi_plot=roi_plot,
+        report=report,
+    )
+
+
 def load_source_dics_config(config_path: str | Path) -> SourceDicsConfig:
     """Load and validate the source-level DICS YAML config.
 
@@ -277,6 +472,7 @@ def load_source_dics_config(config_path: str | Path) -> SourceDicsConfig:
     output_payload = _require_mapping(payload.get("output"), label="output")
     lmeeeg_payload = _require_mapping(payload.get("lmeeeg"), label="lmeeeg")
     logging_payload = _require_mapping(payload.get("logging"), label="logging")
+    plots_payload = _require_mapping(payload.get("plots"), label="plots")
 
     paths = PathConfig(
         events_csv=_resolve_path(str(paths_payload["events_csv"]), config_dir=config_dir),
@@ -384,6 +580,14 @@ def load_source_dics_config(config_path: str | Path) -> SourceDicsConfig:
         verbose=bool(logging_payload.get("verbose", True)),
         progress=bool(logging_payload.get("progress", True)),
     )
+    plots = _parse_plot_config(
+        plots_payload,
+        config_dir=config_dir,
+        derivatives_dir=paths.derivatives_dir,
+        lmeeeg_dir=paths.lmeeeg_dir,
+        dics_bands=tuple(dics.bands.keys()),
+        lmeeeg_predictors=lmeeeg.predictors,
+    )
 
     config = SourceDicsConfig(
         config_path=resolved_config_path,
@@ -395,8 +599,10 @@ def load_source_dics_config(config_path: str | Path) -> SourceDicsConfig:
         output=output,
         lmeeeg=lmeeeg,
         logging=logging,
+        plots=plots,
     )
     _validate_time_windows(config.epoching, config.dics)
     _validate_source_space(config.source_space)
     _create_output_dirs(config.paths)
+    config.plots.output_dir.mkdir(parents=True, exist_ok=True)
     return config

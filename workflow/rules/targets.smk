@@ -128,7 +128,7 @@ rule make_induced_epochs_subject:
                 "tmin_s": float(induced_epochs.times[0]) if len(induced_epochs.times) else 0.0,
                 "tmax_s": float(induced_epochs.times[-1]) if len(induced_epochs.times) else 0.0,
                 "sampling_frequency_hz": float(induced_epochs.info["sfreq"]),
-                "method": "bandpass_hilbert_envelope",
+                "method": "morlet_induced_power",
             }
 
             write_epochs(induced_epochs, epochs_output)
@@ -174,6 +174,11 @@ rule lme_eeg_fpp_spp_cycle_position:
     input:
         FPP_SPP_CYCLE_POSITION_LMEEEG_SUMMARY_OUTPUT,
         *FPP_SPP_CYCLE_POSITION_LMEEEG_CONTRAST_OUTPUTS
+
+
+rule info_rate_induced_lmeeg_all:
+    input:
+        *INFO_RATE_INDUCED_LMEEEG_OUTPUTS
 
 
 rule tde_hmm_all:
@@ -255,12 +260,14 @@ rule neural_hazard_fpp_spp:
 
 rule source_dics_fpp_spp_alpha_beta_all:
     input:
-        SOURCE_DICS_FPP_SPP_ALPHA_BETA_SUMMARY_OUTPUT
+        SOURCE_DICS_FPP_SPP_ALPHA_BETA_SUMMARY_OUTPUT,
+        SOURCE_DICS_FPP_SPP_ALPHA_BETA_FIGURES_INDEX
 
 
 rule source_dics_all:
     input:
-        SOURCE_DICS_FPP_SPP_ALPHA_BETA_SUMMARY_OUTPUT
+        SOURCE_DICS_FPP_SPP_ALPHA_BETA_SUMMARY_OUTPUT,
+        SOURCE_DICS_FPP_SPP_ALPHA_BETA_FIGURES_INDEX
 
 
 rule figures_lmeeeg_all:

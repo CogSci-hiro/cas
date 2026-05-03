@@ -124,6 +124,18 @@ def _select_records(records: list[EpochRecord], *, subject_filter: set[str] | No
     return [record for record in records if record.subject_id in subject_filter]
 
 
+def _filter_runs(records: list[EpochRecord], *, run_filter: set[str] | None) -> list[EpochRecord]:
+    if run_filter is None:
+        return records
+    return [record for record in records if str(record.run_id) in run_filter]
+
+
+def _resolve_qc_dir(config: SourceDicsConfig, *, qc_subdir: str | None) -> Path:
+    if qc_subdir is None or not qc_subdir.strip():
+        return config.paths.qc_dir
+    return config.paths.qc_dir / qc_subdir.strip()
+
+
 def _load_subject_to_dyad_map() -> dict[str, str]:
     import re
 
@@ -260,9 +272,11 @@ def run_source_dics_pipeline(
     config: SourceDicsConfig,
     *,
     subjects: list[str] | None = None,
+    runs: list[str] | None = None,
     bands: list[str] | None = None,
     overwrite: bool | None = None,
     verbose: bool | None = None,
+    qc_subdir: str | None = None,
 ) -> SourceDicsPipelineResult:
     """Run the pooled FPP/SPP source-level DICS power pipeline.
 
@@ -274,11 +288,13 @@ def run_source_dics_pipeline(
 
     configure_mne_runtime()
     _setup_logging(config, verbose_override=verbose)
+    qc_dir = _resolve_qc_dir(config, qc_subdir=qc_subdir)
+    qc_dir.mkdir(parents=True, exist_ok=True)
     LOGGER.info("Loading source DICS config and writing QC snapshot.")
     LOGGER.info("Resolved config summary:\n%s", _format_config_summary(config))
-    write_config_snapshot(config.to_dict(), qc_dir=config.paths.qc_dir)
+    write_config_snapshot(config.to_dict(), qc_dir=qc_dir)
     write_filter_windows(
-        qc_dir=config.paths.qc_dir,
+        qc_dir=qc_dir,
         filter_tmin=config.dics.filter_tmin,
         filter_tmax=config.dics.filter_tmax,
         analysis_tmin=config.dics.analysis_tmin,
@@ -288,13 +304,14 @@ def run_source_dics_pipeline(
     selected_bands = list(config.dics.bands.keys()) if bands is None else bands
     missing_inputs = _collect_missing_inputs(config)
     if missing_inputs:
-        write_missing_inputs(missing_inputs, qc_dir=config.paths.qc_dir)
+        write_missing_inputs(missing_inputs, qc_dir=qc_dir)
         raise FileNotFoundError(
-            f"Source DICS input validation failed. See {config.paths.qc_dir / 'missing_inputs.csv'}."
+            f"Source DICS input validation failed. See {qc_dir / 'missing_inputs.csv'}."
         )
 
     LOGGER.info("Discovering subjects/runs for source DICS processing.")
     subject_filter = None if subjects is None else set(subjects)
+    run_filter = None if runs is None else {str(run).strip() for run in runs}
     if config.paths.preprocessed_eeg_root is not None and config.paths.bids_root is not None:
         records = _select_records(
             discover_preprocessed_records(
@@ -304,6 +321,7 @@ def run_source_dics_pipeline(
             ),
             subject_filter=subject_filter,
         )
+        records = _filter_runs(records, run_filter=run_filter)
         LOGGER.info(
             "Using on-the-fly epoch construction from preprocessed EEG in %s.",
             config.paths.preprocessed_eeg_root,
@@ -313,6 +331,7 @@ def run_source_dics_pipeline(
             discover_epoch_records(config.paths.epochs_dir, subjects=subject_filter),
             subject_filter=subject_filter,
         )
+        records = _filter_runs(records, run_filter=run_filter)
     if not records:
         raise FileNotFoundError("No usable source DICS inputs were discovered.")
 
@@ -474,9 +493,9 @@ def run_source_dics_pipeline(
 
     if all_metadata_rows:
         combined_metadata = pd.concat(all_metadata_rows, ignore_index=True)
-        write_event_counts(combined_metadata, qc_dir=config.paths.qc_dir)
-    write_band_subject_counts(band_subject_rows, qc_dir=config.paths.qc_dir)
-    write_mean_power(mean_power_rows, qc_dir=config.paths.qc_dir)
+        write_event_counts(combined_metadata, qc_dir=qc_dir)
+    write_band_subject_counts(band_subject_rows, qc_dir=qc_dir)
+    write_mean_power(mean_power_rows, qc_dir=qc_dir)
 
     summary = {
         "status": "failed" if failures else "ok",
@@ -500,7 +519,7 @@ def run_source_dics_pipeline(
         "subject_runs": subject_summaries,
         "failures": failures,
     }
-    summary_path = write_run_summary(summary, qc_dir=config.paths.qc_dir)
+    summary_path = write_run_summary(summary, qc_dir=qc_dir)
     if failures:
         raise RuntimeError(
             "Source DICS pipeline finished with failures. Inspect "

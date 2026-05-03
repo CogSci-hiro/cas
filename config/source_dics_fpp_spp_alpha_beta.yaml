@@ -94,3 +94,79 @@ lmeeeg:
 logging:
   verbose: true
   progress: true
+
+plots:
+  enabled: true
+  output_dir: results/source_dics_fpp_spp_alpha_beta/figures
+  statistics_dir: results/source_dics_fpp_spp_alpha_beta/lmeeeg
+  source_space: fsaverage
+  surface: inflated
+  views:
+    - lateral
+  hemispheres:
+    - lh
+    - rh
+  bands:
+    - alpha
+    - beta
+  predictors:
+    - anchor_type
+    - duration
+    - latency
+    - time_within_run
+    - information_rate_lag_200ms_z
+    - prop_expected_cumulative_info_lag_200ms_z
+    - upcoming_utterance_information_content
+    - n_tokens
+  predictor_labels:
+    anchor_type: "FPP vs SPP"
+    duration: "Utterance duration"
+    latency: "Latency"
+    time_within_run: "Time within run"
+    information_rate_lag_200ms_z: "Information rate, lagged 200 ms"
+    prop_expected_cumulative_info_lag_200ms_z: "Proportion expected cumulative information, lagged 200 ms"
+    upcoming_utterance_information_content: "Upcoming utterance information content"
+    n_tokens: "Number of tokens"
+  significance:
+    alpha: 0.05
+    use_cluster_mask_if_available: true
+    fallback_p_column: p_value
+    fallback_corrected_p_column: p_value_corrected
+    mask_non_significant: true
+  time_summary:
+    mode: cluster_peak_and_mean
+    windows:
+      pre_event_full:
+        tmin: -1.5
+        tmax: -0.1
+      early:
+        tmin: -1.5
+        tmax: -0.8
+      middle:
+        tmin: -0.8
+        tmax: -0.4
+      late:
+        tmin: -0.4
+        tmax: -0.1
+  surface_plot:
+    cmap: RdBu_r
+    symmetric_clim: true
+    background: white
+    transparent_background: false
+    dpi: 300
+    show_colorbar: true
+    non_significant_style: transparent
+  roi_plot:
+    enabled: true
+    atlas: aparc
+    broad_roi_scheme: source_dics_broad
+    aggregation: mean
+    significance_weighted: false
+    include_n_vertices: true
+    sort_by:
+      - hemisphere
+      - broad_roi
+    dpi: 300
+  report:
+    write_markdown_index: true
+    write_csv_index: true

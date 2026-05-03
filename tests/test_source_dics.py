@@ -14,6 +14,7 @@ from cas.source_dics.dics import SourcePowerResult
 from cas.source_dics.events import prepare_epoch_metadata, split_anchor_metadata
 from cas.source_dics.export import LONG_TABLE_REQUIRED_COLUMNS, export_long_table
 from cas.source_dics.io import EpochRecord
+from cas.source_dics.pipeline import _filter_runs
 
 
 def _write_config(tmp_path: Path, *, overrides: dict | None = None) -> Path:
@@ -278,6 +279,18 @@ def test_source_dics_long_table_export_has_expected_schema(tmp_path: Path) -> No
     assert len(table) == 8
 
 
+def test_source_dics_filter_runs_limits_records_to_requested_runs() -> None:
+    records = [
+        EpochRecord(subject_id="sub-001", run_id="1", task="conversation"),
+        EpochRecord(subject_id="sub-001", run_id="2", task="conversation"),
+        EpochRecord(subject_id="sub-002", run_id="1", task="conversation"),
+    ]
+
+    filtered = _filter_runs(records, run_filter={"2"})
+
+    assert [(record.subject_id, record.run_id) for record in filtered] == [("sub-001", "2")]
+
+
 def test_source_dics_cli_help_works() -> None:
     result = subprocess.run(
         [sys.executable, "-m", "cas.cli.main", "source-dics-fpp-spp", "--help"],
@@ -290,6 +303,7 @@ def test_source_dics_cli_help_works() -> None:
     assert "source-dics-fpp-spp" in result.stdout
     assert "--config" in result.stdout
     assert "--subjects" in result.stdout
+    assert "--runs" in result.stdout
 
 
 def test_source_dics_target_name_exists() -> None:
@@ -298,3 +312,12 @@ def test_source_dics_target_name_exists() -> None:
 
     assert "rule source_dics_fpp_spp_alpha_beta_all:" in target_text
     assert "rule source_dics_all:" in target_text
+
+
+def test_source_dics_workflow_uses_per_record_parallel_rule() -> None:
+    workflow_path = Path(__file__).resolve().parents[1] / "workflow" / "rules" / "source_dics.smk"
+    workflow_text = workflow_path.read_text(encoding="utf-8")
+
+    assert "rule run_source_dics_fpp_spp_alpha_beta_record:" in workflow_text
+    assert "rule aggregate_source_dics_fpp_spp_alpha_beta:" in workflow_text
+    assert "--runs {wildcards.run}" in workflow_text
