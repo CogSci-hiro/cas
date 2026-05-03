@@ -29,4 +29,4 @@ induced_source_epochs:
       - 0.3
 
 induced_epochs:
-  bands: ["alpha", "beta"]
+  bands: ["theta", "alpha", "beta"]

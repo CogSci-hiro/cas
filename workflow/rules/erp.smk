@@ -86,6 +86,10 @@ INDUCED_SOURCE_EPOCH_OUTPUTS = expand(
     task=[record["task"] for record in EPOCH_RECORDS],
     run=[record["run"] for record in EPOCH_RECORDS],
 )
+INDUCED_EPOCH_BANDS = [
+    str(value)
+    for value in dict(EPOCHS_CONFIG.get("induced_epochs") or {}).get("bands", ["theta"])
+]
 
 
 def _induced_epoch_summary_outputs() -> list[str]:
@@ -93,6 +97,23 @@ def _induced_epoch_summary_outputs() -> list[str]:
     return [
         f"{OUT_DIR}/induced_epochs/sub-{subject}/summary.json"
         for subject in subjects
+    ]
+
+
+def _induced_epoch_band_summary_outputs(config_path: str | None = None) -> list[str]:
+    subjects = sorted({record["subject"] for record in EPOCH_RECORDS})
+    resolved_config_path = config_path or LMEEEG_CONFIG_PATH
+    requested_bands = [
+        str(value)
+        for value in dict(_load_lmeeeg_workflow_config(resolved_config_path).get("induced_epochs") or {}).get(
+            "bands",
+            INDUCED_EPOCH_BANDS,
+        )
+    ]
+    return [
+        f"{OUT_DIR}/induced_epochs/{band}/sub-{subject}/epoching_summary-time_s.json"
+        for subject in subjects
+        for band in requested_bands
     ]
 
 
@@ -333,6 +354,9 @@ def _write_tasklocked_epochs(*, input_eeg, input_raw, events_csv, output_epochs,
 
 LMEEEG_CONFIG_PATH = f"{CONFIG_DIR}/lmeeeg.yaml"
 FPP_SPP_CYCLE_POSITION_LMEEEG_CONFIG_PATH = f"{CONFIG_DIR}/lmeeeg_fpp_spp_cycle_position.yaml"
+FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_CONFIG_PATH = (
+    f"{CONFIG_DIR}/lmeeeg_fpp_spp_conf_disc_alpha_beta.yaml"
+)
 INFO_RATE_INDUCED_LMEEEG_CONFIG_PATH = f"{CONFIG_DIR}/info_rate_induced_lmeeg.yaml"
 LMEEEG_OUTPUT_DIR = f"{OUT_DIR}/lmeeeg"
 LMEEEG_SUMMARY_OUTPUT = f"{LMEEEG_OUTPUT_DIR}/lmeeeg_analysis_summary.json"
@@ -363,6 +387,16 @@ def _induced_lmeeeg_model_names(config_path: str = LMEEEG_CONFIG_PATH) -> list[s
     return sorted(selected)
 
 
+def _evoked_lmeeeg_model_names(config_path: str = LMEEEG_CONFIG_PATH) -> list[str]:
+    models_cfg = dict(_load_lmeeeg_workflow_config(config_path).get("models") or {})
+    selected = [
+        str(model_name)
+        for model_name, model_cfg in models_cfg.items()
+        if str((model_cfg or {}).get("modality", "evoked")).strip().lower() != "induced"
+    ]
+    return sorted(selected)
+
+
 def _lmeeeg_analysis_root_from_config(config_path: str) -> str:
     config_payload = _load_lmeeeg_workflow_config(config_path)
     analysis_name = str(config_payload.get("analysis_name", "")).strip()
@@ -387,6 +421,25 @@ def _resolve_erp_input_path(path_value: str | None, default_relative: str) -> st
     return os.path.join(OUT_DIR, path_text.lstrip("/"))
 
 
+LMEEEG_EVOKED_MODEL_NAMES = _evoked_lmeeeg_model_names()
+LMEEEG_EVOKED_MODEL_SUMMARY_OUTPUTS = expand(
+    f"{LMEEEG_OUTPUT_DIR}/{{model}}/summary.json",
+    model=LMEEEG_EVOKED_MODEL_NAMES,
+)
+LMEEEG_EVOKED_DURATION_QC_OUTPUTS = [
+    f"{LMEEEG_OUTPUT_DIR}/{model_name}/{artifact_name}"
+    for model_name in LMEEEG_EVOKED_MODEL_NAMES
+    for artifact_name in (
+        "duration_summary_by_class.csv",
+        "trial_counts_by_class.csv",
+        "model_formula.txt",
+        "design_columns.csv",
+        "term_tests.json",
+        "inference_summary.json",
+    )
+]
+
+
 FPP_SPP_CYCLE_POSITION_LMEEEG_OUTPUT_DIR = _lmeeeg_analysis_root_from_config(
     FPP_SPP_CYCLE_POSITION_LMEEEG_CONFIG_PATH
 )
@@ -403,6 +456,49 @@ FPP_SPP_CYCLE_POSITION_LMEEEG_CONTRAST_OUTPUTS = expand(
     ),
     band=[str(band) for band in FPP_SPP_CYCLE_POSITION_LMEEEG_INDUCED_BANDS],
 )
+
+FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_OUTPUT_DIR = _lmeeeg_analysis_root_from_config(
+    FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_CONFIG_PATH
+)
+FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_SUMMARY_OUTPUT = (
+    f"{FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_OUTPUT_DIR}/lmeeeg_analysis_summary.json"
+)
+_FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_CONFIG = _load_lmeeeg_workflow_config(
+    FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_CONFIG_PATH
+)
+FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_INPUT = dict(
+    _FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_CONFIG.get("input") or {}
+)
+FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_INDUCED_SUBDIR = str(
+    FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_INPUT.get(
+        "induced_epochs_subdir",
+        "induced_epochs_fpp_spp_conf_disc_alpha_beta_lmeeeg",
+    )
+)
+FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_INDUCED_BANDS = _FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_CONFIG.get(
+    "induced_epochs",
+    {},
+).get("bands", ["alpha", "beta"])
+FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_MODELS = sorted(
+    [str(name) for name in dict(_FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_CONFIG.get("models") or {}).keys()]
+)
+FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_MODEL_SUMMARY_OUTPUTS = expand(
+    (
+        f"{FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_OUTPUT_DIR}/induced/{{band}}/"
+        "{model}/summary.json"
+    ),
+    band=[str(band) for band in FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_INDUCED_BANDS],
+    model=FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_MODELS,
+)
+FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_CONTRAST_OUTPUTS = [
+    (
+        f"{FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_OUTPUT_DIR}/induced/{band}/"
+        f"{model}/{effect}_beta.npy"
+    )
+    for band in [str(value) for value in FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_INDUCED_BANDS]
+    for model in ("class_3", "class_3_plus_duration")
+    for effect in ("class_3SPP_CONF", "class_3SPP_DISC")
+]
 
 with open(INFO_RATE_INDUCED_LMEEEG_CONFIG_PATH, encoding="utf-8") as _info_rate_handle:
     _INFO_RATE_INDUCED_LMEEEG_CONFIG = yaml.safe_load(_info_rate_handle) or {}
@@ -474,24 +570,55 @@ rule make_induced_source_epochs:
 rule run_lmeeeg:
     input:
         epochs=EPOCH_OUTPUTS,
-        induced=_induced_epoch_summary_outputs(),
         config=LMEEEG_CONFIG_PATH,
     output:
         summary=LMEEEG_SUMMARY_OUTPUT,
+        model_summaries=LMEEEG_EVOKED_MODEL_SUMMARY_OUTPUTS,
+        qc=LMEEEG_EVOKED_DURATION_QC_OUTPUTS,
     run:
+        import os
+        import tempfile
+
         from cas.stats.lmeeeg_pipeline import run_pooled_lmeeeg_analysis
 
-        run_pooled_lmeeeg_analysis(
-            epochs_paths=list(input.epochs),
-            config_path=input.config,
-            output_dir=os.path.dirname(output.summary),
-        )
+        config_payload = _load_lmeeeg_workflow_config()
+        evoked_models = {
+            model_name: model_cfg
+            for model_name, model_cfg in dict(config_payload.get("models") or {}).items()
+            if str((model_cfg or {}).get("modality", "evoked")).strip().lower() != "induced"
+        }
+        if not evoked_models:
+            raise ValueError("No evoked lmeEEG models are configured in config/lmeeeg.yaml.")
+
+        evoked_config_payload = {
+            "lmeeeg": {
+                key: value
+                for key, value in config_payload.items()
+                if key not in {"models", "induced_epochs"}
+            }
+        }
+        evoked_config_payload["lmeeeg"]["models"] = evoked_models
+
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml", encoding="utf-8", delete=False) as handle:
+            yaml.safe_dump(evoked_config_payload, handle, sort_keys=False)
+            temp_config_path = handle.name
+
+        try:
+            run_pooled_lmeeeg_analysis(
+                epochs_paths=list(input.epochs),
+                config_path=temp_config_path,
+                output_dir=os.path.dirname(output.summary),
+            )
+        finally:
+            if os.path.exists(temp_config_path):
+                os.unlink(temp_config_path)
 
 
 rule run_induced_lmeeeg:
     input:
         epochs=EPOCH_OUTPUTS,
-        induced=_induced_epoch_summary_outputs(),
+        induced_subjects=_induced_epoch_summary_outputs(),
+        induced_bands=_induced_epoch_band_summary_outputs(),
         config=LMEEEG_CONFIG_PATH,
     output:
         summary=LMEEEG_INDUCED_SUMMARY_OUTPUT,

@@ -50,13 +50,13 @@ lmeeeg:
       selection:
         metadata_query: "event_lock == 'onset' and event_family in ['fpp', 'spp']"
       test_predictors:
-        - "pair_position"
+        - "z_event_duration"
 
   test:
     # Use a lighter correction here so pooled induced inference completes
     # reliably on the local workstation instead of being killed during TFCE.
     method: "cluster"
-    n_permutations: 1000
+    n_permutations: 40
     tail: 0
     adjacency: "mne_default"
     montage: "biosemi64"

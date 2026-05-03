@@ -32,7 +32,7 @@ preprocessing:
   # EEG processing defaults
   target_sampling_rate_hz: 32.0
   low_cut_hz: 0.1
-  high_cut_hz: 30.0
+  high_cut_hz: 15.0
   interpolate_bad_channels: true
   apply_rereference: true
   save_intermediates: false

@@ -30,7 +30,9 @@ def _infer_sfreq(times: np.ndarray) -> float:
 
 
 def _sanitize_token(value: str) -> str:
-    token = re.sub(r"[^a-zA-Z0-9_.-]+", "_", str(value).strip()).strip("._-")
+    # Keep stems free of "." so Path.with_suffix() does not truncate categorical
+    # terms like class_3[T.SPP_CONF] to class_3_T.
+    token = re.sub(r"[^a-zA-Z0-9_-]+", "_", str(value).strip()).strip("._-")
     return token or "item"
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from cas.induced_epochs.downsample import downsample_power_time
 from cas.induced_epochs.io import build_induced_epoch_band_paths
 from cas.induced_epochs.transform import (
     build_induced_epochs,
@@ -78,3 +79,32 @@ def test_induced_epoch_paths_keep_evoked_epoch_filenames():
 
     assert output_paths.epochs_output_path.as_posix().endswith("/induced_epochs/theta/sub-001/epochs-time_s.fif")
     assert output_paths.metadata_output_path.as_posix().endswith("/induced_epochs/theta/sub-001/metadata-time_s.csv")
+
+
+def test_induced_epoch_paths_support_custom_root_subdir():
+    config = {"paths": {"out_dir": "/tmp/out"}}
+    row = {"subject_id": "sub-001"}
+
+    output_paths = build_induced_epoch_band_paths(
+        config,
+        row,
+        band_name="alpha",
+        root_subdir="induced_epochs_custom",
+    )
+
+    assert output_paths.epochs_output_path.as_posix().endswith(
+        "/induced_epochs_custom/alpha/sub-001/epochs-time_s.fif"
+    )
+
+
+def test_downsample_power_time_preserves_non_time_axes_and_monotonic_times():
+    times = np.arange(-0.1, 0.4, 0.02, dtype=float)
+    power = np.arange(2 * 3 * times.size, dtype=float).reshape(2, 3, times.size)
+
+    downsampled_power, downsampled_times = downsample_power_time(power, times, target_sfreq=10.0)
+
+    assert downsampled_power.shape[:2] == (2, 3)
+    assert downsampled_power.shape[-1] < power.shape[-1]
+    assert np.all(np.diff(downsampled_times) > 0)
+    first_bin = power[..., times < 0.0]
+    assert np.allclose(downsampled_power[..., 0], first_bin.mean(axis=-1))

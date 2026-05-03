@@ -132,6 +132,61 @@ def test_build_lmeeeg_qc_manifest_from_model_payloads_supports_custom_figure_sub
     )
 
 
+def test_build_lmeeeg_qc_manifest_keeps_distinct_categorical_terms_in_output_stems(tmp_path, monkeypatch) -> None:
+    out_dir = tmp_path / "out"
+    captured_stems: list[Path] = []
+
+    def fake_plot_joint_model_weights(*args, output_stem: Path, significance_mask=None, **kwargs) -> list[Path]:
+        captured_stems.append(output_stem)
+        output_stem.parent.mkdir(parents=True, exist_ok=True)
+        written_path = output_stem.with_suffix(".png")
+        written_path.write_text("stub\n", encoding="utf-8")
+        return [written_path]
+
+    monkeypatch.setattr(lmeeeg_viz, "plot_joint_model_weights", fake_plot_joint_model_weights)
+
+    manifest = lmeeeg_viz.build_lmeeeg_qc_manifest_from_model_payloads(
+        out_dir=out_dir,
+        model_payloads={
+            "class_3__alpha": {
+                "model_name": "class_3",
+                "band_name": "alpha",
+                "model_label": "class_3 [alpha]",
+                "betas": np.asarray(
+                    [
+                        [[0.1, 0.2], [0.3, 0.4]],
+                        [[0.5, 0.6], [0.7, 0.8]],
+                    ],
+                    dtype=float,
+                ),
+                "t_values": np.asarray(
+                    [
+                        [[1.0, 2.0], [3.0, 4.0]],
+                        [[5.0, 6.0], [7.0, 8.0]],
+                    ],
+                    dtype=float,
+                ),
+                "times": np.asarray([-0.1, 0.0], dtype=float),
+                "channel_names": ["Fz", "Cz"],
+                "column_names": ["class_3[T.SPP_CONF]", "class_3[T.SPP_DISC]"],
+            }
+        },
+        manifest_path=out_dir / "figures" / "lmeeeg" / "figure_manifest.json",
+        formats=("png",),
+        dpi=72,
+    )
+
+    assert manifest["plot_count"] == 4
+    assert captured_stems == [
+        out_dir / "figures" / "lmeeeg" / "betas" / "class_3__alpha" / "class_3_T_SPP_CONF",
+        out_dir / "figures" / "lmeeeg" / "betas" / "class_3__alpha" / "class_3_T_SPP_DISC",
+        out_dir / "figures" / "lmeeeg" / "t_values" / "class_3__alpha" / "class_3_T_SPP_CONF",
+        out_dir / "figures" / "lmeeeg" / "t_values" / "class_3__alpha" / "class_3_T_SPP_DISC",
+    ]
+    assert manifest["plots"][0]["kernel"] == "class_3[T.SPP_CONF]"
+    assert manifest["plots"][1]["kernel"] == "class_3[T.SPP_DISC]"
+
+
 def test_build_lmeeeg_qc_manifest_from_stats_writes_statistics_plot_with_overlay(tmp_path, monkeypatch) -> None:
     out_dir = tmp_path / "out"
     stats_effect_dir = out_dir / "stats" / "lmeeeg" / "demo_model" / "latency"

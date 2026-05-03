@@ -1,0 +1,114 @@
+analysis:
+  name: "trf_spp_onset_control"
+  description: "Nested TRF control analysis testing generic SPP onset beyond partner envelope, self FPP timing, and partner SPP offset."
+
+paths:
+  out_dir: "results/trf_spp_onset_control"
+
+data:
+  eeg_source: "existing"
+  envelope_source: "existing"
+  events_source: "existing"
+
+statistics:
+  score_metric: "pearson_r"
+  paired_test: true
+  test_name: "wilcoxon_signed_rank"
+  alternative: "full_greater_than_null"
+
+plots:
+  enabled: true
+  kernel_predictor: "spp_onset"
+  kernel_plot_type: "joint"
+  kernel_time_window_ms: [-100, 800]
+  save_formats: ["png", "pdf"]
+
+logging:
+  verbose: true
+
+trf:
+  analysis_id: "trf_spp_onset_control"
+
+  predictor_definitions:
+    envelope:
+      kind: "continuous"
+      base_feature: "envelope"
+      role: "other"
+
+    fpp_onset:
+      kind: "impulse"
+      speaker_column: "speaker_fpp"
+      speaker_role: "self"
+      time_column: "fpp_onset"
+
+    fpp_offset:
+      kind: "impulse"
+      speaker_column: "speaker_fpp"
+      speaker_role: "self"
+      time_column: "fpp_offset"
+
+    spp_onset:
+      kind: "impulse"
+      speaker_column: "speaker_spp"
+      speaker_role: "other"
+      time_column: "spp_onset"
+
+    spp_offset:
+      kind: "impulse"
+      speaker_column: "speaker_spp"
+      speaker_role: "other"
+      time_column: "spp_offset"
+
+  models:
+    null:
+      predictors:
+        - "envelope"
+        - "fpp_onset"
+        - "fpp_offset"
+        - "spp_offset"
+
+    full:
+      predictors:
+        - "envelope"
+        - "fpp_onset"
+        - "fpp_offset"
+        - "spp_onset"
+        - "spp_offset"
+
+  target:
+    name: "eeg"
+    kind: "continuous"
+    path: "evoked/{subject}/run-{run}.npy"
+
+  events:
+    csv_path: "/Users/hiro/Datasets/working/cas/events/events.csv"
+
+  timing:
+    target_sfreq_hz: 128
+    tmin_s: -0.1
+    tmax_s: 0.8
+
+  cv:
+    outer: "leave_one_run_out"
+    inner: "leave_one_run_out"
+    n_runs: 8
+
+  model:
+    backend: "spyeeg"
+    estimator: "ridge"
+    alphas: [0.1, 1.0, 10.0, 100.0, 1000.0]
+    fit_intercept: false
+    standardize_X: true
+    standardize_Y: true
+
+  scoring:
+    metric: "corr"
+
+  output:
+    root: "results/{analysis_id}"
+    save_betas: true
+    save_scores: true
+    save_predictions: false
+
+  logging:
+    verbose: true

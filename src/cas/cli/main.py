@@ -279,6 +279,49 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Optional run list. Defaults to 1..n_runs from the TRF config.",
     )
 
+    trf_spp_onset_control_fit_parser = subparsers.add_parser(
+        "trf-spp-onset-control-fit",
+        help="Fit the subject-level nested TRF SPP-onset control analysis.",
+    )
+    trf_spp_onset_control_fit_parser.add_argument("--config", required=True, help="Path to the control TRF config.")
+    trf_spp_onset_control_fit_parser.add_argument("--subject", required=True, help="Target subject id, e.g. sub-001.")
+    trf_spp_onset_control_fit_parser.add_argument(
+        "--project-root",
+        default=".",
+        help="Project root used to resolve relative config paths. Defaults to cwd.",
+    )
+    trf_spp_onset_control_fit_parser.add_argument(
+        "--runs",
+        nargs="+",
+        type=int,
+        default=None,
+        help="Optional run list. Defaults to 1..n_runs from the TRF control config.",
+    )
+    trf_spp_onset_control_fit_parser.add_argument("--output-json", required=True, help="Subject summary JSON output path.")
+    trf_spp_onset_control_fit_parser.add_argument("--output-npz", required=True, help="Subject coefficient NPZ output path.")
+
+    trf_spp_onset_control_group_parser = subparsers.add_parser(
+        "trf-spp-onset-control-group",
+        help="Aggregate subject-level nested TRF SPP-onset control outputs.",
+    )
+    trf_spp_onset_control_group_parser.add_argument(
+        "--subject-jsons",
+        nargs="+",
+        required=True,
+        help="Subject summary JSON files from trf-spp-onset-control-fit.",
+    )
+    trf_spp_onset_control_group_parser.add_argument(
+        "--subject-npzs",
+        nargs="+",
+        required=True,
+        help="Subject coefficient NPZ files from trf-spp-onset-control-fit.",
+    )
+    trf_spp_onset_control_group_parser.add_argument("--summary-json", required=True, help="Group summary JSON output path.")
+    trf_spp_onset_control_group_parser.add_argument("--subject-csv", required=True, help="Subject-level comparison CSV output path.")
+    trf_spp_onset_control_group_parser.add_argument("--fold-csv", required=True, help="Fold-level comparison CSV output path.")
+    trf_spp_onset_control_group_parser.add_argument("--kernel-png", required=True, help="Joint kernel PNG output path.")
+    trf_spp_onset_control_group_parser.add_argument("--kernel-pdf", required=True, help="Joint kernel PDF output path.")
+
     eeg_array_parser = subparsers.add_parser(
         "eeg-array",
         help="Convert raw EEG (.edf or .fif) into a channel-wise NumPy array for TRF input.",
@@ -1306,7 +1349,13 @@ def _build_config_driven_trf_inputs(
     os.chdir(project_root)
     try:
         for run in runs:
-            predictor_paths = resolve_predictor_paths(subject_id, run, predictors, dyad_table)
+            predictor_paths = resolve_predictor_paths(
+                subject_id,
+                run,
+                predictors,
+                dyad_table,
+                feature_root=paths_config["features_root"],
+            )
             predictor_arrays = [
                 _as_2d_array(
                     _load_array(str(_resolve_path(str(path), project_root=project_root)), label=name),
@@ -1420,6 +1469,80 @@ def _run_trf_config(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_trf_spp_onset_control_fit(args: argparse.Namespace) -> int:
+    from cas.trf.control import fit_spp_onset_control_subject, write_subject_control_outputs
+
+    result = fit_spp_onset_control_subject(
+        config_path=args.config,
+        subject_id=args.subject,
+        project_root=args.project_root,
+        runs=list(args.runs) if args.runs is not None else None,
+    )
+    write_subject_control_outputs(
+        result=result,
+        summary_json=args.output_json,
+        coefficients_npz=args.output_npz,
+    )
+    print(f"Saved TRF SPP-onset control summary to {args.output_json}")
+    print(f"Saved TRF SPP-onset control coefficients to {args.output_npz}")
+    return 0
+
+
+def _run_trf_spp_onset_control_group(args: argparse.Namespace) -> int:
+    from cas.trf.control import summarize_spp_onset_control_group
+    from cas.viz.lmeeeg import plot_joint_model_weights
+
+    summary = summarize_spp_onset_control_group(
+        subject_summary_paths=list(args.subject_jsons),
+        subject_coefficient_paths=list(args.subject_npzs),
+    )
+
+    subject_frame = summary["subject_table"]
+    fold_frame = summary["fold_table"]
+    kernel = np.asarray(summary["kernel"], dtype=float)
+    channel_names = [str(value) for value in summary["channel_names"]]
+    times_s = np.asarray(summary["times_s"], dtype=float)
+
+    subject_csv_path = Path(args.subject_csv)
+    subject_csv_path.parent.mkdir(parents=True, exist_ok=True)
+    subject_frame.to_csv(subject_csv_path, index=False)
+
+    fold_csv_path = Path(args.fold_csv)
+    fold_csv_path.parent.mkdir(parents=True, exist_ok=True)
+    fold_frame.to_csv(fold_csv_path, index=False)
+
+    kernel_written = plot_joint_model_weights(
+        kernel,
+        times=times_s,
+        channel_names=channel_names,
+        output_stem=Path(args.kernel_png).with_suffix(""),
+        title="TRF SPP-onset kernel",
+        formats=("png", "pdf"),
+        dpi=300,
+        line_width=2.5,
+    )
+
+    # Ensure the declared output paths exist even if the stem differs only by suffix.
+    declared_png = Path(args.kernel_png)
+    declared_pdf = Path(args.kernel_pdf)
+    if declared_png not in kernel_written and declared_png.exists():
+        pass
+    if declared_pdf not in kernel_written and declared_pdf.exists():
+        pass
+
+    summary_payload = {
+        "stats": summary["stats"],
+        "subject_csv": str(subject_csv_path),
+        "fold_csv": str(fold_csv_path),
+        "kernel_files": [str(path) for path in kernel_written],
+    }
+    summary_json_path = Path(args.summary_json)
+    summary_json_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_json_path.write_text(json.dumps(summary_payload, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps(summary_payload, indent=2))
+    return 0
+
+
 def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
@@ -1471,6 +1594,10 @@ def main() -> int:
         return _run_trf(args)
     if args.command == "trf-config":
         return _run_trf_config(args)
+    if args.command == "trf-spp-onset-control-fit":
+        return _run_trf_spp_onset_control_fit(args)
+    if args.command == "trf-spp-onset-control-group":
+        return _run_trf_spp_onset_control_group(args)
     if args.command == "eeg-array":
         return _run_eeg_array(args)
     if args.command == "envelope":

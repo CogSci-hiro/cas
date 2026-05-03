@@ -7,6 +7,12 @@ FPP_SPP_CYCLE_POSITION_LMEEEG_FIGURE_MANIFEST = (
 FPP_SPP_CYCLE_POSITION_LMEEEG_INFERENCE_FIGURE_MANIFEST = (
     f"{OUT_DIR}/figures/fpp_spp_cycle_position_inference/figure_manifest.json"
 )
+FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_FIGURE_MANIFEST = (
+    f"{OUT_DIR}/figures/fpp_spp_conf_disc_alpha_beta/figure_manifest.json"
+)
+FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_INFERENCE_FIGURE_MANIFEST = (
+    f"{OUT_DIR}/figures/fpp_spp_conf_disc_alpha_beta_inference/figure_manifest.json"
+)
 
 
 rule figures_lmeeeg:
@@ -74,6 +80,46 @@ rule figures_fpp_spp_cycle_position_lmeeeg_inference:
         viz=VIZ_CONFIG_PATH,
     output:
         manifest=FPP_SPP_CYCLE_POSITION_LMEEEG_INFERENCE_FIGURE_MANIFEST,
+    shell:
+        r"""
+        set -euo pipefail
+        mkdir -p "{resources.tmpdir}/mpl" "{resources.tmpdir}/cache"
+        MPLCONFIGDIR="{resources.tmpdir}/mpl" XDG_CACHE_HOME="{resources.tmpdir}/cache" \
+        PYTHONPATH="{SRC_DIR}:{PROJECT_ROOT}" "{PYTHON_BIN}" -m cas.cli.main figures-lmeeeg-inference \
+          --config-root "{CONFIG_DIR}" \
+          --lmeeeg-config "{input.config}" \
+          --viz-config "{input.viz}" \
+          --output "{output.manifest}"
+        """
+
+
+rule figures_fpp_spp_conf_disc_alpha_beta_lmeeeg:
+    input:
+        summary=FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_SUMMARY_OUTPUT,
+        config=FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_CONFIG_PATH,
+        viz=VIZ_CONFIG_PATH,
+    output:
+        manifest=FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_FIGURE_MANIFEST,
+    shell:
+        r"""
+        set -euo pipefail
+        mkdir -p "{resources.tmpdir}/mpl" "{resources.tmpdir}/cache"
+        MPLCONFIGDIR="{resources.tmpdir}/mpl" XDG_CACHE_HOME="{resources.tmpdir}/cache" \
+        PYTHONPATH="{SRC_DIR}:{PROJECT_ROOT}" "{PYTHON_BIN}" -m cas.cli.main figures-lmeeeg \
+          --config-root "{CONFIG_DIR}" \
+          --lmeeeg-config "{input.config}" \
+          --viz-config "{input.viz}" \
+          --output "{output.manifest}"
+        """
+
+
+rule figures_fpp_spp_conf_disc_alpha_beta_lmeeeg_inference:
+    input:
+        summary=FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_SUMMARY_OUTPUT,
+        config=FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_CONFIG_PATH,
+        viz=VIZ_CONFIG_PATH,
+    output:
+        manifest=FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_INFERENCE_FIGURE_MANIFEST,
     shell:
         r"""
         set -euo pipefail

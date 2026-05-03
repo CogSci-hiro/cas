@@ -17,7 +17,7 @@ lmeeeg:
       selection:
         event_type: "other_spp_onset"
       contrast_of_interest: "spp_class_1"
-      formula: "~ spp_class_1 + latency + duration_s + run"
+      formula: "~ spp_class_1 + latency + run"
       eligibility:
         not_null:
           - "spp_class_1"
@@ -29,7 +29,56 @@ lmeeeg:
         - "spp_class_1"
       standardize:
         - "latency"
-        - "duration_s"
+      # Full SPP ERP/amplitude model: one class effect plus optional duration controls.
+      duration_controls:
+        duration_column: "duration_s"
+        log_duration:
+          enabled: true
+          output_column: "z_log_spp_duration"
+          offset_s: 0.001
+          standardize: true
+        spline_duration:
+          enabled: true
+          source: "z_log_spp_duration"
+          output_prefix: "spline_log_spp_duration"
+          df: 4
+          degree: 3
+          include_intercept: false
+          standardize: true
+        duration_bins:
+          enabled: false
+          output_column: "spp_duration_bin"
+          n_bins: 5
+          strategy: "quantile"
+          labels_prefix: "dur_q"
+          min_unique_bins: 3
+          on_insufficient_unique_bins: "raise"
+        common_support:
+          enabled: false
+          class_column: "spp_class_1"
+          lower_quantile: 0.05
+          upper_quantile: 0.95
+      term_tests:
+        class_effect:
+          enabled: true
+          contrast_type: "categorical"
+          terms:
+            - "spp_class_1"
+        duration_log:
+          enabled: true
+          contrast_type: "continuous"
+          terms:
+            - "z_log_spp_duration"
+        duration_spline:
+          enabled: true
+          contrast_type: "grouped_continuous"
+          terms:
+            - "spline_log_spp_duration"
+        duration_bin:
+          enabled: false
+          contrast_type: "categorical"
+          terms:
+            - "spp_duration_bin"
     induced_model:
       modality: "induced"
       selection:
@@ -50,7 +99,7 @@ lmeeeg:
         - "duration_s"
   test:
     method: "tfce"
-    n_permutations: 200
+    n_permutations: 60
     tail: 0
     adjacency: "mne_default"
     montage: "biosemi64"

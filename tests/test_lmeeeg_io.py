@@ -78,6 +78,27 @@ def test_lmeeeg_input_paths_use_requested_induced_band():
     assert metadata_path.as_posix().endswith("/induced_epochs/alpha/sub-001/metadata-time_s.csv")
 
 
+def test_lmeeeg_input_paths_support_configured_induced_epochs_subdir():
+    runtime_config = {
+        "paths": {"out_dir": "/tmp/out"},
+        "lmeeeg": {
+            "input": {"induced_epochs_subdir": "induced_epochs_custom"},
+            "models": {"demo": {"formula": "~ run", "modality": "induced"}},
+        },
+    }
+
+    epochs_path, metadata_path = lmeeeg_pipeline._resolve_pooled_source_paths(
+        runtime_config,
+        model_name="demo",
+        epochs_path="/tmp/sub-001_task-conversation_run-1_desc-tasklocked_epo.fif",
+        band_name="beta",
+    )
+
+    assert epochs_path.as_posix().endswith("/induced_epochs_custom/beta/sub-001/epochs-time_s.fif")
+    assert metadata_path is not None
+    assert metadata_path.as_posix().endswith("/induced_epochs_custom/beta/sub-001/metadata-time_s.csv")
+
+
 def test_lmeeeg_output_paths_are_namespaced_by_modality():
     runtime_config = {
         "paths": {"out_dir": "/tmp/out"},

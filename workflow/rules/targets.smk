@@ -3,6 +3,13 @@ INDUCED_EPOCH_SUMMARY_OUTPUTS = expand(
     f"{OUT_DIR}/induced_epochs/sub-{{subject}}/summary.json",
     subject=INDUCED_EPOCH_SUBJECTS,
 )
+FPP_SPP_CONF_DISC_ALPHA_BETA_DOWNSAMPLED_SUMMARY_OUTPUTS = expand(
+    (
+        f"{OUT_DIR}/{FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_INDUCED_SUBDIR}/"
+        "sub-{subject}/summary.json"
+    ),
+    subject=INDUCED_EPOCH_SUBJECTS,
+)
 
 
 def induced_epoch_source_inputs(wildcards):
@@ -51,6 +58,15 @@ rule trf_all:
         TRF_COEF_OUTPUTS
 
 
+rule trf_spp_onset_control_all:
+    input:
+        TRF_SPP_ONSET_CONTROL_GROUP_SUMMARY_JSON,
+        TRF_SPP_ONSET_CONTROL_GROUP_SUBJECT_CSV,
+        TRF_SPP_ONSET_CONTROL_GROUP_FOLD_CSV,
+        TRF_SPP_ONSET_CONTROL_GROUP_KERNEL_PNG,
+        TRF_SPP_ONSET_CONTROL_GROUP_KERNEL_PDF
+
+
 rule events_all:
     input:
         EVENTS_CSV_OUTPUT,
@@ -65,8 +81,13 @@ rule epochs_all:
 rule make_induced_epochs_subject:
     input:
         epochs=induced_epoch_source_inputs,
+        config=EPOCHS_CONFIG_PATH,
     output:
         summary=f"{OUT_DIR}/induced_epochs/sub-{{subject}}/summary.json",
+        band_summaries=expand(
+            f"{OUT_DIR}/induced_epochs/{{band}}/sub-{{{{subject}}}}/epoching_summary-time_s.json",
+            band=INDUCED_EPOCH_BANDS,
+        ),
     run:
         import json
         from pathlib import Path
@@ -155,6 +176,138 @@ rule make_induced_epochs_subject:
         output_path.write_text(json.dumps(subject_summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+rule downsample_fpp_spp_conf_disc_induced_epochs_subject:
+    input:
+        summary=f"{OUT_DIR}/induced_epochs/sub-{{subject}}/summary.json",
+        config=FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_CONFIG_PATH,
+    output:
+        summary=(
+            f"{OUT_DIR}/{FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_INDUCED_SUBDIR}/"
+            "sub-{subject}/summary.json"
+        ),
+    run:
+        import json
+        from pathlib import Path
+
+        import mne
+        import numpy as np
+        import pandas as pd
+
+        from cas.epochs.io import (
+            write_epoch_events_array,
+            write_epoch_metadata,
+            write_epoch_summary,
+            write_epochs,
+        )
+        from cas.induced_epochs.downsample import downsample_power_time, resolve_downsampling_config
+        from cas.induced_epochs.io import build_induced_epoch_band_paths
+
+        lmeeeg_config = _load_lmeeeg_workflow_config(input.config)
+        downsample_cfg = resolve_downsampling_config(lmeeeg_config)
+        if not bool(downsample_cfg.get("enabled", False)):
+            raise ValueError("post_power_downsampling.enabled must be true for this target.")
+
+        target_sfreq = float(downsample_cfg.get("target_sfreq", 20.0))
+        method = str(downsample_cfg.get("method", "mean_bin"))
+        root_subdir = str(
+            (dict(lmeeeg_config.get("input") or {})).get(
+                "induced_epochs_subdir",
+                FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_INDUCED_SUBDIR,
+            )
+        )
+
+        workflow_config = {"paths": {"out_dir": OUT_DIR}}
+        row = {"subject_id": f"sub-{wildcards.subject}"}
+        written_bands = []
+        for band_name in [str(value) for value in lmeeeg_config.get("induced_epochs", {}).get("bands", ["alpha", "beta"])]:
+            source_dir = Path(OUT_DIR) / "induced_epochs" / band_name / f"sub-{wildcards.subject}"
+            source_epochs = mne.read_epochs(source_dir / "epochs-time_s.fif", preload=True, verbose="ERROR")
+            source_metadata = pd.read_csv(source_dir / "metadata-time_s.csv")
+            source_events = np.load(source_dir / "events-time_s.npy")
+
+            source_data = np.asarray(source_epochs.get_data(copy=True), dtype=np.float32)
+            downsampled_data, downsampled_times = downsample_power_time(
+                source_data,
+                np.asarray(source_epochs.times, dtype=float),
+                target_sfreq=target_sfreq,
+            )
+
+            sfreq = 1.0 / float(np.median(np.diff(downsampled_times)))
+            downsampled_info = mne.create_info(
+                ch_names=source_epochs.ch_names,
+                sfreq=sfreq,
+                ch_types=source_epochs.get_channel_types(),
+            )
+            downsampled_info["bads"] = list(source_epochs.info.get("bads", []))
+            downsampled_epochs = mne.EpochsArray(
+                downsampled_data.astype(np.float32, copy=False),
+                downsampled_info,
+                events=source_epochs.events.copy(),
+                tmin=float(downsampled_times[0]),
+                event_id=dict(source_epochs.event_id),
+                metadata=source_metadata.copy().reset_index(drop=True),
+                verbose="ERROR",
+            )
+            source_montage = source_epochs.get_montage()
+            if source_montage is not None:
+                downsampled_epochs.set_montage(source_montage, on_missing="ignore")
+
+            output_paths = build_induced_epoch_band_paths(
+                workflow_config,
+                row,
+                band_name=band_name,
+                root_subdir=root_subdir,
+            )
+
+            band_summary = {
+                "status": "ok",
+                "band_name": band_name,
+                "subject_id": f"sub-{wildcards.subject}",
+                "source_epochs_path": str(source_dir / "epochs-time_s.fif"),
+                "n_epochs": int(len(downsampled_epochs)),
+                "n_channels": int(len(downsampled_epochs.ch_names)),
+                "n_times_original": int(source_data.shape[-1]),
+                "n_times_downsampled": int(downsampled_data.shape[-1]),
+                "tmin_s": float(downsampled_times[0]),
+                "tmax_s": float(downsampled_times[-1]),
+                "sampling_frequency_hz": float(sfreq),
+                "target_sfreq_hz": target_sfreq,
+                "method": method,
+            }
+
+            write_epochs(downsampled_epochs, output_paths.epochs_output_path)
+            write_epoch_metadata(source_metadata, output_paths.metadata_output_path)
+            write_epoch_events_array(source_events, output_paths.events_array_output_path)
+            write_epoch_summary(band_summary, output_paths.summary_output_path)
+            written_bands.append(
+                {
+                    "band_name": band_name,
+                    "epochs_output": str(output_paths.epochs_output_path),
+                    "metadata_output": str(output_paths.metadata_output_path),
+                    "events_array_output": str(output_paths.events_array_output_path),
+                    "summary_output": str(output_paths.summary_output_path),
+                }
+            )
+
+        output_path = Path(output.summary)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(
+            json.dumps(
+                {
+                    "status": "ok",
+                    "subject_id": f"sub-{wildcards.subject}",
+                    "target_sfreq_hz": target_sfreq,
+                    "method": method,
+                    "bands": written_bands,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+
 rule induced_epochs_all:
     input:
         INDUCED_EPOCH_SUMMARY_OUTPUTS
@@ -162,7 +315,9 @@ rule induced_epochs_all:
 
 rule lmeeeg_all:
     input:
-        LMEEEG_SUMMARY_OUTPUT
+        LMEEEG_SUMMARY_OUTPUT,
+        *LMEEEG_EVOKED_MODEL_SUMMARY_OUTPUTS,
+        *LMEEEG_EVOKED_DURATION_QC_OUTPUTS
 
 
 rule induced_lmeeeg_all:
@@ -174,6 +329,32 @@ rule lme_eeg_fpp_spp_cycle_position:
     input:
         FPP_SPP_CYCLE_POSITION_LMEEEG_SUMMARY_OUTPUT,
         *FPP_SPP_CYCLE_POSITION_LMEEEG_CONTRAST_OUTPUTS
+
+
+rule run_fpp_spp_conf_disc_alpha_beta_lmeeeg:
+    input:
+        epochs=EPOCH_OUTPUTS,
+        induced=FPP_SPP_CONF_DISC_ALPHA_BETA_DOWNSAMPLED_SUMMARY_OUTPUTS,
+        config=FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_CONFIG_PATH,
+    output:
+        summary=FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_SUMMARY_OUTPUT,
+        model_summaries=FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_MODEL_SUMMARY_OUTPUTS,
+        contrast=FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_CONTRAST_OUTPUTS,
+    run:
+        from cas.stats.lmeeeg_pipeline import run_pooled_lmeeeg_analysis
+
+        run_pooled_lmeeeg_analysis(
+            epochs_paths=list(input.epochs),
+            config_path=input.config,
+            output_dir=os.path.dirname(output.summary),
+        )
+
+
+rule lme_eeg_fpp_spp_conf_disc_alpha_beta:
+    input:
+        FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_SUMMARY_OUTPUT,
+        *FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_MODEL_SUMMARY_OUTPUTS,
+        *FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_CONTRAST_OUTPUTS
 
 
 rule info_rate_induced_lmeeg_all:
@@ -280,6 +461,12 @@ rule figures_lme_eeg_fpp_spp_cycle_position:
     input:
         FPP_SPP_CYCLE_POSITION_LMEEEG_FIGURE_MANIFEST,
         FPP_SPP_CYCLE_POSITION_LMEEEG_INFERENCE_FIGURE_MANIFEST
+
+
+rule figures_lme_eeg_fpp_spp_conf_disc_alpha_beta:
+    input:
+        FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_FIGURE_MANIFEST,
+        FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_INFERENCE_FIGURE_MANIFEST
 
 
 rule neural_hazard_fpp_spp_renyi_alpha:

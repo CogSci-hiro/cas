@@ -142,6 +142,7 @@ rule preprocess_eeg:
         channels_tsv=preprocess_channels_tsv_input,
         annotation=preprocess_annotation_input,
         ica=preprocess_ica_input,
+        config=PREPROCESSING_CONFIG_PATH,
     output:
         eeg=PREPROCESSED_EEG_OUTPUT_PATTERN,
         emg=PREPROCESSED_EMG_OUTPUT_PATTERN,
