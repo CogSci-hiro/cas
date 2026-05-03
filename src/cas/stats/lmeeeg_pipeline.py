@@ -406,9 +406,25 @@ def _fit_one_model(
             "t_values": str(t_path),
         }
 
+    test_predictors = _resolve_configured_test_predictors(runtime_config, model_name=model_name)
+    resolved_test_effects: dict[str, list[str]] = {}
+    for predictor in test_predictors:
+        try:
+            resolved_test_effects[predictor] = [
+                _normalize_effect_name(name)
+                for name in _resolve_test_effects(column_names, predictor)
+            ]
+        except ValueError:
+            resolved_test_effects[predictor] = []
+
     summary = {
         "status": "ok",
         "output_dir": str(output_dir),
+        "formula": formula.replace("y ~", "power ~", 1),
+        "band_name": band_name,
+        "test_predictors": test_predictors,
+        "contrast_of_interest": _resolve_contrast_of_interest(runtime_config, model_name=model_name),
+        "resolved_test_effects": resolved_test_effects,
         "n_trials_used": int(trial_data.eeg_data.shape[0]),
         "n_channels": len(trial_data.channel_names),
         "n_times": int(trial_data.times.shape[0]),
@@ -449,6 +465,34 @@ def _resolve_test_effects(fixed_column_names: list[str], predictor: str) -> list
     raise ValueError(
         f"Unknown effect '{predictor}'. Available fixed effects: {', '.join(fixed_column_names)}"
     )
+
+
+def _resolve_configured_test_predictors(
+    runtime_config: dict[str, Any],
+    *,
+    model_name: str,
+) -> list[str]:
+    lmeeeg_cfg = dict(runtime_config.get("lmeeeg") or {})
+    model_cfg = dict((lmeeeg_cfg.get("models") or {}).get(model_name) or {})
+    return [str(value) for value in model_cfg.get("test_predictors") or []]
+
+
+def _resolve_contrast_of_interest(
+    runtime_config: dict[str, Any],
+    *,
+    model_name: str,
+) -> str | None:
+    lmeeeg_cfg = dict(runtime_config.get("lmeeeg") or {})
+    model_cfg = dict((lmeeeg_cfg.get("models") or {}).get(model_name) or {})
+    if model_cfg.get("contrast_of_interest") not in {None, ""}:
+        return str(model_cfg.get("contrast_of_interest"))
+    design_cfg = dict(lmeeeg_cfg.get("design") or {})
+    if design_cfg.get("contrast_of_interest") not in {None, ""}:
+        return str(design_cfg.get("contrast_of_interest"))
+    test_predictors = _resolve_configured_test_predictors(runtime_config, model_name=model_name)
+    if len(test_predictors) == 1:
+        return test_predictors[0]
+    return None
 
 
 def _write_stat_map_csv(
@@ -536,7 +580,8 @@ def _run_model_inference(
     lmeeeg_cfg = dict(runtime_config.get("lmeeeg") or {})
     model_cfg = dict((lmeeeg_cfg.get("models") or {}).get(model_name) or {})
     test_cfg = dict(lmeeeg_cfg.get("test") or {})
-    test_predictors = list(model_cfg.get("test_predictors") or [])
+    test_predictors = _resolve_configured_test_predictors(runtime_config, model_name=model_name)
+    contrast_of_interest = _resolve_contrast_of_interest(runtime_config, model_name=model_name)
 
     if not test_predictors:
         return []
@@ -607,7 +652,9 @@ def _run_model_inference(
                 results.append(
                     {
                         "effect": effect_name,
+                        "normalized_effect": _normalize_effect_name(effect_name),
                         "requested_predictor": predictor,
+                        "contrast_of_interest": contrast_of_interest,
                         "status": "skipped",
                         "correction": inference_status["correction"],
                         "error": inference_status["error"],
@@ -638,6 +685,7 @@ def _run_model_inference(
                     "effect": effect_name,
                     "normalized_effect": safe_effect_name,
                     "requested_predictor": predictor,
+                    "contrast_of_interest": contrast_of_interest,
                     "status": "ok",
                     "correction": used_correction,
                     "observed_statistic": str(observed_path),
@@ -912,6 +960,8 @@ def _run_pooled_model(
 
     entry: dict[str, Any] = {
         "model_name": model_name,
+        "test_predictors": _resolve_configured_test_predictors(runtime_config, model_name=model_name),
+        "contrast_of_interest": _resolve_contrast_of_interest(runtime_config, model_name=model_name),
         "fit": fit_summary,
         "inference": inference,
     }
@@ -989,6 +1039,11 @@ def _apply_model_design(
     invalid_reasons: list[str] = []
     _require_non_missing(prepared, "subject", invalid_reasons)
     _require_non_missing(prepared, "run", invalid_reasons)
+    if "run" in prepared.columns:
+        run_numeric = pd.to_numeric(prepared["run"], errors="coerce")
+        if run_numeric.isna().any():
+            invalid_reasons.append("`run` must be numeric and non-missing.")
+        prepared["run"] = run_numeric
 
     pair_position = "pair_position"
     if pair_position in prepared.columns:
@@ -1046,6 +1101,8 @@ def _apply_model_design(
     }
     for column in list(((design_cfg.get("predictors") or {}).get("categorical") or [])):
         if column not in prepared.columns:
+            continue
+        if column == "run":
             continue
         series = prepared[column].astype(str)
         if column in reference_levels:
@@ -1107,6 +1164,8 @@ def _write_model_design_artifacts(
         "band_name": band_name,
         "config_path": str(((runtime_config.get("runtime") or {}).get("config_path")) or ""),
         "formula": f"power ~ {formula_rhs} + (1 | {group_column})",
+        "test_predictors": _resolve_configured_test_predictors(runtime_config, model_name=model_name),
+        "contrast_of_interest": _resolve_contrast_of_interest(runtime_config, model_name=model_name),
         "timestamp_utc": datetime.now(UTC).isoformat(),
         "git_commit": _git_commit_hash(),
         "event_table": str(((runtime_config.get("lmeeeg") or {}).get("event_table")) or ""),

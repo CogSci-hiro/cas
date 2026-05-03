@@ -28,6 +28,7 @@ HMM_CONFIG_PATH = f"{CONFIG_DIR}/hmm.yaml"
 HAZARD_BEHAVIOR_CONFIG_PATH = f"{CONFIG_DIR}/hazard_behavior.yaml"
 HAZARD_FPP_NEURAL_PERMUTATION_NULL_CONFIG_PATH = f"{CONFIG_DIR}/hazard_fpp_neural_permutation_null.yaml"
 NEURAL_HAZARD_FPP_SPP_CONFIG_PATH = f"{CONFIG_DIR}/neural_hazard_fpp_spp.yaml"
+NEURAL_HAZARD_FPP_SPP_RENYI_ALPHA_CONFIG_PATH = f"{CONFIG_DIR}/neural_hazard_fpp_spp_renyi_alpha.yaml"
 DYADS_CSV_PATH = f"{CONFIG_DIR}/dyads.csv"
 with open(PATHS_CONFIG_PATH, encoding="utf-8") as f:
     PATHS_CONFIG = yaml.safe_load(f) or {}
@@ -49,6 +50,8 @@ with open(HAZARD_FPP_NEURAL_PERMUTATION_NULL_CONFIG_PATH, encoding="utf-8") as f
     HAZARD_FPP_NEURAL_PERMUTATION_NULL_CONFIG = yaml.safe_load(f) or {}
 with open(NEURAL_HAZARD_FPP_SPP_CONFIG_PATH, encoding="utf-8") as f:
     NEURAL_HAZARD_FPP_SPP_CONFIG = yaml.safe_load(f) or {}
+with open(NEURAL_HAZARD_FPP_SPP_RENYI_ALPHA_CONFIG_PATH, encoding="utf-8") as f:
+    NEURAL_HAZARD_FPP_SPP_RENYI_ALPHA_CONFIG = yaml.safe_load(f) or {}
 
 BIDS_DIR = PATHS_CONFIG["bids_root"]
 OUT_DIR = PATHS_CONFIG["derivatives_root"]
@@ -211,6 +214,7 @@ include: "rules/erp.smk"
 include: "rules/glhmm.smk"
 include: "rules/hazard_behavior.smk"
 include: "rules/neural_state.smk"
+include: "rules/source_dics.smk"
 include: "rules/stats.smk"
 include: "rules/figures.smk"
 include: "rules/targets.smk"

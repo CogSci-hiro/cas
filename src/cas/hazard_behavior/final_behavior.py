@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import json
 import logging
 from pathlib import Path
+import re
 from typing import Any
 import warnings
 
@@ -46,12 +47,7 @@ REQUIRED_FINAL_COLUMNS = [
     "prop_expected_cumulative_info",
 ]
 EXPECTED_ANCHOR_TYPES = {"fpp", "spp"}
-FINAL_MODEL_NAMES = (
-    "timing_only",
-    "information_rate",
-    "prop_expected_cumulative_info",
-    "full_information",
-)
+DEFAULT_FINAL_CONFIG_PATH = Path("config/behavior.yaml")
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,8 +110,55 @@ def lag_col_z(base: str, lag_ms: int) -> str:
     return f"{lag_col(base, lag_ms)}_z"
 
 
-def _timing_terms() -> str:
-    return " + ".join(TIMING_COLUMNS)
+def _expand_selected_lag_placeholders(text: str, selected_lag: int) -> str:
+    expanded = str(text).replace("SELECTED", format_lag_ms(selected_lag))
+    if "SELECTED" in expanded:
+        raise ValueError(f"Unresolved selected-lag placeholder remained in formula term: {text}")
+    return expanded
+
+
+def _strip_random_effect_terms(formula: str) -> str:
+    stripped = re.sub(r"\s*\+\s*\(1\s*\|\s*[^)]+\)", "", formula)
+    return " ".join(stripped.split())
+
+
+def _config_sequence(cfg: FinalBehaviorConfig) -> list[dict[str, Any]]:
+    sequence = list((cfg.raw.get("models") or {}).get("sequence") or [])
+    if not sequence:
+        raise ValueError("Behavior-final config is missing models.sequence.")
+    return sequence
+
+
+def _model_sequence_names(cfg: FinalBehaviorConfig) -> tuple[str, ...]:
+    return tuple(str(step["name"]) for step in _config_sequence(cfg))
+
+
+def _formula_from_terms(terms: list[str]) -> str:
+    return f"event_bin ~ {' + '.join(terms)}"
+
+
+def _sequence_spec(cfg: FinalBehaviorConfig, selected_lag: int) -> list[dict[str, Any]]:
+    specs: list[dict[str, Any]] = []
+    for step in _config_sequence(cfg):
+        name = str(step["name"])
+        terms = [_expand_selected_lag_placeholders(str(term), selected_lag) for term in list(step.get("formula_terms") or [])]
+        specs.append(
+            {
+                "name": name,
+                "formula_terms": terms,
+                "formula": _formula_from_terms(terms),
+                "compare_against": step.get("compare_against"),
+            }
+        )
+    return specs
+
+
+def _timing_terms(cfg: FinalBehaviorConfig | None = None) -> str:
+    active_cfg = cfg or load_final_behavior_config(DEFAULT_FINAL_CONFIG_PATH)
+    for step in _config_sequence(active_cfg):
+        if str(step["name"]) == "timing_only":
+            return " + ".join(str(term) for term in list(step.get("formula_terms") or []))
+    raise ValueError("Behavior-final config is missing the timing_only model.")
 
 
 def _base_config(cfg: FinalBehaviorConfig, out_dir: Path, anchor: str) -> BehaviourHazardConfig:
@@ -737,32 +780,87 @@ def _coefficient_rows(fitted: FittedFinalModel, *, anchor_type: str) -> list[dic
     return rows
 
 
-def _compare_rows(fitted_models: dict[str, FittedFinalModel], *, anchor_type: str) -> list[dict[str, Any]]:
-    ordered_pairs = [
-        ("timing_only", "information_rate"),
-        ("timing_only", "prop_expected_cumulative_info"),
-        ("information_rate", "full_information"),
-        ("prop_expected_cumulative_info", "full_information"),
-    ]
+def _lr_test(parent: FittedFinalModel, child: FittedFinalModel) -> tuple[float | None, float | None, float | None]:
+    try:
+        parent_df = float(getattr(parent.result, "df_model", np.nan))
+        child_df = float(getattr(child.result, "df_model", np.nan))
+        lr_df = child_df - parent_df
+        lr_statistic = 2.0 * (child.log_likelihood - parent.log_likelihood)
+        if not np.isfinite(lr_df) or lr_df <= 0.0 or not np.isfinite(lr_statistic):
+            return None, None, None
+        lr_p_value = float(stats.chi2.sf(lr_statistic, lr_df))
+        return float(lr_statistic), float(lr_df), lr_p_value
+    except Exception:
+        return None, None, None
+
+
+def _comparison_row(
+    parent: FittedFinalModel,
+    child: FittedFinalModel,
+    *,
+    anchor_type: str,
+    selected_lag_ms: int,
+) -> dict[str, Any]:
+    lr_statistic, lr_df, lr_p_value = _lr_test(parent, child)
+    return {
+        "anchor_type": anchor_type,
+        "selected_lag_ms": int(selected_lag_ms),
+        "base_model": parent.model_name,
+        "interaction_model": child.model_name,
+        "parent_model": parent.model_name,
+        "child_model": child.model_name,
+        "base_aic": parent.aic,
+        "interaction_aic": child.aic,
+        "parent_aic": parent.aic,
+        "child_aic": child.aic,
+        "delta_aic": child.aic - parent.aic,
+        "base_bic": parent.bic,
+        "interaction_bic": child.bic,
+        "parent_bic": parent.bic,
+        "child_bic": child.bic,
+        "delta_bic": child.bic - parent.bic,
+        "base_log_likelihood": parent.log_likelihood,
+        "interaction_log_likelihood": child.log_likelihood,
+        "parent_log_likelihood": parent.log_likelihood,
+        "child_log_likelihood": child.log_likelihood,
+        "lr_statistic": lr_statistic,
+        "lr_df": lr_df,
+        "lr_p_value": lr_p_value,
+        "both_converged": parent.converged and child.converged,
+        "both_stable": parent.stable and child.stable,
+        "warnings": " | ".join(parent.safety_warnings + child.safety_warnings),
+    }
+
+
+def _comparison_specs(cfg: FinalBehaviorConfig) -> list[tuple[str, str]]:
+    specs = _sequence_spec(cfg, selected_lag=0)
+    names = [str(spec["name"]) for spec in specs]
+    rows: list[tuple[str, str]] = []
+    for idx, spec in enumerate(specs):
+        child_name = str(spec["name"])
+        if idx == 0:
+            continue
+        parent_name = str(spec.get("compare_against") or names[idx - 1])
+        rows.append((parent_name, child_name))
+    return rows
+
+
+def _compare_rows(
+    fitted_models: dict[str, FittedFinalModel],
+    *,
+    anchor_type: str,
+    selected_lag_ms: int,
+    cfg: FinalBehaviorConfig,
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    for parent_name, child_name in ordered_pairs:
-        parent = fitted_models[parent_name]
-        child = fitted_models[child_name]
+    for parent_name, child_name in _comparison_specs(cfg):
         rows.append(
-            {
-                "anchor_type": anchor_type,
-                "parent_model": parent_name,
-                "child_model": child_name,
-                "parent_aic": parent.aic,
-                "child_aic": child.aic,
-                "delta_aic": child.aic - parent.aic,
-                "parent_bic": parent.bic,
-                "child_bic": child.bic,
-                "delta_bic": child.bic - parent.bic,
-                "both_converged": parent.converged and child.converged,
-                "both_stable": parent.stable and child.stable,
-                "warnings": " | ".join(parent.safety_warnings + child.safety_warnings),
-            }
+            _comparison_row(
+                fitted_models[parent_name],
+                fitted_models[child_name],
+                anchor_type=anchor_type,
+                selected_lag_ms=selected_lag_ms,
+            )
         )
     return rows
 
@@ -800,27 +898,28 @@ def _selected_lag_payload(selected_lag_ms: int) -> dict[str, Any]:
     }
 
 
-def _formula_sequence(selected_lag: int) -> dict[str, str]:
-    r_col = lag_col_z("information_rate", selected_lag)
-    p_col = lag_col_z("prop_expected_cumulative_info", selected_lag)
-    base = _timing_terms()
-    return {
-        "timing_only": f"event_bin ~ {base}",
-        "information_rate": f"event_bin ~ {base} + {r_col}",
-        "prop_expected_cumulative_info": f"event_bin ~ {base} + {p_col}",
-        "full_information": f"event_bin ~ {base} + {r_col} + {p_col}",
-    }
+def _formula_sequence(selected_lag: int, cfg: FinalBehaviorConfig | None = None) -> dict[str, str]:
+    active_cfg = cfg or load_final_behavior_config(DEFAULT_FINAL_CONFIG_PATH)
+    return {spec["name"]: spec["formula"] for spec in _sequence_spec(active_cfg, selected_lag)}
 
 
-def _interaction_formula(selected_lag: int) -> str:
-    r_col = lag_col_z("information_rate", selected_lag)
-    p_col = lag_col_z("prop_expected_cumulative_info", selected_lag)
-    return (
-        "event_bin ~ anchor_type * ("
-        f"{_timing_terms()} + "
-        f"{r_col} + {p_col}"
-        ")"
-    )
+def _interaction_formula(selected_lag: int, cfg: FinalBehaviorConfig | None = None) -> str:
+    active_cfg = cfg or load_final_behavior_config(DEFAULT_FINAL_CONFIG_PATH)
+    formula = str(((active_cfg.raw.get("models") or {}).get("pooled_comparison") or {}).get("formula") or "").strip()
+    if not formula:
+        raise ValueError("Behavior-final config is missing models.pooled_comparison.formula.")
+    formula = " ".join(formula.split())
+    return _strip_random_effect_terms(_expand_selected_lag_placeholders(formula, selected_lag))
+
+
+def _pooled_timing_information_rate_interaction_formula(selected_lag: int, cfg: FinalBehaviorConfig | None = None) -> str:
+    active_cfg = cfg or load_final_behavior_config(DEFAULT_FINAL_CONFIG_PATH)
+    interaction_cfg = ((active_cfg.raw.get("models") or {}).get("timing_information_rate_interaction") or {})
+    if not bool(((interaction_cfg.get("pooled_anchor_comparison") or {}).get("enabled"))):
+        raise ValueError("Pooled timing-by-information-rate interaction comparison is disabled in config.")
+    full_formula = _formula_sequence(selected_lag, active_cfg)["timing_information_rate_interaction"]
+    rhs = full_formula.split("~", maxsplit=1)[1].strip()
+    return f"event_bin ~ anchor_type * ({rhs})"
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> Path:
@@ -891,6 +990,30 @@ def build_information_effect_contrasts(summary: pd.DataFrame, covariance: pd.Dat
         _linear_contrast(summary, covariance, {prop_interaction: 1.0}, "FPP - SPP prop_expected_cumulative_info effect"),
     ]
     return pd.DataFrame(rows)
+
+
+def build_timing_information_anchor_contrasts(coefficients: pd.DataFrame, *, info_rate_col: str) -> pd.DataFrame:
+    mask = (
+        coefficients["term"].astype(str).str.contains("anchor_type", regex=False)
+        & coefficients["term"].astype(str).str.contains(info_rate_col, regex=False)
+        & coefficients["term"].astype(str).str.contains("bs(", regex=False)
+    )
+    contrasts = coefficients.loc[mask].copy()
+    if contrasts.empty:
+        return pd.DataFrame(
+            columns=[
+                "contrast",
+                "term",
+                "estimate",
+                "standard_error",
+                "z",
+                "p_value",
+                "conf_low",
+                "conf_high",
+            ]
+        )
+    contrasts.insert(0, "contrast", "Anchor difference in timing x information-rate interaction")
+    return contrasts.loc[:, ["contrast", "term", "estimate", "standard_error", "z", "p_value", "conf_low", "conf_high"]]
 
 
 def _conclusion_text(contrasts: pd.DataFrame) -> str:
@@ -975,6 +1098,160 @@ def _calibration_bins(observed: pd.Series, predicted: pd.Series, *, n_bins: int 
 def _fit_anchor_models_for_qc(riskset: pd.DataFrame, selected_lag_ms: int) -> dict[str, FittedFinalModel]:
     formulas = _formula_sequence(selected_lag_ms)
     return {name: _fit_final_model(riskset, name, formula) for name, formula in formulas.items()}
+
+
+def _interaction_plot_grid(
+    riskset: pd.DataFrame,
+    *,
+    selected_lag_ms: int,
+    varying_column: str,
+    fixed_column: str,
+    info_levels: tuple[float, ...] = (-1.0, 0.0, 1.0),
+    n_points: int = 120,
+) -> pd.DataFrame:
+    info_col = lag_col_z("information_rate", selected_lag_ms)
+    prop_col = lag_col_z("prop_expected_cumulative_info", selected_lag_ms)
+    varying_values = pd.to_numeric(riskset[varying_column], errors="coerce")
+    fixed_values = pd.to_numeric(riskset[fixed_column], errors="coerce")
+    x_grid = np.linspace(float(varying_values.min()), float(varying_values.max()), n_points)
+    fixed_value = float(fixed_values.median())
+    rows: list[dict[str, float]] = []
+    for info_level in info_levels:
+        for x_value in x_grid:
+            row = {
+                "time_from_partner_onset_s": float(fixed_value if varying_column != "time_from_partner_onset_s" else x_value),
+                "time_from_partner_offset_s": float(fixed_value if varying_column != "time_from_partner_offset_s" else x_value),
+                info_col: float(info_level),
+                prop_col: 0.0,
+                "information_rate_z_level": float(info_level),
+            }
+            if varying_column == "time_from_partner_onset_s":
+                row["time_from_partner_offset_s"] = float(pd.to_numeric(riskset["time_from_partner_offset_s"], errors="coerce").median())
+            if varying_column == "time_from_partner_offset_s":
+                row["time_from_partner_onset_s"] = float(pd.to_numeric(riskset["time_from_partner_onset_s"], errors="coerce").median())
+            rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def _save_interaction_line_figure(
+    *,
+    path: Path,
+    grid: pd.DataFrame,
+    x_column: str,
+    fitted: FittedFinalModel,
+    title: str,
+    xlabel: str,
+) -> Path:
+    plotted = grid.copy()
+    plotted["predicted_hazard"] = pd.Series(fitted.result.predict(plotted), index=plotted.index, dtype=float)
+    plt.figure(figsize=(6.5, 4.5))
+    for info_level, label in ((-1.0, "information_rate_z = -1"), (0.0, "information_rate_z = 0"), (1.0, "information_rate_z = +1")):
+        subset = plotted.loc[np.isclose(plotted["information_rate_z_level"], info_level)]
+        plt.plot(subset[x_column], subset["predicted_hazard"], label=label, linewidth=2.0)
+    plt.xlabel(xlabel)
+    plt.ylabel("Predicted hazard")
+    plt.title(title)
+    plt.legend(frameon=False)
+    plt.tight_layout()
+    plt.savefig(path, dpi=180)
+    plt.close()
+    return path
+
+
+def _save_interaction_surface_figure(
+    *,
+    path: Path,
+    riskset: pd.DataFrame,
+    selected_lag_ms: int,
+    fitted: FittedFinalModel,
+) -> Path:
+    info_col = lag_col_z("information_rate", selected_lag_ms)
+    prop_col = lag_col_z("prop_expected_cumulative_info", selected_lag_ms)
+    onset_values = pd.to_numeric(riskset["time_from_partner_onset_s"], errors="coerce")
+    info_values = pd.to_numeric(riskset[info_col], errors="coerce")
+    onset_grid = np.linspace(float(onset_values.min()), float(onset_values.max()), 80)
+    info_grid = np.linspace(-1.5, 1.5, 80) if info_values.isna().all() else np.linspace(float(info_values.min()), float(info_values.max()), 80)
+    onset_mesh, info_mesh = np.meshgrid(onset_grid, info_grid)
+    pred_grid = pd.DataFrame(
+        {
+            "time_from_partner_onset_s": onset_mesh.ravel(),
+            "time_from_partner_offset_s": float(pd.to_numeric(riskset["time_from_partner_offset_s"], errors="coerce").median()),
+            info_col: info_mesh.ravel(),
+            prop_col: 0.0,
+        }
+    )
+    predicted = np.asarray(fitted.result.predict(pred_grid), dtype=float).reshape(onset_mesh.shape)
+    plt.figure(figsize=(6.5, 4.75))
+    contour = plt.contourf(onset_mesh, info_mesh, predicted, levels=24, cmap="viridis")
+    plt.colorbar(contour, label="Predicted hazard")
+    plt.xlabel("Time from partner onset (s)")
+    plt.ylabel("Information rate z")
+    plt.title("Timing x Information-Rate Interaction Surface")
+    plt.tight_layout()
+    plt.savefig(path, dpi=180)
+    plt.close()
+    return path
+
+
+def _write_interaction_figures(
+    *,
+    riskset: pd.DataFrame,
+    selected_lag_ms: int,
+    fitted: FittedFinalModel,
+    figures_dir: Path,
+) -> dict[str, str]:
+    figures_dir.mkdir(parents=True, exist_ok=True)
+    files: dict[str, str] = {}
+    try:
+        onset_grid = _interaction_plot_grid(
+            riskset,
+            selected_lag_ms=selected_lag_ms,
+            varying_column="time_from_partner_onset_s",
+            fixed_column="time_from_partner_offset_s",
+        )
+        files["timing_information_rate_interaction_onset"] = str(
+            _save_interaction_line_figure(
+                path=figures_dir / "timing_information_rate_interaction_onset.png",
+                grid=onset_grid,
+                x_column="time_from_partner_onset_s",
+                fitted=fitted,
+                title="Predicted hazard by onset timing and information rate",
+                xlabel="Time from partner onset (s)",
+            )
+        )
+    except Exception as exc:
+        LOGGER.warning("Could not produce onset interaction plot: %s", exc)
+    try:
+        offset_grid = _interaction_plot_grid(
+            riskset,
+            selected_lag_ms=selected_lag_ms,
+            varying_column="time_from_partner_offset_s",
+            fixed_column="time_from_partner_onset_s",
+        )
+        files["timing_information_rate_interaction_offset"] = str(
+            _save_interaction_line_figure(
+                path=figures_dir / "timing_information_rate_interaction_offset.png",
+                grid=offset_grid,
+                x_column="time_from_partner_offset_s",
+                fitted=fitted,
+                title="Predicted hazard by offset timing and information rate",
+                xlabel="Time from partner offset (s)",
+            )
+        )
+    except Exception as exc:
+        LOGGER.warning("Could not produce offset interaction plot: %s", exc)
+    try:
+        files["timing_information_rate_interaction_surface"] = str(
+            _save_interaction_surface_figure(
+                path=figures_dir / "timing_information_rate_interaction_surface.png",
+                riskset=riskset,
+                selected_lag_ms=selected_lag_ms,
+                fitted=fitted,
+            )
+        )
+    except Exception as exc:
+        LOGGER.warning("Could not produce timing-information-rate interaction surface plot: %s", exc)
+    return files
 
 
 def _pooled_lag_sweep(combined: pd.DataFrame, lag_grid_ms: list[int]) -> pd.DataFrame:
@@ -1174,7 +1451,7 @@ def build_fpp_vs_spp_report(
         f"- Bin size: {cfg.bin_size_ms} ms",
         f"- FPP rows/events: {fpp_rows}/{fpp_events}",
         f"- SPP rows/events: {spp_rows}/{spp_events}",
-        "- Primary timing control: linear/quadratic parametric timing using z-scored onset, z-scored offset, and squared z-scored offset.",
+        "- Primary timing control: spline timing terms for time from partner onset and time from partner offset.",
         "- FPP and SPP use the same primary timing controls.",
         "- Lag policy: FPP selected the shared lag by minimum BIC; SPP did not reselect lag.",
         f"- SPP models stable: {spp_stable}",
@@ -1182,9 +1459,9 @@ def build_fpp_vs_spp_report(
         "",
         "## Formulas",
         "",
-        f"- Timing-only / per-anchor baseline: `{_timing_terms()}`",
-        f"- FPP and SPP final models: `{_formula_sequence(selected_lag_ms)['full_information']}`",
-        f"- Pooled interaction model: `{_interaction_formula(selected_lag_ms)}`",
+        f"- Timing-only / per-anchor baseline: `{_timing_terms(cfg)}`",
+        f"- FPP and SPP final models: `{_formula_sequence(selected_lag_ms, cfg)['full_information']}`",
+        f"- Pooled interaction model: `{_interaction_formula(selected_lag_ms, cfg)}`",
         "",
         "## Diagnostics",
         "",
@@ -1211,11 +1488,11 @@ def build_fpp_vs_spp_report(
         "selected_lag_ms": int(selected_lag_ms),
         "bin_size_ms": int(cfg.bin_size_ms),
         "lag_selection_policy": "FPP selected one shared lag by minimum BIC; SPP did not reselect lag.",
-        "primary_timing_rationale": "Primary behavioural-final models use a shared linear/quadratic timing baseline for FPP and SPP.",
+        "primary_timing_rationale": "Primary behavioural-final models use shared spline timing controls for time from partner onset and offset.",
         "formulas": {
-            "timing_terms": _timing_terms(),
-            "full_information": _formula_sequence(selected_lag_ms)["full_information"],
-            "pooled_interaction": _interaction_formula(selected_lag_ms),
+            "timing_terms": _timing_terms(cfg),
+            "full_information": _formula_sequence(selected_lag_ms, cfg)["full_information"],
+            "pooled_interaction": _interaction_formula(selected_lag_ms, cfg),
         },
         "counts": {
             "fpp_rows": fpp_rows,
@@ -1256,8 +1533,10 @@ def run_behavior_final_select_lag(config_path: Path, out_dir: Path, *, verbose: 
     fpp, _episodes, warnings_list = _build_anchor_riskset(cfg, "fpp", out_dir)
     fpp, _std = _prepare_final_riskset(fpp, cfg.lag_grid_ms)
 
-    baseline_formula = f"event_bin ~ {_timing_terms()}"
-    baseline = _fit_final_model(fpp, "timing_only", baseline_formula)
+    selection_model = str(cfg.raw["lags"]["selection_model"])
+    selection_against = str(cfg.raw["lags"]["selection_against"])
+    baseline_formula = _formula_sequence(0, cfg)[selection_against]
+    baseline = _fit_final_model(fpp, selection_against, baseline_formula)
     rows: list[dict[str, Any]] = []
     for lag in progress_iterable(
         cfg.lag_grid_ms,
@@ -1267,8 +1546,8 @@ def run_behavior_final_select_lag(config_path: Path, out_dir: Path, *, verbose: 
     ):
         r_col = lag_col_z("information_rate", lag)
         p_col = lag_col_z("prop_expected_cumulative_info", lag)
-        formula = f"{baseline_formula} + {r_col} + {p_col}"
-        fitted = _fit_final_model(fpp, "full_information", formula)
+        formula = _formula_sequence(lag, cfg)[selection_model]
+        fitted = _fit_final_model(fpp, selection_model, formula)
         rows.append(_lag_selection_row(fitted, lag_ms=lag, baseline=baseline, r_col=r_col, p_col=p_col))
 
     table = pd.DataFrame(rows).sort_values(["lag_ms"], kind="mergesort").reset_index(drop=True)
@@ -1304,6 +1583,8 @@ def run_behavior_final_fit(
     out_dir.mkdir(parents=True, exist_ok=True)
     models_dir = out_dir / "models"
     models_dir.mkdir(parents=True, exist_ok=True)
+    figures_dir = out_dir / "figures"
+    figures_dir.mkdir(parents=True, exist_ok=True)
 
     riskset, episodes, warnings_list = _build_anchor_riskset(cfg, anchor_type, out_dir)
     riskset, standardization = _prepare_final_riskset(riskset, cfg.lag_grid_ms)
@@ -1312,13 +1593,15 @@ def run_behavior_final_fit(
     episodes.to_csv(out_dir / "episodes.csv", index=False)
     standardization.to_csv(out_dir / "standardization_stats.csv", index=False)
 
-    formulas = _formula_sequence(selected_lag)
+    sequence_specs = _sequence_spec(cfg, selected_lag)
+    formulas = {spec["name"]: spec["formula"] for spec in sequence_specs}
     fitted_models: dict[str, FittedFinalModel] = {}
     summary_rows: list[dict[str, Any]] = []
     coefficient_rows: list[dict[str, Any]] = []
+    model_names = tuple(spec["name"] for spec in sequence_specs)
     for model_name in progress_iterable(
-        FINAL_MODEL_NAMES,
-        total=len(FINAL_MODEL_NAMES),
+        model_names,
+        total=len(model_names),
         description=f"Fit models ({anchor_type})",
         enabled=LOGGER.isEnabledFor(logging.INFO),
     ):
@@ -1328,10 +1611,40 @@ def run_behavior_final_fit(
         coefficient_rows.extend(_coefficient_rows(fitted, anchor_type=anchor_type))
 
     summary_table = pd.DataFrame(summary_rows)
+    coefficients_table = pd.DataFrame(coefficient_rows)
+    comparison_table = pd.DataFrame(_compare_rows(fitted_models, anchor_type=anchor_type, selected_lag_ms=selected_lag, cfg=cfg))
     summary_table.to_csv(models_dir / "model_summary.csv", index=False)
-    summary_table.to_csv(models_dir / "full_information_summary.csv", index=False)
-    pd.DataFrame(coefficient_rows).to_csv(models_dir / "coefficients.csv", index=False)
-    pd.DataFrame(_compare_rows(fitted_models, anchor_type=anchor_type)).to_csv(models_dir / "model_comparison.csv", index=False)
+    coefficients_table.to_csv(models_dir / "coefficients.csv", index=False)
+    comparison_table.to_csv(models_dir / "model_comparison.csv", index=False)
+    for model_name, fitted in fitted_models.items():
+        summary_table.loc[summary_table["model_name"].astype(str) == model_name].to_csv(models_dir / f"{model_name}_summary.csv", index=False)
+        coefficients_table.loc[coefficients_table["model_name"].astype(str) == model_name].to_csv(
+            models_dir / f"{model_name}_coefficients.csv",
+            index=False,
+        )
+    interaction_name = "timing_information_rate_interaction"
+    interaction_base = str(
+        next(
+            (spec.get("compare_against") or "full_information")
+            for spec in sequence_specs
+            if str(spec["name"]) == interaction_name
+        )
+    )
+    interaction_comparison = comparison_table.loc[
+        (comparison_table["child_model"].astype(str) == interaction_name)
+        & (comparison_table["parent_model"].astype(str) == interaction_base)
+    ].copy()
+    if not interaction_comparison.empty:
+        interaction_comparison.to_csv(models_dir / "timing_information_rate_interaction_comparison.csv", index=False)
+    figure_manifest: dict[str, str] = {}
+    if interaction_name in fitted_models:
+        figure_manifest = _write_interaction_figures(
+            riskset=riskset,
+            selected_lag_ms=selected_lag,
+            fitted=fitted_models[interaction_name],
+            figures_dir=figures_dir,
+        )
+        _write_json(figures_dir / "timing_information_rate_interaction_manifest.json", figure_manifest)
 
     config_snapshot = out_dir.parent / "config_snapshot.yaml"
     if not config_snapshot.exists():
@@ -1345,6 +1658,7 @@ def run_behavior_final_fit(
             "note": "SPP reuses the FPP-selected lag without reselection." if anchor_type == "spp" else "FPP final fitting uses the frozen shared lag selected upstream.",
             "warnings": warnings_list,
             "model_safety_warnings": {fitted.model_name: fitted.safety_warnings for fitted in fitted_models.values()},
+            "interaction_figures": figure_manifest,
         },
     )
     _write_json(
@@ -1392,7 +1706,7 @@ def run_behavior_final_compare(
     combined["anchor_type"] = pd.Categorical(combined["anchor_type"].astype(str), categories=["spp", "fpp"])
     combined.to_parquet(out_dir / "combined_riskset.parquet", index=False)
 
-    formula = _interaction_formula(selected_lag)
+    formula = _interaction_formula(selected_lag, cfg)
     pooled = _fit_final_model(combined, "fpp_vs_spp_interaction", formula)
     pooled_summary = pd.DataFrame([_summary_row(pooled, anchor_type="pooled_fpp_spp")])
     pooled_summary.to_csv(out_dir / "interaction_model_summary.csv", index=False)
@@ -1414,6 +1728,26 @@ def run_behavior_final_compare(
         prop_col=p_col,
     )
     contrasts.to_csv(out_dir / "information_effect_contrasts.csv", index=False)
+
+    interaction_cfg = ((cfg.raw.get("models") or {}).get("timing_information_rate_interaction") or {})
+    pooled_interaction_files: dict[str, str] = {}
+    if bool(((interaction_cfg.get("pooled_anchor_comparison") or {}).get("enabled"))):
+        pooled_interaction_formula = _pooled_timing_information_rate_interaction_formula(selected_lag, cfg)
+        pooled_interaction = _fit_final_model(combined, "timing_information_rate_anchor_interaction", pooled_interaction_formula)
+        pooled_interaction_summary = pd.DataFrame([_summary_row(pooled_interaction, anchor_type="pooled_fpp_spp")])
+        pooled_interaction_summary.to_csv(out_dir / "timing_information_rate_anchor_interaction_summary.csv", index=False)
+        pooled_interaction_coefficients = pd.DataFrame(_coefficient_rows(pooled_interaction, anchor_type="pooled_fpp_spp"))
+        pooled_interaction_coefficients.to_csv(out_dir / "timing_information_rate_anchor_interaction_coefficients.csv", index=False)
+        pooled_interaction_contrasts = build_timing_information_anchor_contrasts(
+            pooled_interaction_coefficients,
+            info_rate_col=r_col,
+        )
+        pooled_interaction_contrasts.to_csv(out_dir / "timing_information_rate_anchor_interaction_contrasts.csv", index=False)
+        pooled_interaction_files = {
+            "summary": str(out_dir / "timing_information_rate_anchor_interaction_summary.csv"),
+            "coefficients": str(out_dir / "timing_information_rate_anchor_interaction_coefficients.csv"),
+            "contrasts": str(out_dir / "timing_information_rate_anchor_interaction_contrasts.csv"),
+        }
 
     fpp_summary = pd.read_csv(fpp_riskset_path.parent / "models" / "model_summary.csv")
     spp_summary = pd.read_csv(spp_riskset_path.parent / "models" / "model_summary.csv")
@@ -1438,6 +1772,8 @@ def run_behavior_final_compare(
         contrasts=contrasts,
         out_dir=out_dir,
     )
+    if pooled_interaction_files:
+        qc_files.update({f"pooled_timing_information_rate_{key}": value for key, value in pooled_interaction_files.items()})
     _write_json(out_dir / "qc_plot_manifest.json", qc_files)
     return out_dir / "interaction_model_summary.csv"
 

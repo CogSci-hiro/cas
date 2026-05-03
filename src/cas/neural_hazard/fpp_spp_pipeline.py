@@ -220,6 +220,16 @@ def build_entropy_features_table_from_glhmm_output(
             target_time_s=entropy_time_s,
             window_duration_s=float(instability_window_s),
         )
+        state_probabilities = _compute_hmm_state_probabilities(
+            gamma=gamma,
+            chunk_table=chunk_table,
+            subject_id=str(subject_id),
+            run_id=str(run_id),
+            original_n_samples=int(len(frame)),
+            lag_span_samples=lag_span_samples,
+            sampling_rate_hz=float(fit_summary["sampling_rate_hz"]),
+            target_time_s=entropy_time_s,
+        )
         frames.append(
             pd.DataFrame(
                 {
@@ -229,6 +239,7 @@ def build_entropy_features_table_from_glhmm_output(
                     "entropy": entropy_values,
                     **eeg_features,
                     **posterior_features,
+                    **state_probabilities,
                 }
             )
         )
@@ -242,6 +253,57 @@ def build_entropy_features_table_from_glhmm_output(
         combined.to_csv(output_path, index=False)
     LOGGER.info("Wrote aggregated entropy features to %s (%d rows).", output_path, int(len(combined)))
     return output_path
+
+
+def _compute_hmm_state_probabilities(
+    *,
+    gamma: np.ndarray,
+    chunk_table: pd.DataFrame,
+    subject_id: str,
+    run_id: str,
+    original_n_samples: int,
+    lag_span_samples: int,
+    sampling_rate_hz: float,
+    target_time_s: np.ndarray,
+) -> dict[str, np.ndarray]:
+    """Reconstruct run-wise posterior state probabilities at target times."""
+
+    run_chunks = chunk_table.loc[
+        (chunk_table["subject"].astype(str) == str(subject_id))
+        & (chunk_table["run"].astype(str) == str(run_id))
+    ].sort_values("original_start_sample", kind="mergesort")
+    n_states = int(gamma.shape[1])
+    timelines = np.full((original_n_samples, n_states), np.nan, dtype=float)
+    if run_chunks.empty:
+        return {
+            f"state_probability_{state_idx + 1}": np.full(len(target_time_s), np.nan, dtype=float)
+            for state_idx in range(n_states)
+        }
+    for chunk in run_chunks.to_dict(orient="records"):
+        processed_start = int(chunk["processed_start_sample"])
+        processed_stop = int(chunk["processed_stop_sample"])
+        posterior = np.asarray(gamma[processed_start:processed_stop], dtype=float)
+        if posterior.ndim != 2 or posterior.shape[0] == 0:
+            continue
+        original_start = int(chunk["original_start_sample"])
+        mapped_original_start = int(original_start) + int(lag_span_samples)
+        mapped_original_stop = mapped_original_start + posterior.shape[0]
+        if mapped_original_stop > original_n_samples:
+            raise ValueError(
+                "HMM posterior mapping exceeded the original run length for "
+                f"subject={subject_id}, run={run_id}."
+            )
+        timelines[mapped_original_start:mapped_original_stop, :] = posterior
+
+    source_time_s = np.arange(original_n_samples, dtype=float) / float(sampling_rate_hz)
+    out: dict[str, np.ndarray] = {}
+    for state_idx in range(n_states):
+        out[f"state_probability_{state_idx + 1}"] = _interpolate_to_target_times(
+            source_time_s,
+            timelines[:, state_idx],
+            target_time_s,
+        )
+    return out
 
 
 def _infer_glhmm_lag_span_samples(fit_summary: dict[str, Any]) -> int:

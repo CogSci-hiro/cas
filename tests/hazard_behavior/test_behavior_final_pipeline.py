@@ -13,6 +13,7 @@ from cas.hazard_behavior.config import BehaviourHazardConfig
 from cas.hazard_behavior.episodes import build_event_positive_episodes
 from cas.hazard_behavior.final_behavior import (
     _formula_sequence,
+    _interaction_plot_grid,
     _interaction_formula,
     _normalize_final_riskset,
     _project_behavior_final_events,
@@ -111,6 +112,10 @@ def test_config_loading() -> None:
     cfg = load_final_behavior_config(Path("config/behavior.yaml"))
     for key in ["analysis", "paths", "riskset", "anchors", "columns", "features", "lags", "models", "outputs", "figures"]:
         assert key in cfg.raw
+    interaction_cfg = cfg.raw["models"]["timing_information_rate_interaction"]
+    assert interaction_cfg["enabled"] is True
+    assert interaction_cfg["compare_against"] == "full_information"
+    assert interaction_cfg["fit_for_anchors"] == ["fpp", "spp"]
 
 
 def test_riskset_schema_and_anchor_match() -> None:
@@ -151,19 +156,35 @@ def test_riskset_schema_and_anchor_match() -> None:
 
 def test_primary_formulas_use_simple_timing_only() -> None:
     formulas = _formula_sequence(150)
-    for formula in formulas.values():
-        assert "b" + "s(" not in formula
-        assert "z_time_from_partner_onset_s" in formula
-        assert "z_time_from_partner_offset_s" in formula
-        assert "z_time_from_partner_offset_s_squared" in formula
+    assert list(formulas) == [
+        "timing_only",
+        "information_rate",
+        "full_information",
+        "timing_information_rate_interaction",
+    ]
+    assert "bs(time_from_partner_onset_s, df=4)" in formulas["timing_only"]
+    assert "bs(time_from_partner_offset_s, df=4)" in formulas["timing_only"]
+    assert "information_rate_lag_150ms_z" in formulas["information_rate"]
+    assert "prop_expected_cumulative_info_lag_150ms_z" in formulas["full_information"]
+    assert "bs(time_from_partner_onset_s, df=4):information_rate_lag_150ms_z" in formulas["timing_information_rate_interaction"]
+    assert "bs(time_from_partner_offset_s, df=4):information_rate_lag_150ms_z" in formulas["timing_information_rate_interaction"]
+    assert not any("SELECTED" in formula for formula in formulas.values())
 
 
 def test_primary_pooled_formula_contains_anchor_interactions() -> None:
     formula = _interaction_formula(150)
-    assert "b" + "s(" not in formula
+    assert "bs(time_from_partner_onset_s, df=4)" in formula
+    assert "bs(time_from_partner_offset_s, df=4)" in formula
     assert "anchor_type * (" in formula
     assert "information_rate_lag_150ms_z" in formula
     assert "prop_expected_cumulative_info_lag_150ms_z" in formula
+
+
+def test_interaction_model_compares_against_full_information() -> None:
+    cfg = load_final_behavior_config(Path("config/behavior.yaml"))
+    sequence = cfg.raw["models"]["sequence"]
+    interaction_step = next(step for step in sequence if step["name"] == "timing_information_rate_interaction")
+    assert interaction_step["compare_against"] == "full_information"
 
 
 def test_offset_squared_column_matches_squared_offset_z() -> None:
@@ -173,6 +194,19 @@ def test_offset_squared_column_matches_squared_offset_z() -> None:
         riskset["z_time_from_partner_offset_s"].to_numpy() ** 2,
     )
     assert "z_time_from_partner_offset_s_squared" in stats["column"].astype(str).tolist()
+
+
+def test_interaction_prediction_grid_uses_three_information_levels() -> None:
+    riskset, _ = _prepare_final_riskset(_make_synthetic_riskset("fpp", seed=5), [0, 50, 100, 150])
+    grid = _interaction_plot_grid(
+        riskset,
+        selected_lag_ms=150,
+        varying_column="time_from_partner_onset_s",
+        fixed_column="time_from_partner_offset_s",
+    )
+    assert set(grid["information_rate_z_level"].tolist()) == {-1.0, 0.0, 1.0}
+    assert "information_rate_lag_150ms_z" in grid.columns
+    assert "prop_expected_cumulative_info_lag_150ms_z" in grid.columns
 
 
 def test_zero_variance_timing_raises_clear_error() -> None:
@@ -215,9 +249,8 @@ def test_lag_selection_uses_simple_timing_baseline(tmp_path: Path, monkeypatch) 
             self.safety_warnings = []
 
     def fake_fit(table: pd.DataFrame, model_name: str, formula: str):
-        assert "b" + "s(" not in formula
-        assert "z_time_from_partner_onset_s" in formula
-        assert "z_time_from_partner_offset_s_squared" in formula
+        assert "bs(time_from_partner_onset_s, df=4)" in formula
+        assert "bs(time_from_partner_offset_s, df=4)" in formula
         if "lag_150ms_z" in formula:
             return FakeFit(90.0, 80.0, formula)
         if "lag_100ms_z" in formula:
@@ -261,6 +294,11 @@ def test_selected_lag_reused_for_spp(tmp_path: Path, monkeypatch) -> None:
     assert "SPP reuses the FPP-selected lag without reselection" in diagnostics["note"]
     assert any("information_rate_lag_150ms_z" in formula for formula in summary["formula"].astype(str))
     assert not any("information_rate_lag_100ms_z" in formula for formula in summary["formula"].astype(str))
+    assert (out_dir / "models" / "timing_information_rate_interaction_summary.csv").exists()
+    assert (out_dir / "models" / "timing_information_rate_interaction_coefficients.csv").exists()
+    assert (out_dir / "models" / "timing_information_rate_interaction_comparison.csv").exists()
+    assert (out_dir / "figures" / "timing_information_rate_interaction_onset.png").exists()
+    assert (out_dir / "figures" / "timing_information_rate_interaction_offset.png").exists()
 
 
 def test_contrast_table_computes_fpp_minus_spp_correctly() -> None:
@@ -356,7 +394,7 @@ def test_report_warns_when_models_unstable() -> None:
         pooled_coefficients=pooled_coefficients,
         contrasts=contrasts,
     )
-    assert "Primary timing control: linear/quadratic parametric timing" in markdown
+    assert "Primary timing control: spline timing terms" in markdown
     assert "SPP models stable: False" in markdown
     assert payload["stability"]["spp_all_stable"] is False
     assert payload["stability"]["pooled_contrasts_interpretable"] is False
@@ -377,10 +415,10 @@ def test_compare_writes_expected_outputs(tmp_path: Path) -> None:
     spp.to_parquet(spp_dir / "riskset.parquet", index=False)
 
     fpp_summary = pd.DataFrame(
-        [{"model_name": name, "n_rows": len(fpp), "n_events": int(fpp["event_bin"].sum()), "bic": 100.0 + idx, "converged": True, "stable": True, "safety_warnings": ""} for idx, name in enumerate(("timing_only", "information_rate", "prop_expected_cumulative_info", "full_information"))]
+        [{"model_name": name, "n_rows": len(fpp), "n_events": int(fpp["event_bin"].sum()), "bic": 100.0 + idx, "converged": True, "stable": True, "safety_warnings": ""} for idx, name in enumerate(("timing_only", "information_rate", "full_information", "timing_information_rate_interaction"))]
     )
     spp_summary = pd.DataFrame(
-        [{"model_name": name, "n_rows": len(spp), "n_events": int(spp["event_bin"].sum()), "bic": 101.0 + idx, "converged": True, "stable": True, "safety_warnings": ""} for idx, name in enumerate(("timing_only", "information_rate", "prop_expected_cumulative_info", "full_information"))]
+        [{"model_name": name, "n_rows": len(spp), "n_events": int(spp["event_bin"].sum()), "bic": 101.0 + idx, "converged": True, "stable": True, "safety_warnings": ""} for idx, name in enumerate(("timing_only", "information_rate", "full_information", "timing_information_rate_interaction"))]
     )
     fpp_summary.to_csv(fpp_dir / "models" / "model_summary.csv", index=False)
     spp_summary.to_csv(spp_dir / "models" / "model_summary.csv", index=False)
@@ -395,6 +433,9 @@ def test_compare_writes_expected_outputs(tmp_path: Path) -> None:
     assert (cmp_dir / "combined_riskset.parquet").exists()
     assert (cmp_dir / "interaction_model_summary.csv").exists()
     assert (cmp_dir / "information_effect_contrasts.csv").exists()
+    assert (cmp_dir / "timing_information_rate_anchor_interaction_summary.csv").exists()
+    assert (cmp_dir / "timing_information_rate_anchor_interaction_coefficients.csv").exists()
+    assert (cmp_dir / "timing_information_rate_anchor_interaction_contrasts.csv").exists()
     assert (cmp_dir / "fpp_vs_spp_report.md").exists()
     assert "anchor_type" in report_json["formulas"]["pooled_interaction"]
     assert any("anchor_type" in term and "information_rate_lag_150ms_z" in term for term in coef_table["term"].astype(str))
@@ -636,10 +677,23 @@ def test_cli_commands_write_expected_outputs(tmp_path: Path, monkeypatch) -> Non
         lag_dir / "lag_selection_plot.png",
         lag_dir / "qc_plot_manifest.json",
         fpp_dir / "models" / "model_summary.csv",
+        fpp_dir / "models" / "timing_information_rate_interaction_summary.csv",
+        fpp_dir / "models" / "timing_information_rate_interaction_coefficients.csv",
+        fpp_dir / "models" / "timing_information_rate_interaction_comparison.csv",
+        fpp_dir / "figures" / "timing_information_rate_interaction_onset.png",
+        fpp_dir / "figures" / "timing_information_rate_interaction_offset.png",
         spp_dir / "models" / "model_summary.csv",
+        spp_dir / "models" / "timing_information_rate_interaction_summary.csv",
+        spp_dir / "models" / "timing_information_rate_interaction_coefficients.csv",
+        spp_dir / "models" / "timing_information_rate_interaction_comparison.csv",
+        spp_dir / "figures" / "timing_information_rate_interaction_onset.png",
+        spp_dir / "figures" / "timing_information_rate_interaction_offset.png",
         cmp_dir / "interaction_model_summary.csv",
         cmp_dir / "interaction_coefficients.csv",
         cmp_dir / "information_effect_contrasts.csv",
+        cmp_dir / "timing_information_rate_anchor_interaction_summary.csv",
+        cmp_dir / "timing_information_rate_anchor_interaction_coefficients.csv",
+        cmp_dir / "timing_information_rate_anchor_interaction_contrasts.csv",
         cmp_dir / "fpp_vs_spp_report.md",
         cmp_dir / "fpp_vs_spp_report.json",
         cmp_dir / "qc_plot_manifest.json",

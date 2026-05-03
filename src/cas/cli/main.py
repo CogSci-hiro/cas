@@ -59,6 +59,10 @@ from cas.cli.commands.neural_hazard_fpp_spp import (
     add_neural_hazard_fpp_spp_parser,
     run_neural_hazard_fpp_spp_command,
 )
+from cas.cli.commands.neural_hazard_fpp_spp_renyi import (
+    add_neural_hazard_fpp_spp_renyi_alpha_parser,
+    run_neural_hazard_fpp_spp_renyi_alpha_command,
+)
 from cas.cli.commands.plot_behaviour_glmm_results import (
     add_plot_behaviour_glmm_results_parser,
     run_plot_behaviour_glmm_results_command,
@@ -70,6 +74,10 @@ from cas.cli.commands.plot_behaviour_latency_regime_results import (
 from cas.cli.commands.run_fpp_neural_permutation_null import (
     add_run_fpp_neural_permutation_null_parser,
     run_fpp_neural_permutation_null_command,
+)
+from cas.cli.commands.source_dics_fpp_spp import (
+    add_source_dics_fpp_spp_parser,
+    run_source_dics_fpp_spp_command,
 )
 from cas.cli.commands.plot_tde_hmm_qc import (
     add_plot_tde_hmm_qc_parser,
@@ -217,10 +225,12 @@ def _build_parser() -> argparse.ArgumentParser:
     add_hazard_behavior_fpp_parser(subparsers)
     add_hazard_fpp_tde_hmm_parser(subparsers)
     add_neural_hazard_fpp_spp_parser(subparsers)
+    add_neural_hazard_fpp_spp_renyi_alpha_parser(subparsers)
     add_plot_behaviour_glmm_results_parser(subparsers)
     add_plot_behaviour_latency_regime_results_parser(subparsers)
     add_plot_tde_hmm_qc_parser(subparsers)
     add_run_fpp_neural_permutation_null_parser(subparsers)
+    add_source_dics_fpp_spp_parser(subparsers)
 
     trf_parser = subparsers.add_parser("trf", help="Run TRF nested CV from run-wise arrays.")
     trf_parser.add_argument("--eeg-runs", nargs="+", required=True, help="Run-wise EEG .npy paths.")
@@ -1431,6 +1441,10 @@ def main() -> int:
         return run_hazard_fpp_tde_hmm_command(args)
     if args.command == "neural-hazard-fpp-spp":
         return run_neural_hazard_fpp_spp_command(args)
+    if args.command == "neural-hazard-fpp-spp-renyi-alpha":
+        return run_neural_hazard_fpp_spp_renyi_alpha_command(args)
+    if args.command == "source-dics-fpp-spp":
+        return run_source_dics_fpp_spp_command(args)
     if args.command in {"plot-behaviour-glmm-results", "plot-behaviour-hazard-results"}:
         return run_plot_behaviour_glmm_results_command(args)
     if args.command == "plot-behaviour-latency-regime-results":

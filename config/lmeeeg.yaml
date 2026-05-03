@@ -16,6 +16,7 @@ lmeeeg:
       modality: "evoked"
       selection:
         event_type: "other_spp_onset"
+      contrast_of_interest: "spp_class_1"
       formula: "~ spp_class_1 + latency + duration_s + run"
       eligibility:
         not_null:
@@ -33,6 +34,7 @@ lmeeeg:
       modality: "induced"
       selection:
         event_type: "self_spp_onset"
+      contrast_of_interest: "spp_class_1"
       formula: "~ spp_class_1 + latency + duration_s + run"
       eligibility:
         not_null:

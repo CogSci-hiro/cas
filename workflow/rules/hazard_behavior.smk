@@ -358,6 +358,26 @@ HAZARD_NEURAL_PERMUTATION_NULL_OUTPUTS = [
 ]
 
 
+NEURAL_HAZARD_FPP_SPP_RENYI_ALPHA_OUTPUT_DIR = _resolve_hazard_behavior_output_dir(
+    "reports/neural_hazard/fpp_spp_renyi_alpha",
+    "reports/neural_hazard/fpp_spp_renyi_alpha",
+)
+NEURAL_HAZARD_FPP_SPP_RENYI_ALPHA_OUTPUTS = [
+    f"{NEURAL_HAZARD_FPP_SPP_RENYI_ALPHA_OUTPUT_DIR}/tables/renyi_alpha_search_summary.csv",
+    f"{NEURAL_HAZARD_FPP_SPP_RENYI_ALPHA_OUTPUT_DIR}/tables/renyi_best_alpha.csv",
+    f"{NEURAL_HAZARD_FPP_SPP_RENYI_ALPHA_OUTPUT_DIR}/tables/renyi_circular_shift_summary.csv",
+    f"{NEURAL_HAZARD_FPP_SPP_RENYI_ALPHA_OUTPUT_DIR}/tables/renyi_entropy_descriptives.csv",
+    f"{NEURAL_HAZARD_FPP_SPP_RENYI_ALPHA_OUTPUT_DIR}/tables/renyi_alpha_entropy_correlation_raw.csv",
+    f"{NEURAL_HAZARD_FPP_SPP_RENYI_ALPHA_OUTPUT_DIR}/tables/renyi_same_lag_model_comparison.csv",
+    f"{NEURAL_HAZARD_FPP_SPP_RENYI_ALPHA_OUTPUT_DIR}/tables/renyi_motor_exclusion_alpha_search_summary.csv",
+    f"{NEURAL_HAZARD_FPP_SPP_RENYI_ALPHA_OUTPUT_DIR}/figures/renyi_alpha_search_delta_loglik.png",
+    f"{NEURAL_HAZARD_FPP_SPP_RENYI_ALPHA_OUTPUT_DIR}/figures/renyi_alpha_entropy_correlation_heatmap.png",
+    f"{NEURAL_HAZARD_FPP_SPP_RENYI_ALPHA_OUTPUT_DIR}/figures/renyi_same_lag_delta_loglik.png",
+    f"{NEURAL_HAZARD_FPP_SPP_RENYI_ALPHA_OUTPUT_DIR}/figures/renyi_motor_exclusion_alpha_search_delta_loglik.png",
+    f"{NEURAL_HAZARD_FPP_SPP_RENYI_ALPHA_OUTPUT_DIR}/figures/renyi_best_alpha_predicted_hazard_by_anchor_type.png",
+    f"{NEURAL_HAZARD_FPP_SPP_RENYI_ALPHA_OUTPUT_DIR}/summary.json",
+]
+
 def _hazard_neural_permutation_optional_flags() -> str:
     flags = []
     if HAZARD_NEURAL_PERMUTATION_NULL_VERBOSE:
@@ -853,7 +873,12 @@ rule behavior_final_fpp:
         selected_lag=f"{BEHAVIOR_FINAL_ROOT}/lag_selection/selected_lag.json"
     output:
         riskset=f"{BEHAVIOR_FINAL_ROOT}/fpp/riskset.parquet",
-        summary=f"{BEHAVIOR_FINAL_ROOT}/fpp/models/model_summary.csv"
+        summary=f"{BEHAVIOR_FINAL_ROOT}/fpp/models/model_summary.csv",
+        interaction_summary=f"{BEHAVIOR_FINAL_ROOT}/fpp/models/timing_information_rate_interaction_summary.csv",
+        interaction_coefficients=f"{BEHAVIOR_FINAL_ROOT}/fpp/models/timing_information_rate_interaction_coefficients.csv",
+        interaction_comparison=f"{BEHAVIOR_FINAL_ROOT}/fpp/models/timing_information_rate_interaction_comparison.csv",
+        interaction_onset_figure=f"{BEHAVIOR_FINAL_ROOT}/fpp/figures/timing_information_rate_interaction_onset.png",
+        interaction_offset_figure=f"{BEHAVIOR_FINAL_ROOT}/fpp/figures/timing_information_rate_interaction_offset.png"
     shell:
         r"""
         set -euo pipefail
@@ -872,7 +897,12 @@ rule behavior_final_spp:
         selected_lag=f"{BEHAVIOR_FINAL_ROOT}/lag_selection/selected_lag.json"
     output:
         riskset=f"{BEHAVIOR_FINAL_ROOT}/spp_control/riskset.parquet",
-        summary=f"{BEHAVIOR_FINAL_ROOT}/spp_control/models/model_summary.csv"
+        summary=f"{BEHAVIOR_FINAL_ROOT}/spp_control/models/model_summary.csv",
+        interaction_summary=f"{BEHAVIOR_FINAL_ROOT}/spp_control/models/timing_information_rate_interaction_summary.csv",
+        interaction_coefficients=f"{BEHAVIOR_FINAL_ROOT}/spp_control/models/timing_information_rate_interaction_coefficients.csv",
+        interaction_comparison=f"{BEHAVIOR_FINAL_ROOT}/spp_control/models/timing_information_rate_interaction_comparison.csv",
+        interaction_onset_figure=f"{BEHAVIOR_FINAL_ROOT}/spp_control/figures/timing_information_rate_interaction_onset.png",
+        interaction_offset_figure=f"{BEHAVIOR_FINAL_ROOT}/spp_control/figures/timing_information_rate_interaction_offset.png"
     shell:
         r"""
         set -euo pipefail
@@ -894,6 +924,9 @@ rule behavior_final_fpp_vs_spp:
     output:
         summary=f"{BEHAVIOR_FINAL_ROOT}/fpp_vs_spp/interaction_model_summary.csv",
         contrasts=f"{BEHAVIOR_FINAL_ROOT}/fpp_vs_spp/information_effect_contrasts.csv",
+        pooled_interaction_summary=f"{BEHAVIOR_FINAL_ROOT}/fpp_vs_spp/timing_information_rate_anchor_interaction_summary.csv",
+        pooled_interaction_coefficients=f"{BEHAVIOR_FINAL_ROOT}/fpp_vs_spp/timing_information_rate_anchor_interaction_coefficients.csv",
+        pooled_interaction_contrasts=f"{BEHAVIOR_FINAL_ROOT}/fpp_vs_spp/timing_information_rate_anchor_interaction_contrasts.csv",
         report=f"{BEHAVIOR_FINAL_ROOT}/fpp_vs_spp/fpp_vs_spp_report.md",
         qc_manifest=f"{BEHAVIOR_FINAL_ROOT}/fpp_vs_spp/qc_plot_manifest.json"
     shell:
@@ -913,7 +946,40 @@ rule behavior_final_all:
     input:
         f"{BEHAVIOR_FINAL_ROOT}/lag_selection/selected_lag.json",
         f"{BEHAVIOR_FINAL_ROOT}/fpp/models/model_summary.csv",
+        f"{BEHAVIOR_FINAL_ROOT}/fpp/models/timing_information_rate_interaction_summary.csv",
         f"{BEHAVIOR_FINAL_ROOT}/spp_control/models/model_summary.csv",
+        f"{BEHAVIOR_FINAL_ROOT}/spp_control/models/timing_information_rate_interaction_summary.csv",
         f"{BEHAVIOR_FINAL_ROOT}/fpp_vs_spp/information_effect_contrasts.csv",
+        f"{BEHAVIOR_FINAL_ROOT}/fpp_vs_spp/timing_information_rate_anchor_interaction_summary.csv",
         f"{BEHAVIOR_FINAL_ROOT}/fpp_vs_spp/fpp_vs_spp_report.md",
         f"{BEHAVIOR_FINAL_ROOT}/fpp_vs_spp/qc_plot_manifest.json"
+
+
+rule run_neural_hazard_fpp_spp_renyi_alpha:
+    input:
+        config_path=f"{PROJECT_ROOT}/config/neural_hazard_fpp_spp_renyi_alpha.yaml",
+        fpp_riskset=lambda wildcards: f"{BEHAVIOR_FINAL_ROOT}/fpp/riskset.parquet",
+        spp_riskset=lambda wildcards: f"{BEHAVIOR_FINAL_ROOT}/spp_control/riskset.parquet",
+        neural_features=GLHMM_ENTROPY_FEATURES_OUTPUT,
+    output:
+        alpha_summary=NEURAL_HAZARD_FPP_SPP_RENYI_ALPHA_OUTPUTS[0],
+        best_alpha=NEURAL_HAZARD_FPP_SPP_RENYI_ALPHA_OUTPUTS[1],
+        null_summary=NEURAL_HAZARD_FPP_SPP_RENYI_ALPHA_OUTPUTS[2],
+        entropy_descriptives=NEURAL_HAZARD_FPP_SPP_RENYI_ALPHA_OUTPUTS[3],
+        alpha_correlation=NEURAL_HAZARD_FPP_SPP_RENYI_ALPHA_OUTPUTS[4],
+        same_lag=NEURAL_HAZARD_FPP_SPP_RENYI_ALPHA_OUTPUTS[5],
+        motor_summary=NEURAL_HAZARD_FPP_SPP_RENYI_ALPHA_OUTPUTS[6],
+        alpha_curve=NEURAL_HAZARD_FPP_SPP_RENYI_ALPHA_OUTPUTS[7],
+        corr_heatmap=NEURAL_HAZARD_FPP_SPP_RENYI_ALPHA_OUTPUTS[8],
+        same_lag_plot=NEURAL_HAZARD_FPP_SPP_RENYI_ALPHA_OUTPUTS[9],
+        motor_plot=NEURAL_HAZARD_FPP_SPP_RENYI_ALPHA_OUTPUTS[10],
+        best_hazard=NEURAL_HAZARD_FPP_SPP_RENYI_ALPHA_OUTPUTS[11],
+        summary_json=NEURAL_HAZARD_FPP_SPP_RENYI_ALPHA_OUTPUTS[12],
+    shell:
+        r"""
+        set -euo pipefail
+        mkdir -p "{resources.tmpdir}/mpl" "{resources.tmpdir}/cache"
+        MPLCONFIGDIR="{resources.tmpdir}/mpl" XDG_CACHE_HOME="{resources.tmpdir}/cache" \
+        PYTHONPATH="{SRC_DIR}:{PROJECT_ROOT}" "{PYTHON_BIN}" -m cas.cli.main neural-hazard-fpp-spp-renyi-alpha \
+          --config "{input.config_path}"
+        """

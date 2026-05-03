@@ -248,6 +248,16 @@ rule neural_hazard_fpp_spp:
         *NEURAL_HAZARD_FPP_SPP_OUTPUTS
 
 
+rule source_dics_fpp_spp_alpha_beta_all:
+    input:
+        SOURCE_DICS_FPP_SPP_ALPHA_BETA_SUMMARY_OUTPUT
+
+
+rule source_dics_all:
+    input:
+        SOURCE_DICS_FPP_SPP_ALPHA_BETA_SUMMARY_OUTPUT
+
+
 rule figures_lmeeeg_all:
     input:
         LMEEEG_FIGURE_MANIFEST,
@@ -258,3 +268,8 @@ rule figures_lme_eeg_fpp_spp_cycle_position:
     input:
         FPP_SPP_CYCLE_POSITION_LMEEEG_FIGURE_MANIFEST,
         FPP_SPP_CYCLE_POSITION_LMEEEG_INFERENCE_FIGURE_MANIFEST
+
+
+rule neural_hazard_fpp_spp_renyi_alpha:
+    input:
+        *NEURAL_HAZARD_FPP_SPP_RENYI_ALPHA_OUTPUTS

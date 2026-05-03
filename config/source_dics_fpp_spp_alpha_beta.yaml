@@ -1,0 +1,96 @@
+paths:
+  events_csv: /Users/hiro/Datasets/working/cas/current/events/events.csv
+  epochs_dir: /Users/hiro/Datasets/working/cas/current/induced_source_epochs
+  bids_root: /Users/hiro/Datasets/hyperscanning-bids
+  preprocessed_eeg_root: /Users/hiro/Datasets/working/cas/derivatives/preprocessed_eeg
+  source_dir: data/source_dics_fpp_spp_alpha_beta
+  derivatives_dir: results/source_dics_fpp_spp_alpha_beta
+  lmeeeg_dir: results/source_dics_fpp_spp_alpha_beta/lmeeeg
+
+events:
+  anchor_types:
+    - FPP
+    - SPP
+  subject_column: subject
+  dyad_column: dyad
+  run_column: run
+  anchor_type_column: anchor_type
+  onset_column: onset
+  duration_column: duration
+  latency_column: latency
+  label_column: label
+
+epoching:
+  tmin: -2.0
+  tmax: 0.5
+  baseline: null
+  reject_by_annotation: true
+
+dics:
+  method: dics
+  common_filter: true
+  filter_tmin: -1.5
+  filter_tmax: -0.1
+  analysis_tmin: -1.5
+  analysis_tmax: -0.1
+  bands:
+    alpha:
+      fmin: 8.0
+      fmax: 12.0
+    beta:
+      fmin: 13.0
+      fmax: 30.0
+  csd_method: multitaper
+  mt_bandwidth: null
+  regularization: 0.05
+  pick_ori: max-power
+  weight_norm: unit-noise-gain
+  reduce_rank: true
+  real_filter: true
+  n_jobs: 1
+  tfr_freq_samples: 5
+  tfr_n_cycles: 7.0
+  tfr_time_bandwidth: 4.0
+
+source_space:
+  kind: surface
+  mode: fsaverage_surface
+  spacing: oct5
+  subjects_dir: /Users/hiro/mne_data/MNE-fsaverage-data
+  subject: fsaverage
+  trans: fsaverage
+  bem: null
+  forward_template: null
+  parcellation: aparc
+  aggregate_to_labels: false
+  aggregation: mean
+
+output:
+  save_filters: true
+  save_trial_power: true
+  save_long_table: true
+  save_qc: true
+  overwrite: false
+  long_table_chunk_rows: 250000
+
+lmeeeg:
+  enabled: true
+  contrast_of_interest: "anchor_typeFPP"
+  formula: "power ~ anchor_type + duration + latency + run + time_within_run + information_rate_lag_200ms_z + prop_expected_cumulative_info_lag_200ms_z + (1 | subject)"
+  dependent_variable: power
+  test_predictors:
+    - anchor_type
+    - duration
+    - information_rate_lag_200ms_z
+  predictors:
+    - anchor_type
+    - duration
+    - latency
+    - run
+    - time_within_run
+    - information_rate_lag_200ms_z
+    - prop_expected_cumulative_info_lag_200ms_z
+
+logging:
+  verbose: true
+  progress: true

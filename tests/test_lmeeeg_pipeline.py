@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -231,8 +232,8 @@ def test_prepare_model_inputs_applies_fpp_spp_cycle_position_design_recipe():
                     "pair_position": {"fpp": "FPP", "spp": "SPP"},
                 },
                 "predictors": {
-                    "categorical": ["pair_position", "run"],
-                    "continuous": ["event_duration", "latency", "time_within_run"],
+                    "categorical": ["pair_position"],
+                    "continuous": ["run", "event_duration", "latency", "time_within_run"],
                 },
                 "zscore": {
                     "event_duration": "z_event_duration",
@@ -274,6 +275,7 @@ def test_prepare_model_inputs_applies_fpp_spp_cycle_position_design_recipe():
     assert {"z_event_duration", "z_latency", "z_time_within_run"}.issubset(cleaned_metadata.columns)
     assert list(cleaned_metadata["pair_position"].cat.categories) == ["SPP", "FPP"]
     assert cleaned_metadata["subject"].tolist() == ["sub-001", "sub-001", "sub-002", "sub-002"]
+    assert cleaned_metadata["run"].dtype.kind in {"i", "u", "f"}
     assert np.isclose(cleaned_metadata["z_event_duration"].mean(), 0.0)
 
 
@@ -290,8 +292,8 @@ def test_prepare_model_inputs_rejects_invalid_pair_position_value():
                 },
                 "value_mapping": {"pair_position": {"fpp": "FPP", "spp": "SPP"}},
                 "predictors": {
-                    "categorical": ["pair_position", "run"],
-                    "continuous": ["event_duration", "latency", "time_within_run"],
+                    "categorical": ["pair_position"],
+                    "continuous": ["run", "event_duration", "latency", "time_within_run"],
                 },
                 "required_columns": ["subject", "run", "pair_position", "event_duration", "latency", "time_within_run"],
                 "reference_levels": {"pair_position": "SPP"},
@@ -346,8 +348,8 @@ def test_prepare_model_inputs_rejects_non_positive_event_duration():
             "models": {"cycle_position": {"formula": "~ pair_position + latency"}},
             "design": {
                 "predictors": {
-                    "categorical": ["pair_position", "run"],
-                    "continuous": ["event_duration", "latency", "time_within_run"],
+                    "categorical": ["pair_position"],
+                    "continuous": ["run", "event_duration", "latency", "time_within_run"],
                 },
                 "required_columns": ["subject", "run", "pair_position", "event_duration", "latency", "time_within_run"],
                 "reference_levels": {"pair_position": "SPP"},
@@ -396,7 +398,7 @@ def test_fit_one_model_uses_fixed_column_names(tmp_path, monkeypatch):
 
     runtime_config = {
         "paths": {"out_dir": str(tmp_path)},
-        "lmeeeg": {"models": {"demo": {"formula": "~ latency"}}},
+        "lmeeeg": {"models": {"demo": {"formula": "~ latency", "test_predictors": ["latency"]}}},
     }
     trial_data = SimpleNamespace(
         eeg_data=np.ones((2, 1, 2), dtype=float),
@@ -410,7 +412,12 @@ def test_fit_one_model_uses_fixed_column_names(tmp_path, monkeypatch):
     summary = _fit_one_model(runtime_config, trial_data, model_name="demo")
 
     assert summary["betas_shape"] == [2, 1, 2]
+    assert summary["test_predictors"] == ["latency"]
+    assert summary["contrast_of_interest"] == "latency"
+    assert summary["resolved_test_effects"] == {"latency": ["latency"]}
     assert (tmp_path / "lmeeeg" / "demo" / "column_names.json").exists()
+    saved_summary = json.loads((tmp_path / "lmeeeg" / "demo" / "summary.json").read_text(encoding="utf-8"))
+    assert saved_summary["contrast_of_interest"] == "latency"
 
 
 def test_resolve_test_effects_expands_categorical_predictor():
@@ -474,6 +481,8 @@ def test_run_model_inference_runs_each_expanded_effect(tmp_path, monkeypatch):
 
     assert seen_effects == ["fpp_class_2[T.INF]", "fpp_class_2[T.INT]"]
     assert [result["effect"] for result in results] == seen_effects
+    assert all(result["requested_predictor"] == "fpp_class_2" for result in results)
+    assert all(result["contrast_of_interest"] == "fpp_class_2" for result in results)
     csv_path = Path(results[0]["corrected_p_values_csv"])
     assert csv_path.exists()
     csv_rows = pd.read_csv(csv_path)

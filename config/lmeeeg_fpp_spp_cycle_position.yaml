@@ -21,8 +21,8 @@ lmeeeg:
     predictors:
       categorical:
         - "pair_position"
-        - "run"
       continuous:
+        - "run"
         - "event_duration"
         - "latency"
         - "time_within_run"
@@ -44,6 +44,7 @@ lmeeeg:
   models:
     fpp_vs_spp_cycle_position:
       modality: "induced"
+      contrast_of_interest: "pair_positionFPP"
       formula: "power ~ pair_position + z_event_duration + z_latency + run + z_time_within_run + (1 | subject)"
       random_effect_group: "subject"
       selection:
@@ -55,11 +56,11 @@ lmeeeg:
     # Use a lighter correction here so pooled induced inference completes
     # reliably on the local workstation instead of being killed during TFCE.
     method: "cluster"
-    n_permutations: 64
+    n_permutations: 1000
     tail: 0
     adjacency: "mne_default"
     montage: "biosemi64"
-    cluster_forming_alpha: 0.05
+    cluster_forming_alpha: 0.002
     seed: 0
     tfce_threshold:
       start: 0.0

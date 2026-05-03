@@ -106,31 +106,56 @@ models:
   sequence:
     - name: timing_only
       formula_terms:
-        - z_time_from_partner_onset_s
-        - z_time_from_partner_offset_s
-        - z_time_from_partner_offset_s_squared
+        - bs(time_from_partner_onset_s, df=4)
+        - bs(time_from_partner_offset_s, df=4)
 
     - name: information_rate
       formula_terms:
-        - z_time_from_partner_onset_s
-        - z_time_from_partner_offset_s
-        - z_time_from_partner_offset_s_squared
+        - bs(time_from_partner_onset_s, df=4)
+        - bs(time_from_partner_offset_s, df=4)
         - information_rate_lag_SELECTED_ms_z
-
-    - name: prop_expected_cumulative_info
-      formula_terms:
-        - z_time_from_partner_onset_s
-        - z_time_from_partner_offset_s
-        - z_time_from_partner_offset_s_squared
-        - prop_expected_cumulative_info_lag_SELECTED_ms_z
 
     - name: full_information
       formula_terms:
-        - z_time_from_partner_onset_s
-        - z_time_from_partner_offset_s
-        - z_time_from_partner_offset_s_squared
+        - bs(time_from_partner_onset_s, df=4)
+        - bs(time_from_partner_offset_s, df=4)
         - information_rate_lag_SELECTED_ms_z
         - prop_expected_cumulative_info_lag_SELECTED_ms_z
+
+    - name: timing_information_rate_interaction
+      compare_against: full_information
+      formula_terms:
+        - bs(time_from_partner_onset_s, df=4)
+        - bs(time_from_partner_offset_s, df=4)
+        - information_rate_lag_SELECTED_ms_z
+        - prop_expected_cumulative_info_lag_SELECTED_ms_z
+        - bs(time_from_partner_onset_s, df=4):information_rate_lag_SELECTED_ms_z
+        - bs(time_from_partner_offset_s, df=4):information_rate_lag_SELECTED_ms_z
+
+  timing_information_rate_interaction:
+    enabled: true
+    name: timing_information_rate_interaction
+    description: >
+      Tests whether the information-rate effect on behavioural hazard
+      depends on time from partner onset and/or time from partner offset.
+    compare_against: full_information
+    interaction_predictor: information_rate_lag_SELECTED_ms_z
+    timing_interactions:
+      - timing_column: time_from_partner_onset_s
+        basis: bs
+        df: 4
+        with: information_rate_lag_SELECTED_ms_z
+      - timing_column: time_from_partner_offset_s
+        basis: bs
+        df: 4
+        with: information_rate_lag_SELECTED_ms_z
+    include_prop_expected_cumulative_info: true
+    fit_for_anchors:
+      - fpp
+      - spp
+    pooled_anchor_comparison:
+      enabled: true
+      required: false
 
   mixed_effects:
     enabled: true
@@ -145,9 +170,8 @@ models:
     reference_anchor: spp
     formula: >
       event_bin ~ anchor_type * (
-        z_time_from_partner_onset_s +
-        z_time_from_partner_offset_s +
-        z_time_from_partner_offset_s_squared +
+        bs(time_from_partner_onset_s, df=4) +
+        bs(time_from_partner_offset_s, df=4) +
         information_rate_lag_SELECTED_ms_z +
         prop_expected_cumulative_info_lag_SELECTED_ms_z
       ) + (1 | dyad_id) + (1 | subject_id)
