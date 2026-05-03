@@ -2,3 +2,7 @@ project_info.py
 project_snapshot.md
 src/cas.egg-info
 dev/tmp
+__pycache__/
+*.py[cod]
+.DS_Store
+.snakemake/
