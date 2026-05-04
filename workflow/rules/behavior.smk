@@ -31,6 +31,10 @@ BEHAVIOR_HAZARD_PREDICTOR_OUTPUTS = [
 BEHAVIOR_HAZARD_LAG_OUTPUTS = [
     f"{BEHAVIOR_HAZARD_ROOT}/lag_selection/candidate_lag_scores.csv",
     f"{BEHAVIOR_HAZARD_ROOT}/lag_selection/selected_lag.json",
+    f"{BEHAVIOR_HAZARD_ROOT}/lag_selection/family_lag_summary.csv",
+    f"{BEHAVIOR_HAZARD_ROOT}/lag_selection/family_lag_rankings.csv",
+    f"{BEHAVIOR_HAZARD_ROOT}/lag_selection/family_model_diagnostics.csv",
+    f"{BEHAVIOR_HAZARD_ROOT}/lag_selection/lag_selector_comparison.csv",
 ]
 
 BEHAVIOR_HAZARD_TABLE_OUTPUTS = [
@@ -85,7 +89,9 @@ rule behavior_hazard_risksets:
     shell:
         r"""
         set -euo pipefail
-        PYTHONPATH="{SRC_DIR}:{PROJECT_ROOT}" "{PYTHON_BIN}" -m cas.cli.main behavior hazard build-risksets --config {BEHAVIOR_HAZARD_CONFIG_PATH}
+        printf '%s\n' "[behavior_hazard_risksets] config: {BEHAVIOR_HAZARD_CONFIG_PATH}"
+        printf '%s\n' "[behavior_hazard_risksets] outputs: {output}"
+        PYTHONPATH="{SRC_DIR}:{PROJECT_ROOT}" "{PYTHON_BIN}" -m cas.cli.main behavior hazard build-risksets --config {BEHAVIOR_HAZARD_CONFIG_PATH} --verbose
         """
 
 
@@ -98,7 +104,7 @@ rule behavior_hazard_predictors:
     shell:
         r"""
         set -euo pipefail
-        PYTHONPATH="{SRC_DIR}:{PROJECT_ROOT}" "{PYTHON_BIN}" -m cas.cli.main behavior hazard add-predictors --config {BEHAVIOR_HAZARD_CONFIG_PATH}
+        PYTHONPATH="{SRC_DIR}:{PROJECT_ROOT}" "{PYTHON_BIN}" -m cas.cli.main behavior hazard add-predictors --config {BEHAVIOR_HAZARD_CONFIG_PATH} --verbose
         """
 
 
@@ -111,7 +117,7 @@ rule behavior_hazard_lag_selection:
     shell:
         r"""
         set -euo pipefail
-        PYTHONPATH="{SRC_DIR}:{PROJECT_ROOT}" "{PYTHON_BIN}" -m cas.cli.main behavior hazard select-lag --config {BEHAVIOR_HAZARD_CONFIG_PATH}
+        PYTHONPATH="{SRC_DIR}:{PROJECT_ROOT}" "{PYTHON_BIN}" -m cas.cli.main behavior hazard select-lag --config {BEHAVIOR_HAZARD_CONFIG_PATH} --verbose
         """
 
 
@@ -132,7 +138,7 @@ rule behavior_hazard_models:
     shell:
         r"""
         set -euo pipefail
-        PYTHONPATH="{SRC_DIR}:{PROJECT_ROOT}" "{PYTHON_BIN}" -m cas.cli.main behavior hazard fit-models --config {BEHAVIOR_HAZARD_CONFIG_PATH}
+        PYTHONPATH="{SRC_DIR}:{PROJECT_ROOT}" "{PYTHON_BIN}" -m cas.cli.main behavior hazard fit-models --config {BEHAVIOR_HAZARD_CONFIG_PATH} --verbose
         """
 
 
@@ -155,7 +161,7 @@ rule behavior_hazard_tables:
     shell:
         r"""
         set -euo pipefail
-        PYTHONPATH="{SRC_DIR}:{PROJECT_ROOT}" "{PYTHON_BIN}" -m cas.cli.main behavior hazard tables --config {BEHAVIOR_HAZARD_CONFIG_PATH}
+        PYTHONPATH="{SRC_DIR}:{PROJECT_ROOT}" "{PYTHON_BIN}" -m cas.cli.main behavior hazard tables --config {BEHAVIOR_HAZARD_CONFIG_PATH} --verbose
         """
 
 
@@ -170,7 +176,7 @@ rule behavior_hazard_figures:
     shell:
         r"""
         set -euo pipefail
-        PYTHONPATH="{SRC_DIR}:{PROJECT_ROOT}" "{PYTHON_BIN}" -m cas.cli.main behavior hazard figures --config {BEHAVIOR_HAZARD_CONFIG_PATH}
+        PYTHONPATH="{SRC_DIR}:{PROJECT_ROOT}" "{PYTHON_BIN}" -m cas.cli.main behavior hazard figures --config {BEHAVIOR_HAZARD_CONFIG_PATH} --verbose
         """
 
 
@@ -184,7 +190,7 @@ rule behavior_hazard_qc:
     shell:
         r"""
         set -euo pipefail
-        PYTHONPATH="{SRC_DIR}:{PROJECT_ROOT}" "{PYTHON_BIN}" -m cas.cli.main behavior hazard qc --config {BEHAVIOR_HAZARD_CONFIG_PATH}
+        PYTHONPATH="{SRC_DIR}:{PROJECT_ROOT}" "{PYTHON_BIN}" -m cas.cli.main behavior hazard qc --config {BEHAVIOR_HAZARD_CONFIG_PATH} --verbose
         """
 
 

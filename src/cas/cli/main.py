@@ -15,10 +15,6 @@ from scipy.io import wavfile
 
 from cas.cli.commands.annotations import add_annotations_parser, run_annotations_command
 from cas.cli.commands.behavior_hazard import add_behavior_hazard_parser, run_behavior_hazard_command
-from cas.cli.commands.diagnose_spp_neural_hazard_failure import (
-    add_diagnose_spp_neural_hazard_failure_parser,
-    run_diagnose_spp_neural_hazard_failure_command,
-)
 from cas.cli.commands.info_rate_induced_lmeeg import (
     add_info_rate_induced_lmeeg_parser,
     run_info_rate_induced_lmeeg_command,
@@ -30,10 +26,6 @@ from cas.cli.commands.source_dics_fpp_spp import (
 from cas.cli.commands.plot_source_dics_fpp_spp import (
     add_plot_source_dics_fpp_spp_parser,
     run_plot_source_dics_fpp_spp_command,
-)
-from cas.cli.commands.plot_tde_hmm_qc import (
-    add_plot_tde_hmm_qc_parser,
-    run_plot_tde_hmm_qc_command,
 )
 
 if TYPE_CHECKING:
@@ -309,9 +301,7 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     add_annotations_parser(subparsers)
     add_behavior_hazard_parser(subparsers)
-    add_diagnose_spp_neural_hazard_failure_parser(subparsers)
     add_info_rate_induced_lmeeg_parser(subparsers)
-    add_plot_tde_hmm_qc_parser(subparsers)
     add_source_dics_fpp_spp_parser(subparsers)
     add_plot_source_dics_fpp_spp_parser(subparsers)
 
@@ -1652,16 +1642,12 @@ def main() -> int:
         return run_annotations_command(args)
     if args.command == "behavior":
         return run_behavior_hazard_command(args)
-    if args.command == "diagnose-spp-neural-hazard-failure":
-        return run_diagnose_spp_neural_hazard_failure_command(args)
     if args.command == "info-rate-induced-lmeeg":
         return run_info_rate_induced_lmeeg_command(args)
     if args.command == "source-dics-fpp-spp":
         return run_source_dics_fpp_spp_command(args)
     if args.command == "plot-source-dics-fpp-spp":
         return run_plot_source_dics_fpp_spp_command(args)
-    if args.command == "plot-tde-hmm-qc":
-        return run_plot_tde_hmm_qc_command(args)
     if args.command == "trf":
         return _run_trf(args)
     if args.command == "trf-config":

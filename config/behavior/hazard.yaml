@@ -1,0 +1,100 @@
+paths_config: config/paths.yaml
+
+inputs:
+  events_csv: /Users/hiro/Datasets/working/cas/events/events.csv
+  surprisal_tsv: /Users/hiro/Datasets/hyperscanning-bids/derivatives/converted_lm_features/features/events/**/*desc-lmSurprisal_features.tsv
+
+behavior:
+  hazard:
+    bin_size_ms: 50
+
+    anchor_types:
+      fpp: FPP
+      spp_control: SPP
+
+    candidate_lags_ms: [0, 50, 100, 150, 200, 250, 300, 400, 500]
+
+    lag_selection:
+      dataset: FPP
+      baseline_model_id: A0_timing
+      candidate_model_id: A3_joint_information
+      comparison_metric: delta_log_likelihood
+      selected_lag_rule: max_delta_log_likelihood
+
+    standardization:
+      scope: within_anchor
+      continuous_predictors:
+        - information_rate
+        - prop_expected_cum_info
+        - time_from_partner_onset_s
+        - time_from_partner_offset_s
+
+    controls:
+      - z_time_from_partner_onset_s
+      - z_time_from_partner_offset_s
+      - z_time_from_partner_offset_s_squared
+
+    modeling:
+      use_splines: false
+      run_as_categorical: false
+      backend: r_glmmTMB
+      random_effects:
+        dyad_intercept: true
+        subject_intercept: true
+
+    models:
+      primary_fpp:
+        enabled: true
+        dataset: FPP
+        model_ids:
+          - A0_timing
+          - A1_information_rate
+          - A2_expected_cum_info
+          - A3_joint_information
+
+      fpp_spp_control:
+        enabled: true
+        dataset: pooled_fpp_spp
+        model_ids:
+          - B1_shared_information
+          - B2_anchor_x_information
+
+      timing_moderation:
+        enabled: true
+        dataset: FPP
+        model_ids:
+          - C1_onset_x_rate
+          - C2_offset_x_rate
+
+      exploratory_three_way:
+        enabled: false
+        dataset: pooled_fpp_spp
+        model_ids:
+          - D1_two_way_reference
+          - D2_three_way
+
+    diagnostics:
+      convergence: true
+      collinearity: true
+      event_rate_summary: true
+      lag_sensitivity: true
+      leave_one_subject_out: false
+
+    figures:
+      main:
+        lag_selection: true
+        primary_information_effects: true
+        timing_information_heatmaps: true
+        three_way_interaction: false
+
+      supplementary:
+        lag_sensitivity: true
+        extra_timing_maps: true
+        three_way_interaction: true
+        leave_one_subject_out: false
+
+      qc:
+        event_rates: true
+        bins_by_subject: true
+        collinearity: true
+        model_convergence: true

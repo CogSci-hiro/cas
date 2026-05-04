@@ -510,7 +510,7 @@ INFO_RATE_INDUCED_LMEEEG_OUTPUT_DIR = _resolve_erp_output_dir(
 )
 INFO_RATE_INDUCED_LMEEEG_BEHAVIOUR_RISKSET_INPUT = _resolve_erp_input_path(
     _INFO_RATE_INDUCED_LMEEEG_INPUT.get("behaviour_riskset_path"),
-    "reports/hazard_behavior_final/fpp_vs_spp/combined_riskset.parquet",
+    "behavior/hazard/risksets/pooled_fpp_spp.parquet",
 )
 INFO_RATE_INDUCED_LMEEEG_OUTPUTS = [
     f"{INFO_RATE_INDUCED_LMEEEG_OUTPUT_DIR}/induced_power_trials.parquet",

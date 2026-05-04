@@ -23,7 +23,7 @@ def _write_analysis_yaml(config_path: Path, induced_source_epochs_dir: str) -> N
         "analysis_name": "info_rate_induced_lmeeg",
         "input": {
             "induced_source_epochs_dir": induced_source_epochs_dir,
-            "behaviour_riskset_path": "reports/hazard_behavior_final/fpp_vs_spp/combined_riskset.parquet",
+            "behaviour_riskset_path": "behavior/hazard/risksets/pooled_fpp_spp.parquet",
         },
         "output": {"out_dir": "results/info_rate_induced_lmeeg"},
         "windows": {
@@ -50,7 +50,7 @@ def test_derivatives_prefixed_induced_dir_is_normalized_against_derivatives_root
     project_root = tmp_path / "project"
     derivatives_root = tmp_path / "derivatives_root"
     (derivatives_root / "induced_source_epochs").mkdir(parents=True, exist_ok=True)
-    (derivatives_root / "reports" / "hazard_behavior_final" / "fpp_vs_spp").mkdir(parents=True, exist_ok=True)
+    (derivatives_root / "behavior" / "hazard" / "risksets").mkdir(parents=True, exist_ok=True)
 
     _write_paths_yaml(project_root, derivatives_root)
     config_path = project_root / "config" / "info_rate_induced_lmeeg.yaml"
@@ -64,7 +64,7 @@ def test_plain_induced_dir_is_resolved_against_derivatives_root(tmp_path: Path) 
     project_root = tmp_path / "project"
     derivatives_root = tmp_path / "derivatives_root"
     (derivatives_root / "induced_source_epochs").mkdir(parents=True, exist_ok=True)
-    (derivatives_root / "reports" / "hazard_behavior_final" / "fpp_vs_spp").mkdir(parents=True, exist_ok=True)
+    (derivatives_root / "behavior" / "hazard" / "risksets").mkdir(parents=True, exist_ok=True)
 
     _write_paths_yaml(project_root, derivatives_root)
     config_path = project_root / "config" / "info_rate_induced_lmeeg.yaml"
@@ -78,7 +78,7 @@ def test_trial_metadata_allows_missing_planned_total_info_column(tmp_path: Path)
     project_root = tmp_path / "project"
     derivatives_root = tmp_path / "derivatives_root"
     (derivatives_root / "induced_source_epochs").mkdir(parents=True, exist_ok=True)
-    (derivatives_root / "reports" / "hazard_behavior_final" / "fpp_vs_spp").mkdir(parents=True, exist_ok=True)
+    (derivatives_root / "behavior" / "hazard" / "risksets").mkdir(parents=True, exist_ok=True)
     _write_paths_yaml(project_root, derivatives_root)
     config_path = project_root / "config" / "info_rate_induced_lmeeg.yaml"
     _write_analysis_yaml(config_path, "induced_source_epochs")

@@ -252,7 +252,7 @@ def load_info_rate_induced_lmeeg_config(config_path: Path) -> InfoRateInducedLmE
             str(
                 input_payload.get(
                     "behaviour_riskset_path",
-                    "reports/hazard_behavior_final/fpp_vs_spp/combined_riskset.parquet",
+                    "behavior/hazard/risksets/pooled_fpp_spp.parquet",
                 )
             ),
             project_root=project_root,

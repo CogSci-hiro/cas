@@ -2,7 +2,7 @@ analysis_name: "info_rate_induced_lmeeg"
 
 input:
   induced_source_epochs_dir: "induced_source_epochs"
-  behaviour_riskset_path: "reports/hazard_behavior_final/fpp_vs_spp/combined_riskset.parquet"
+  behaviour_riskset_path: "behavior/hazard/risksets/pooled_fpp_spp.parquet"
   metadata_query: "event_lock == 'onset' and event_role == 'self' and event_family in ['fpp', 'spp']"
 
 output:
