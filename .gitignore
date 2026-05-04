@@ -1,7 +1,8 @@
 project_info.py
 project_snapshot.md
 src/cas.egg-info
-dev/tmp
+dev
+.venv
 __pycache__/
 *.py[cod]
 *$py.class
