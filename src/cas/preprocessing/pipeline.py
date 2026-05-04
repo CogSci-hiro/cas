@@ -53,8 +53,9 @@ def _save_intermediate_raw(
     if intermediates_dir is None:
         return None
 
-    intermediates_dir.mkdir(parents=True, exist_ok=True)
-    output_path = intermediates_dir / f"{step_index:02d}_{step_name}_raw.fif"
+    output_dir = intermediates_dir / f"{step_index:02d}_{step_name}" / step_name
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / "raw.fif"
     raw.save(output_path, overwrite=True, verbose="ERROR")
     return str(output_path)
 

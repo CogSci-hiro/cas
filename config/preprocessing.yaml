@@ -30,11 +30,15 @@ preprocessing:
     - "(?i)\\bemg\\b"
 
   # EEG processing defaults
-  target_sampling_rate_hz: 32.0
+  target_sampling_rate_hz: 64.0
   low_cut_hz: 0.1
-  high_cut_hz: 15.0
+  high_cut_hz: 30.0
   interpolate_bad_channels: true
   apply_rereference: true
+  final_dir: "{paths.preprocessing}/eeg"
+  intermediate_dir: "{paths.preprocessing}/eeg_verbose"
+  tables_dir: "{paths.preprocessing}/tables"
+  qc_dir: "{paths.preprocessing}/qc"
   save_intermediates: false
 
   # Apply precomputed ICA. When enabled, preprocessing now fails if the

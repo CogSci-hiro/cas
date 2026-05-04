@@ -47,10 +47,13 @@ def test_info_rate_induced_lmeeg_config_contains_core_model_terms() -> None:
 
 
 def test_preprocess_workflow_tracks_preprocessing_config() -> None:
-    preprocess_text = Path("workflow/rules/preprocess.smk").read_text(encoding="utf-8")
+    preprocess_text = Path("workflow/rules/preprocessing.smk").read_text(encoding="utf-8")
+    wrapper_text = Path("workflow/rules/preprocess.smk").read_text(encoding="utf-8")
 
     assert "rule preprocess_eeg:" in preprocess_text
     assert "config=PREPROCESSING_CONFIG_PATH" in preprocess_text
+    assert "rule aggregate_preprocessing_qc:" in preprocess_text
+    assert 'include: "preprocessing.smk"' in wrapper_text
 
 
 def test_lmeeeg_workflow_tracks_evoked_duration_qc_outputs() -> None:

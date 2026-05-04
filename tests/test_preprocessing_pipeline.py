@@ -10,6 +10,7 @@ from cas.annotations.io import write_textgrid
 from cas.annotations.models import Interval, TextGrid, Tier
 import cas.preprocessing.pipeline as preprocessing_pipeline
 from cas.preprocessing.pipeline import preprocess_raw, preprocess_run
+from cas.cli.main import _build_parser
 
 
 def test_preprocess_raw_interpolates_bads_without_digitization() -> None:
@@ -221,6 +222,26 @@ def test_preprocess_run_saves_only_requested_intermediate_steps(
     ]
     for item in result.summary["intermediate_files"]:
         assert Path(item["path"]).exists()
+
+
+def test_cli_exposes_grouped_preprocess_eeg_command() -> None:
+    parser = _build_parser()
+    args = parser.parse_args(
+        [
+            "preprocess",
+            "eeg",
+            "--input",
+            "input.edf",
+            "--output",
+            "output.fif",
+            "--config",
+            "config/preprocessing.yaml",
+        ]
+    )
+
+    assert args.command == "preprocess"
+    assert args.preprocess_command == "eeg"
+    assert args.config == "config/preprocessing.yaml"
 
 
 def _make_eeg_emg_raw() -> mne.io.BaseRaw:

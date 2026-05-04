@@ -128,9 +128,18 @@ def _trf_spp_onset_control_subjects():
             continue
         subject_to_runs.setdefault(subject, set()).add(run)
 
-    return sorted(
-        [subject for subject, subject_runs in subject_to_runs.items() if subject_runs == set(RUNS)]
-    )
+    eligible_subjects = []
+    for subject, subject_runs in subject_to_runs.items():
+        if subject_runs != set(RUNS):
+            continue
+        subject_number = int(subject)
+        partner_number = subject_number + 1 if subject_number % 2 == 1 else subject_number - 1
+        partner_subject = f"{partner_number:03d}"
+        if subject_to_runs.get(partner_subject) != set(RUNS):
+            continue
+        eligible_subjects.append(subject)
+
+    return sorted(eligible_subjects)
 
 TRF_SPP_ONSET_CONTROL_ANALYSIS_ID = TRF_SPP_ONSET_CONTROL_CONFIG["trf"]["analysis_id"]
 TRF_SPP_ONSET_CONTROL_SUBJECTS = _trf_spp_onset_control_subjects()

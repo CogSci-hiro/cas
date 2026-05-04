@@ -1,36 +1,37 @@
 # Shared project paths used across the workflow.
-# These are logical project roots, not necessarily absolute filesystem paths.
+# Keep legacy flat keys for backward compatibility while gradually moving
+# modules onto `output_dir` plus the structured `paths:` namespace.
 
-# Repository root. Relative paths below are interpreted from here.
 project_root: "."
-
-# Root of the raw BIDS dataset. All primary inputs should be discovered from
-# this directory, so this config intentionally assumes a BIDS-only workflow.
 bids_root: "/Users/hiro/Datasets/hyperscanning-bids"
-
-# Top-level root for generated analysis outputs.
-derivatives_root: "/Users/hiro/Datasets/working/cas"
-
-# Root for subject-level extracted features such as envelopes or onsets.
-features_root: "/Users/hiro/Datasets/working/cas/derivatives/features"
-
-# Root for EEG arrays exported from raw BIDS EEG files for downstream models.
-eeg_array_root: "/Users/hiro/Datasets/working/cas/derivatives/eeg"
-
-# Root for filtered / preprocessed raw EEG derivatives saved as FIF files.
-preprocessed_eeg_root: "/Users/hiro/Datasets/working/cas/derivatives/preprocessed_eeg"
-
-# Root containing precomputed ICA models used during preprocessing.
-ica_dir: "/Users/hiro/Datasets/working/hyperscanning/precomputed_ica"
-
-# Root for TRF model outputs, organized further by analysis_id.
-trf_root: "/Users/hiro/Datasets/working/cas/derivatives/trf"
-
-# Root for human-readable summaries, figures, and reports.
-reports_root: "/Users/hiro/Datasets/working/cas/reports"
-
-# Root containing validated TextGrid annotation files used for canonical event extraction.
 annotations_dir: "/Users/hiro/Datasets/hyperscanning-bids/derivatives/anais"
-
-# Root for LM based feature data
+ica_dir: "/Users/hiro/Datasets/working/hyperscanning/precomputed_ica"
 lm_feature_dir: "/Users/hiro/Datasets/hyperscanning-bids/derivatives/converted_lm_features/features/events"
+
+output_dir: "/Users/hiro/Datasets/working/cas-refactoring"
+
+paths:
+  logs: "{output_dir}/logs"
+  cache: "{output_dir}/cache"
+  manifests: "{output_dir}/manifests"
+  preprocessing: "{output_dir}/preprocessing"
+  events: "{output_dir}/events"
+  features: "{output_dir}/features"
+  epochs: "{output_dir}/epochs"
+  behavior: "{output_dir}/behavior"
+  induced: "{output_dir}/induced"
+  amplitude: "{output_dir}/amplitude"
+  trf: "{output_dir}/trf"
+  figures: "{output_dir}/figures"
+  figures_main: "{output_dir}/figures/main"
+  figures_supp: "{output_dir}/figures/supp"
+  figures_qc: "{output_dir}/figures/qc"
+  archive: "{output_dir}/archive"
+
+# Legacy compatibility keys still consumed by non-preprocessing code.
+derivatives_root: "/Users/hiro/Datasets/working/cas"
+features_root: "/Users/hiro/Datasets/working/cas/features"
+eeg_array_root: "/Users/hiro/Datasets/working/cas/eeg"
+preprocessed_eeg_root: "/Users/hiro/Datasets/working/cas/preprocessing/eeg"
+trf_root: "/Users/hiro/Datasets/working/cas/trf"
+reports_root: "/Users/hiro/Datasets/working/cas/figures"

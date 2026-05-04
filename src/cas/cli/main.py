@@ -216,6 +216,150 @@ def _save_json(data: dict[str, object], output_path_str: str) -> Path:
     return output_path
 
 
+def _add_preprocess_eeg_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    output_required: bool,
+    include_config: bool = False,
+) -> None:
+    if include_config:
+        parser.add_argument(
+            "--config",
+            default="config/preprocessing.yaml",
+            help="Optional preprocessing config path for CLI parity with workflow usage.",
+        )
+        parser.add_argument(
+            "--paths-config",
+            default="config/paths.yaml",
+            help="Optional project paths config path for CLI parity with workflow usage.",
+        )
+    parser.add_argument("--input", required=True, help="Input EEG .edf or .fif path.")
+    parser.add_argument("--output", required=output_required, help="Output preprocessed .fif path.")
+    parser.add_argument(
+        "--subject-id",
+        default=None,
+        help="Optional subject id stored in the preprocessing summary, e.g. sub-001.",
+    )
+    parser.add_argument(
+        "--task",
+        default=None,
+        help="Optional task label stored in the preprocessing summary.",
+    )
+    parser.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional run identifier stored in the preprocessing summary.",
+    )
+    parser.add_argument(
+        "--dyad-id",
+        default=None,
+        help="Optional dyad identifier stored in the preprocessing summary.",
+    )
+    parser.add_argument(
+        "--annotations-path",
+        default=None,
+        help="Optional annotation TextGrid path used to derive events before MNE fallback.",
+    )
+    parser.add_argument(
+        "--channels-tsv",
+        default=None,
+        help="Optional BIDS channels.tsv path used to load bad channels.",
+    )
+    parser.add_argument(
+        "--ica-path",
+        default=None,
+        help="Optional precomputed ICA .fif path.",
+    )
+    parser.add_argument(
+        "--target-sfreq-hz",
+        type=float,
+        default=None,
+        help="Optional target sampling rate in Hz.",
+    )
+    parser.add_argument(
+        "--low-cut-hz",
+        type=float,
+        default=None,
+        help="Optional high-pass cutoff in Hz.",
+    )
+    parser.add_argument(
+        "--high-cut-hz",
+        type=float,
+        default=None,
+        help="Optional low-pass cutoff in Hz.",
+    )
+    parser.add_argument(
+        "--montage",
+        default="standard_1020",
+        help="Montage name applied to EEG channels. Use an empty string to skip.",
+    )
+    parser.add_argument(
+        "--annotation-pairing-margin-s",
+        type=float,
+        default=1.0,
+        help="Pairing margin used when deriving events from annotations.",
+    )
+    parser.add_argument(
+        "--eeg-channel-name",
+        action="append",
+        default=[],
+        help="Explicit channel name to force into the EEG set. Repeat as needed.",
+    )
+    parser.add_argument(
+        "--eeg-channel-pattern",
+        action="append",
+        default=[],
+        help="Regex pattern used to identify EEG channels. Repeat as needed.",
+    )
+    parser.add_argument(
+        "--emg-channel-name",
+        action="append",
+        default=[],
+        help="Explicit channel name to force into the EMG set. Repeat as needed.",
+    )
+    parser.add_argument(
+        "--emg-channel-pattern",
+        action="append",
+        default=[],
+        help="Regex pattern used to identify EMG channels. Repeat as needed.",
+    )
+    parser.add_argument(
+        "--emg-output",
+        default=None,
+        help="Optional EMG artifact .npz output path.",
+    )
+    parser.add_argument(
+        "--events-output",
+        default=None,
+        help="Optional preprocessing events .tsv output path.",
+    )
+    parser.add_argument(
+        "--summary-json",
+        default=None,
+        help="Optional preprocessing summary .json output path.",
+    )
+    parser.add_argument(
+        "--intermediates-dir",
+        default=None,
+        help="Optional directory for intermediate EEG FIF snapshots.",
+    )
+    parser.add_argument(
+        "--skip-interpolate-bads",
+        action="store_true",
+        help="Skip bad channel interpolation.",
+    )
+    parser.add_argument(
+        "--skip-rereference",
+        action="store_true",
+        help="Skip average rereferencing.",
+    )
+    parser.add_argument(
+        "--skip-emg",
+        action="store_true",
+        help="Do not preserve EMG channels as a separate NPZ artifact.",
+    )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="cas", description="CAS command line interface.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -387,115 +531,56 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Optional JSON sidecar path for F0 metadata.",
     )
 
+    acoustic_envelope_parser = subparsers.add_parser(
+        "acoustic-envelope",
+        help="Extract only the VoxAtlas frame-aligned speech envelope from a WAV file.",
+    )
+    acoustic_envelope_parser.add_argument("--input", required=True, help="Input .wav path.")
+    acoustic_envelope_parser.add_argument("--config", required=True, help="Path to config/acoustic.yaml.")
+    acoustic_envelope_parser.add_argument(
+        "--output",
+        required=True,
+        help="Output .npy path for the frame-aligned envelope values.",
+    )
+    acoustic_envelope_parser.add_argument(
+        "--summary-json",
+        default=None,
+        help="Optional JSON sidecar path for envelope metadata.",
+    )
+
+    acoustic_f0_parser = subparsers.add_parser(
+        "acoustic-f0",
+        help="Extract only the VoxAtlas frame-aligned F0 from a WAV file.",
+    )
+    acoustic_f0_parser.add_argument("--input", required=True, help="Input .wav path.")
+    acoustic_f0_parser.add_argument("--config", required=True, help="Path to config/acoustic.yaml.")
+    acoustic_f0_parser.add_argument(
+        "--output",
+        required=True,
+        help="Output .npy path for the frame-aligned F0 values.",
+    )
+    acoustic_f0_parser.add_argument(
+        "--summary-json",
+        default=None,
+        help="Optional JSON sidecar path for F0 metadata.",
+    )
+
     preprocess_raw_parser = subparsers.add_parser(
         "preprocess-raw",
         help="Run the EEG preprocessing pipeline and save the result as .fif.",
     )
-    preprocess_raw_parser.add_argument("--input", required=True, help="Input EEG .edf or .fif path.")
-    preprocess_raw_parser.add_argument("--output", required=True, help="Output preprocessed .fif path.")
-    preprocess_raw_parser.add_argument(
-        "--annotations-path",
-        default=None,
-        help="Optional annotation TextGrid path used to derive events before MNE fallback.",
+    _add_preprocess_eeg_arguments(preprocess_raw_parser, output_required=True)
+
+    preprocess_parser = subparsers.add_parser(
+        "preprocess",
+        help="Grouped preprocessing commands.",
     )
-    preprocess_raw_parser.add_argument(
-        "--channels-tsv",
-        default=None,
-        help="Optional BIDS channels.tsv path used to load bad channels.",
+    preprocess_subparsers = preprocess_parser.add_subparsers(dest="preprocess_command", required=True)
+    preprocess_eeg_parser = preprocess_subparsers.add_parser(
+        "eeg",
+        help="Run the EEG preprocessing pipeline and save the result as .fif.",
     )
-    preprocess_raw_parser.add_argument(
-        "--ica-path",
-        default=None,
-        help="Optional precomputed ICA .fif path.",
-    )
-    preprocess_raw_parser.add_argument(
-        "--target-sfreq-hz",
-        type=float,
-        default=None,
-        help="Optional target sampling rate in Hz.",
-    )
-    preprocess_raw_parser.add_argument(
-        "--low-cut-hz",
-        type=float,
-        default=None,
-        help="Optional high-pass cutoff in Hz.",
-    )
-    preprocess_raw_parser.add_argument(
-        "--high-cut-hz",
-        type=float,
-        default=None,
-        help="Optional low-pass cutoff in Hz.",
-    )
-    preprocess_raw_parser.add_argument(
-        "--montage",
-        default="standard_1020",
-        help="Montage name applied to EEG channels. Use an empty string to skip.",
-    )
-    preprocess_raw_parser.add_argument(
-        "--annotation-pairing-margin-s",
-        type=float,
-        default=1.0,
-        help="Pairing margin used when deriving events from annotations.",
-    )
-    preprocess_raw_parser.add_argument(
-        "--eeg-channel-name",
-        action="append",
-        default=[],
-        help="Explicit channel name to force into the EEG set. Repeat as needed.",
-    )
-    preprocess_raw_parser.add_argument(
-        "--eeg-channel-pattern",
-        action="append",
-        default=[],
-        help="Regex pattern used to identify EEG channels. Repeat as needed.",
-    )
-    preprocess_raw_parser.add_argument(
-        "--emg-channel-name",
-        action="append",
-        default=[],
-        help="Explicit channel name to force into the EMG set. Repeat as needed.",
-    )
-    preprocess_raw_parser.add_argument(
-        "--emg-channel-pattern",
-        action="append",
-        default=[],
-        help="Regex pattern used to identify EMG channels. Repeat as needed.",
-    )
-    preprocess_raw_parser.add_argument(
-        "--emg-output",
-        default=None,
-        help="Optional EMG artifact .npz output path.",
-    )
-    preprocess_raw_parser.add_argument(
-        "--events-output",
-        default=None,
-        help="Optional preprocessing events .tsv output path.",
-    )
-    preprocess_raw_parser.add_argument(
-        "--summary-json",
-        default=None,
-        help="Optional preprocessing summary .json output path.",
-    )
-    preprocess_raw_parser.add_argument(
-        "--intermediates-dir",
-        default=None,
-        help="Optional directory for intermediate EEG FIF snapshots.",
-    )
-    preprocess_raw_parser.add_argument(
-        "--skip-interpolate-bads",
-        action="store_true",
-        help="Skip bad channel interpolation.",
-    )
-    preprocess_raw_parser.add_argument(
-        "--skip-rereference",
-        action="store_true",
-        help="Skip average rereferencing.",
-    )
-    preprocess_raw_parser.add_argument(
-        "--skip-emg",
-        action="store_true",
-        help="Do not preserve EMG channels as a separate NPZ artifact.",
-    )
+    _add_preprocess_eeg_arguments(preprocess_eeg_parser, output_required=True, include_config=True)
 
     downsample_raw_parser = subparsers.add_parser(
         "downsample-raw",
@@ -775,6 +860,78 @@ def _run_acoustic_features(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_acoustic_envelope(args: argparse.Namespace) -> int:
+    from cas.features.voxatlas import (
+        build_feature_summary,
+        extract_acoustic_envelope,
+        load_mono_audio,
+    )
+
+    config = _load_yaml(Path(args.config))
+    signal, sampling_rate_hz = load_mono_audio(args.input)
+    bundle_sampling_rate_hz, result = extract_acoustic_envelope(
+        signal,
+        sampling_rate_hz,
+        config,
+        source_path=args.input,
+    )
+
+    output_path = Path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    np.save(output_path, result.values)
+    print(f"Saved envelope to {output_path}")
+
+    if args.summary_json:
+        summary_output_path = _save_json(
+            build_feature_summary(
+                input_path=args.input,
+                output_path=output_path,
+                sampling_rate_hz=bundle_sampling_rate_hz,
+                result=result,
+            ),
+            args.summary_json,
+        )
+        print(f"Saved envelope summary to {summary_output_path}")
+
+    return 0
+
+
+def _run_acoustic_f0(args: argparse.Namespace) -> int:
+    from cas.features.voxatlas import (
+        build_feature_summary,
+        extract_acoustic_f0,
+        load_mono_audio,
+    )
+
+    config = _load_yaml(Path(args.config))
+    signal, sampling_rate_hz = load_mono_audio(args.input)
+    bundle_sampling_rate_hz, result = extract_acoustic_f0(
+        signal,
+        sampling_rate_hz,
+        config,
+        source_path=args.input,
+    )
+
+    output_path = Path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    np.save(output_path, result.values)
+    print(f"Saved F0 to {output_path}")
+
+    if args.summary_json:
+        summary_output_path = _save_json(
+            build_feature_summary(
+                input_path=args.input,
+                output_path=output_path,
+                sampling_rate_hz=bundle_sampling_rate_hz,
+                result=result,
+            ),
+            args.summary_json,
+        )
+        print(f"Saved F0 summary to {summary_output_path}")
+
+    return 0
+
+
 def _run_eeg_array(args: argparse.Namespace) -> int:
     raw = _load_raw_eeg(args.input)
     raw.pick("eeg")
@@ -830,6 +987,7 @@ def _run_preprocess_raw(args: argparse.Namespace) -> int:
     output_path = _save_raw_fif(result.eeg_raw, args.output)
     print(f"Saved preprocessed raw to {output_path}")
 
+    emg_output_path: Path | None = None
     if args.emg_output:
         emg_output_path = _save_npz(
             args.emg_output,
@@ -838,12 +996,27 @@ def _run_preprocess_raw(args: argparse.Namespace) -> int:
         )
         print(f"Saved EMG artifact to {emg_output_path}")
 
+    events_output_path: Path | None = None
     if args.events_output:
         events_output_path = write_events_tsv(result.events_rows, args.events_output)
         print(f"Saved preprocessing events to {events_output_path}")
 
     if args.summary_json:
-        summary_output_path = _save_json(result.summary, args.summary_json)
+        summary_payload = dict(result.summary)
+        summary_payload.update(
+            {
+                "subject_id": args.subject_id,
+                "task": args.task,
+                "run": args.run_id,
+                "dyad_id": args.dyad_id,
+                "input_path": str(Path(args.input)),
+                "eeg_output_path": str(output_path),
+                "emg_output_path": str(emg_output_path) if emg_output_path is not None else "",
+                "events_output_path": str(events_output_path) if events_output_path is not None else "",
+                "save_intermediates": bool(args.intermediates_dir),
+            }
+        )
+        summary_output_path = _save_json(summary_payload, args.summary_json)
         print(f"Saved preprocessing summary to {summary_output_path}")
 
     return 0
@@ -1604,7 +1777,13 @@ def main() -> int:
         return _run_envelope(args)
     if args.command == "acoustic-features":
         return _run_acoustic_features(args)
+    if args.command == "acoustic-envelope":
+        return _run_acoustic_envelope(args)
+    if args.command == "acoustic-f0":
+        return _run_acoustic_f0(args)
     if args.command == "preprocess-raw":
+        return _run_preprocess_raw(args)
+    if args.command == "preprocess" and args.preprocess_command == "eeg":
         return _run_preprocess_raw(args)
     if args.command == "downsample-raw":
         return _run_downsample_raw(args)

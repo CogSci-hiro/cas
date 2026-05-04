@@ -133,6 +133,70 @@ def extract_acoustic_features(
     )
 
 
+def extract_acoustic_envelope(
+    signal: np.ndarray,
+    sampling_rate_hz: float,
+    config: dict,
+    *,
+    source_path: str | None = None,
+) -> tuple[float, AcousticVectorResult]:
+    """Extract only the frame-aligned envelope using the VoxAtlas envelope pipeline."""
+    acoustic_config = config.get("acoustic", config)
+    if not isinstance(acoustic_config, dict):
+        raise ValueError("Acoustic config must be a mapping.")
+
+    envelope_config = acoustic_config.get("envelope", {})
+    if not isinstance(envelope_config, dict):
+        raise ValueError("Acoustic config must define a mapping entry for 'envelope'.")
+
+    feature_input = _build_feature_input(signal, sampling_rate_hz, source_path)
+    envelope_params = {
+        "frame_length": float(envelope_config.get("frame_length_s", 0.025)),
+        "frame_step": float(envelope_config.get("frame_step_s", 0.010)),
+        "smoothing": int(envelope_config.get("smoothing", 1)),
+        "peak_threshold": float(envelope_config.get("peak_threshold", 0.1)),
+    }
+    envelope_output = HilbertEnvelope().compute(feature_input, envelope_params)
+    return float(sampling_rate_hz), AcousticVectorResult(
+        feature_name=str(envelope_config.get("extractor", envelope_output.feature)),
+        time_s=np.asarray(envelope_output.time, dtype=np.float32),
+        values=np.asarray(envelope_output.values, dtype=np.float32),
+        params=envelope_params,
+    )
+
+
+def extract_acoustic_f0(
+    signal: np.ndarray,
+    sampling_rate_hz: float,
+    config: dict,
+    *,
+    source_path: str | None = None,
+) -> tuple[float, AcousticVectorResult]:
+    """Extract only frame-aligned F0 using the VoxAtlas pitch pipeline."""
+    acoustic_config = config.get("acoustic", config)
+    if not isinstance(acoustic_config, dict):
+        raise ValueError("Acoustic config must be a mapping.")
+
+    f0_config = acoustic_config.get("f0", {})
+    if not isinstance(f0_config, dict):
+        raise ValueError("Acoustic config must define a mapping entry for 'f0'.")
+
+    feature_input = _build_feature_input(signal, sampling_rate_hz, source_path)
+    f0_params = {
+        "fmin": float(f0_config.get("fmin_hz", 75.0)),
+        "fmax": float(f0_config.get("fmax_hz", 500.0)),
+        "frame_length": float(f0_config.get("frame_length_s", 0.040)),
+        "frame_step": float(f0_config.get("frame_step_s", 0.010)),
+    }
+    f0_output = F0Extractor().compute(feature_input, f0_params)
+    return float(sampling_rate_hz), AcousticVectorResult(
+        feature_name=str(f0_config.get("extractor", f0_output.feature)),
+        time_s=np.asarray(f0_output.time, dtype=np.float32),
+        values=np.asarray(f0_output.values, dtype=np.float32),
+        params=f0_params,
+    )
+
+
 def build_feature_summary(
     *,
     input_path: str | Path,

@@ -207,7 +207,7 @@ TRF_COEF_OUTPUTS = expand(TRF_COEF_PATTERN, subject=TRF_SUBJECTS)
 include: "rules/dataset.smk"
 include: "rules/features.smk"
 include: "rules/events.smk"
-include: "rules/preprocess.smk"
+include: "rules/preprocessing.smk"
 include: "rules/trf.smk"
 include: "rules/action_models.smk"
 include: "rules/erp.smk"
