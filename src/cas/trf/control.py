@@ -64,7 +64,7 @@ def _resolve_path(path_like: str | Path, *, project_root: Path, config_root: Pat
     path = Path(path_like)
     if path.is_absolute():
         return path
-    repo_candidate = (config_root.parent / path).resolve()
+    repo_candidate = (_discover_config_root(config_root).parent / path).resolve()
     if repo_candidate.exists():
         return repo_candidate
     project_candidate = (project_root / path).resolve()
@@ -73,8 +73,15 @@ def _resolve_path(path_like: str | Path, *, project_root: Path, config_root: Pat
     return (config_root / path).resolve()
 
 
+def _discover_config_root(start: Path) -> Path:
+    for candidate in (start, *start.parents):
+        if (candidate / "paths.yaml").exists():
+            return candidate
+    return start
+
+
 def _load_paths_config(config_root: Path) -> dict[str, Any]:
-    paths_path = config_root / "paths.yaml"
+    paths_path = _discover_config_root(config_root) / "paths.yaml"
     return _load_yaml(paths_path)
 
 
@@ -288,7 +295,7 @@ def fit_spp_onset_control_subject(
     project_root_path = Path(project_root).resolve()
     config_path = Path(config_path).resolve()
     trf_config = _load_yaml(config_path)
-    config_root = config_path.parent
+    config_root = _discover_config_root(config_path.parent)
     trf_section = dict(trf_config.get("trf") or {})
     timing_cfg = dict(trf_section.get("timing") or {})
     cv_cfg = dict(trf_section.get("cv") or {})

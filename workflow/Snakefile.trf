@@ -2,7 +2,6 @@
 #                         CAS TRF / ENVELOPE SNAKEFILE
 ###############################################################################
 
-import csv
 import os
 import yaml
 
@@ -10,8 +9,7 @@ PROJECT_ROOT = "/Users/hiro/Projects/active/cas"
 SRC_DIR = f"{PROJECT_ROOT}/src"
 CONFIG_DIR = f"{PROJECT_ROOT}/config"
 PATHS_CONFIG_PATH = f"{CONFIG_DIR}/paths.yaml"
-TRF_CONFIG_PATH = f"{CONFIG_DIR}/trf.yaml"
-DYADS_CSV_PATH = f"{CONFIG_DIR}/dyads.csv"
+TRF_CONFIG_PATH = f"{CONFIG_DIR}/trf/trf_surprisal.yaml"
 
 TASKS = ["conversation"]
 RUNS = ["1", "2", "3", "4", "5", "6", "7", "8"]
@@ -41,10 +39,10 @@ TRF_ANALYSIS_ID = TRF_CONFIG["trf"]["analysis_id"]
 TRF_OUTPUT_ROOT = os.path.join(TRF_ROOT, TRF_CONFIG["trf"]["output"]["root"].format(analysis_id=TRF_ANALYSIS_ID))
 
 
-def _load_partner_map(dyads_csv_path):
-    with open(dyads_csv_path, encoding="utf-8") as f:
-        rows = csv.DictReader(f)
-        return {row["subject_id"]: row["partner_id"] for row in rows}
+def _canonical_partner_id(subject_id):
+    subject_number = int(str(subject_id).replace("sub-", "", 1))
+    partner_number = subject_number + 1 if subject_number % 2 == 1 else subject_number - 1
+    return f"sub-{partner_number:03d}"
 
 
 def _discover_audio_records():
@@ -74,8 +72,11 @@ def _discover_audio_records():
     return records
 
 
-PARTNER_MAP = _load_partner_map(DYADS_CSV_PATH)
 AUDIO_RECORDS = _discover_audio_records()
+PARTNER_MAP = {
+    f"sub-{record['subject']}": _canonical_partner_id(f"sub-{record['subject']}")
+    for record in AUDIO_RECORDS
+}
 AUDIO_RECORD_SUBJECTS = [record["subject"] for record in AUDIO_RECORDS]
 AUDIO_RECORD_TASKS = [record["task"] for record in AUDIO_RECORDS]
 AUDIO_RECORD_RUNS = [record["run"] for record in AUDIO_RECORDS]
@@ -153,7 +154,7 @@ def trf_input_files(wildcards):
         os.path.join(EEG_ARRAY_ROOT, TRF_TARGET_PATH_TEMPLATE.format(subject=subject_id, run=run))
         for run in RUNS
     ]
-    return [TRF_CONFIG_PATH, DYADS_CSV_PATH] + subject_envelopes + partner_envelopes + eeg_runs
+    return [TRF_CONFIG_PATH] + subject_envelopes + partner_envelopes + eeg_runs
 
 
 rule fit_trf:

@@ -51,7 +51,7 @@ def trf_input_files(wildcards):
     )
     eeg_inputs = [_trf_target_run_path(subject_id, run) for run in RUNS]
 
-    return [TRF_CONFIG_PATH, DYADS_CSV_PATH] + envelope_inputs + partner_envelope_inputs + eeg_inputs
+    return [TRF_CONFIG_PATH] + envelope_inputs + partner_envelope_inputs + eeg_inputs
 
 
 rule fit_trf:
@@ -73,7 +73,7 @@ rule fit_trf:
         """
 
 
-TRF_SPP_ONSET_CONTROL_CONFIG_PATH = f"{CONFIG_DIR}/trf_spp_onset_control.yaml"
+TRF_SPP_ONSET_CONTROL_CONFIG_PATH = f"{CONFIG_DIR}/trf/spp_onset_control.yaml"
 with open(TRF_SPP_ONSET_CONTROL_CONFIG_PATH, encoding="utf-8") as f:
     TRF_SPP_ONSET_CONTROL_CONFIG = yaml.safe_load(f) or {}
 TRF_SPP_ONSET_CONTROL_DATASET_CONFIG_PATH = f"{CONFIG_DIR}/dataset.yaml"

@@ -86,7 +86,7 @@ def resolve_forward_model(config: SourceDicsConfig, *, info=None):
 
     Usage example
     -------------
-    >>> cfg = load_source_dics_config("config/source_dics_fpp_spp_alpha_beta.yaml")  # doctest: +SKIP
+    >>> cfg = load_source_dics_config("config/induced/source_localisation.yaml")  # doctest: +SKIP
     >>> resolve_forward_model(cfg)  # doctest: +SKIP
     """
 

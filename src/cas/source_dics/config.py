@@ -36,6 +36,13 @@ def _resolve_path(path_value: str | None, *, config_dir: Path) -> Path | None:
     return (config_dir / path).resolve()
 
 
+def _discover_config_root(start: Path) -> Path:
+    for candidate in (start, *start.parents):
+        if (candidate / "paths.yaml").exists():
+            return candidate
+    return start
+
+
 def _require_mapping(payload: Any, *, label: str) -> dict[str, Any]:
     if payload is None:
         return {}
@@ -452,7 +459,7 @@ def load_source_dics_config(config_path: str | Path) -> SourceDicsConfig:
     Usage example
     -------------
     >>> from pathlib import Path
-    >>> cfg = load_source_dics_config(Path("config/source_dics_fpp_spp_alpha_beta.yaml"))
+    >>> cfg = load_source_dics_config(Path("config/induced/source_localisation.yaml"))
     >>> cfg.dics.analysis_tmax
     -0.1
     """
@@ -462,7 +469,7 @@ def load_source_dics_config(config_path: str | Path) -> SourceDicsConfig:
         payload = yaml.safe_load(handle) or {}
     if not isinstance(payload, dict):
         raise ValueError(f"Expected a mapping in {resolved_config_path}.")
-    config_dir = resolved_config_path.parent.parent
+    config_dir = _discover_config_root(resolved_config_path.parent).parent
 
     paths_payload = _require_mapping(payload.get("paths"), label="paths")
     events_payload = _require_mapping(payload.get("events"), label="events")

@@ -137,30 +137,12 @@ def _resolve_qc_dir(config: SourceDicsConfig, *, qc_subdir: str | None) -> Path:
 
 
 def _load_subject_to_dyad_map() -> dict[str, str]:
-    import re
+    return {}
 
-    mapping: dict[str, str] = {}
-    dyads_csv_path = Path(__file__).resolve().parents[3] / "config" / "dyads.csv"
-    if dyads_csv_path.exists():
-        table = pd.read_csv(dyads_csv_path)
-        if {"subject_id", "dyad_id"}.issubset(table.columns):
-            for row in table.itertuples(index=False):
-                mapping[str(row.subject_id)] = str(row.dyad_id)
 
-    log_roots = [
-        Path("/Users/hiro/Datasets/Miscellaneous/speech-rate-testing/logs/evoked_trf"),
-        Path("/Users/hiro/Datasets/Miscellaneous/speech-rate-testing/logs/features_emg"),
-    ]
-    pattern = re.compile(r"(?P<dyad>dyad-\d+)_sub-(?P<subject>\d+)\.log$")
-    for log_root in log_roots:
-        if not log_root.exists():
-            continue
-        for path in log_root.glob("*.log"):
-            match = pattern.match(path.name)
-            if match is None:
-                continue
-            mapping[f"sub-{match.group('subject')}"] = match.group("dyad")
-    return mapping
+def _canonical_dyad_id(subject_id: str) -> str:
+    subject_number = int(str(subject_id).replace("sub-", "", 1))
+    return f"dyad-{(subject_number + 1) // 2:03d}"
 
 
 def _find_conversation_anchor_time_s(raw_source) -> float:
@@ -186,11 +168,11 @@ def _build_onset_locked_epochs(record: EpochRecord, *, events_table: pd.DataFram
     raw = mne.io.read_raw_fif(record.preprocessed_eeg_path, preload=True, verbose="ERROR")
     raw_source = mne.io.read_raw(record.raw_eeg_path, preload=False, verbose="ERROR")
     anchor_time_s = _find_conversation_anchor_time_s(raw_source)
-    recording_id = subject_to_dyad.get(record.subject_id)
+    recording_id = subject_to_dyad.get(record.subject_id, _canonical_dyad_id(record.subject_id))
     if recording_id is None:
         raise ValueError(
             f"No dyad/recording mapping found for {record.subject_id}. "
-            "Provide a full mapping in config/dyads.csv or a discoverable log-based fallback."
+            "Provide a canonical subject id or extend the resolver fallback."
         )
 
     recording_events = events_table.loc[
@@ -282,7 +264,7 @@ def run_source_dics_pipeline(
 
     Usage example
     -------------
-    >>> cfg = load_source_dics_config("config/source_dics_fpp_spp_alpha_beta.yaml")  # doctest: +SKIP
+    >>> cfg = load_source_dics_config("config/induced/source_localisation.yaml")  # doctest: +SKIP
     >>> run_source_dics_pipeline(cfg)  # doctest: +SKIP
     """
 

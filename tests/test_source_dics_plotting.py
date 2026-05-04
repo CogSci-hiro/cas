@@ -309,7 +309,7 @@ def test_missing_surface_backend_does_not_break_roi_plotting(tmp_path: Path, mon
 
 def test_source_dics_plotting_targets_exist() -> None:
     source_dics_rules = (
-        Path(__file__).resolve().parents[1] / "workflow" / "rules" / "source_dics.smk"
+        Path(__file__).resolve().parents[1] / "workflow" / "rules" / "source_localisation.smk"
     ).read_text(encoding="utf-8")
     targets_rules = (
         Path(__file__).resolve().parents[1] / "workflow" / "rules" / "targets.smk"

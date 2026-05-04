@@ -4,7 +4,7 @@ Usage example
 -------------
 >>> from pathlib import Path
 >>> from cas.source_dics.config import load_source_dics_config
->>> cfg = load_source_dics_config(Path("config/source_dics_fpp_spp_alpha_beta.yaml"))  # doctest: +SKIP
+>>> cfg = load_source_dics_config(Path("config/induced/source_localisation.yaml"))  # doctest: +SKIP
 >>> run_source_dics_plotting(cfg, roi_only=True, surface_only=False)  # doctest: +SKIP
 PosixPath('.../figures/index/figure_index.csv')
 """
@@ -648,7 +648,7 @@ def run_source_dics_plotting(
     -------------
     >>> from pathlib import Path
     >>> from cas.source_dics.config import load_source_dics_config
-    >>> cfg = load_source_dics_config(Path("config/source_dics_fpp_spp_alpha_beta.yaml"))  # doctest: +SKIP
+    >>> cfg = load_source_dics_config(Path("config/induced/source_localisation.yaml"))  # doctest: +SKIP
     >>> run_source_dics_plotting(cfg, roi_only=True)  # doctest: +SKIP
     PosixPath('.../figure_index.csv')
     """

@@ -7,7 +7,7 @@ band x neural time bin x information-predictor bin.
 Usage example
 -------------
 >>> from pathlib import Path
->>> cfg = load_info_rate_induced_lmeeg_config(Path("config/info_rate_induced_lmeeg.yaml"))  # doctest: +SKIP
+>>> cfg = load_info_rate_induced_lmeeg_config(Path("config/induced/info_rate_induced_lmeeg.yaml"))  # doctest: +SKIP
 >>> result = run_info_rate_induced_lmeeg_pipeline(cfg)  # doctest: +SKIP
 >>> result.model_results_path.exists()  # doctest: +SKIP
 True
@@ -102,8 +102,15 @@ def _load_paths_yaml(project_root: Path) -> dict[str, Any]:
     return dict(payload) if isinstance(payload, dict) else {}
 
 
+def _discover_config_root(start: Path) -> Path:
+    for candidate in (start, *start.parents):
+        if (candidate / "paths.yaml").exists():
+            return candidate
+    return start
+
+
 def _resolve_project_root_from_config(config_path: Path) -> Path:
-    return config_path.parent.parent.resolve()
+    return _discover_config_root(config_path.parent).parent.resolve()
 
 
 def _resolve_path(
@@ -193,7 +200,7 @@ def load_info_rate_induced_lmeeg_config(config_path: Path) -> InfoRateInducedLmE
     Usage example
     -------------
     >>> from pathlib import Path
-    >>> cfg = load_info_rate_induced_lmeeg_config(Path("config/info_rate_induced_lmeeg.yaml"))  # doctest: +SKIP
+    >>> cfg = load_info_rate_induced_lmeeg_config(Path("config/induced/info_rate_induced_lmeeg.yaml"))  # doctest: +SKIP
     >>> cfg.analysis_name  # doctest: +SKIP
     'info_rate_induced_lmeeg'
     """

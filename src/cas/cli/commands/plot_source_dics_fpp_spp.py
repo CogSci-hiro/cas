@@ -26,7 +26,7 @@ def add_plot_source_dics_fpp_spp_parser(
     )
     parser.add_argument(
         "--config",
-        default="config/source_dics_fpp_spp_alpha_beta.yaml",
+        default="config/induced/source_localisation.yaml",
         help="Path to the source-level DICS YAML config.",
     )
     parser.add_argument(

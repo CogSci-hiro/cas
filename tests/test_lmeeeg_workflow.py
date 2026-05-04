@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 def test_fpp_spp_cycle_position_workflow_target_is_wired() -> None:
-    erp_text = Path("workflow/rules/erp.smk").read_text(encoding="utf-8")
+    erp_text = Path("workflow/rules/epochs.smk").read_text(encoding="utf-8")
     targets_text = Path("workflow/rules/targets.smk").read_text(encoding="utf-8")
     figures_text = Path("workflow/rules/figures.smk").read_text(encoding="utf-8")
 
@@ -18,7 +18,7 @@ def test_fpp_spp_cycle_position_workflow_target_is_wired() -> None:
 
 
 def test_fpp_spp_cycle_position_config_contains_requested_contrast() -> None:
-    config_text = Path("config/lmeeeg_fpp_spp_cycle_position.yaml").read_text(encoding="utf-8")
+    config_text = Path("config/induced/alpha_beta_cycle_position.yaml").read_text(encoding="utf-8")
 
     assert 'analysis_name: "fpp_spp_cycle_position"' in config_text
     assert 'formula: "power ~ pair_position + z_event_duration + z_latency + run + z_time_within_run + (1 | subject)"' in config_text
@@ -27,7 +27,7 @@ def test_fpp_spp_cycle_position_config_contains_requested_contrast() -> None:
 
 
 def test_info_rate_induced_lmeeg_workflow_target_is_wired() -> None:
-    erp_text = Path("workflow/rules/erp.smk").read_text(encoding="utf-8")
+    erp_text = Path("workflow/rules/epochs.smk").read_text(encoding="utf-8")
     targets_text = Path("workflow/rules/targets.smk").read_text(encoding="utf-8")
 
     assert "rule run_info_rate_induced_lmeeg:" in erp_text
@@ -37,7 +37,7 @@ def test_info_rate_induced_lmeeg_workflow_target_is_wired() -> None:
 
 
 def test_info_rate_induced_lmeeg_config_contains_core_model_terms() -> None:
-    config_text = Path("config/info_rate_induced_lmeeg.yaml").read_text(encoding="utf-8")
+    config_text = Path("config/induced/info_rate_induced_lmeeg.yaml").read_text(encoding="utf-8")
 
     assert 'analysis_name: "info_rate_induced_lmeeg"' in config_text
     assert "neural_bin_width_s: 0.050" in config_text
@@ -48,16 +48,14 @@ def test_info_rate_induced_lmeeg_config_contains_core_model_terms() -> None:
 
 def test_preprocess_workflow_tracks_preprocessing_config() -> None:
     preprocess_text = Path("workflow/rules/preprocessing.smk").read_text(encoding="utf-8")
-    wrapper_text = Path("workflow/rules/preprocess.smk").read_text(encoding="utf-8")
 
     assert "rule preprocess_eeg:" in preprocess_text
     assert "config=PREPROCESSING_CONFIG_PATH" in preprocess_text
     assert "rule aggregate_preprocessing_qc:" in preprocess_text
-    assert 'include: "preprocessing.smk"' in wrapper_text
 
 
 def test_lmeeeg_workflow_tracks_evoked_duration_qc_outputs() -> None:
-    erp_text = Path("workflow/rules/erp.smk").read_text(encoding="utf-8")
+    erp_text = Path("workflow/rules/epochs.smk").read_text(encoding="utf-8")
     targets_text = Path("workflow/rules/targets.smk").read_text(encoding="utf-8")
 
     assert "LMEEEG_EVOKED_DURATION_QC_OUTPUTS" in erp_text
@@ -67,7 +65,7 @@ def test_lmeeeg_workflow_tracks_evoked_duration_qc_outputs() -> None:
 
 
 def test_lmeeeg_config_contains_duration_controls_for_spp_evoked_model() -> None:
-    config_text = Path("config/lmeeeg.yaml").read_text(encoding="utf-8")
+    config_text = Path("config/induced/alpha_beta_lmeeeg.yaml").read_text(encoding="utf-8")
 
     assert 'formula: "~ spp_class_1 + latency + run"' in config_text
     assert "duration_controls:" in config_text
@@ -79,15 +77,15 @@ def test_lmeeeg_config_contains_duration_controls_for_spp_evoked_model() -> None
 
 
 def test_induced_epochs_config_covers_lmeeeg_requested_bands() -> None:
-    epochs_text = Path("config/epochs.yaml").read_text(encoding="utf-8")
-    lmeeeg_text = Path("config/lmeeeg.yaml").read_text(encoding="utf-8")
+    epochs_text = Path("config/epochs/erp.yaml").read_text(encoding="utf-8")
+    lmeeeg_text = Path("config/induced/alpha_beta_lmeeeg.yaml").read_text(encoding="utf-8")
 
     assert 'bands: ["theta", "alpha", "beta"]' in epochs_text
     assert 'bands: ["theta", "alpha", "beta"]' in lmeeeg_text
 
 
 def test_lmeeeg_workflow_tracks_band_level_induced_epoch_outputs() -> None:
-    erp_text = Path("workflow/rules/erp.smk").read_text(encoding="utf-8")
+    erp_text = Path("workflow/rules/epochs.smk").read_text(encoding="utf-8")
     targets_text = Path("workflow/rules/targets.smk").read_text(encoding="utf-8")
 
     assert "_induced_epoch_band_summary_outputs" in erp_text
@@ -97,7 +95,7 @@ def test_lmeeeg_workflow_tracks_band_level_induced_epoch_outputs() -> None:
 
 
 def test_run_lmeeeg_is_evoked_only() -> None:
-    erp_text = Path("workflow/rules/erp.smk").read_text(encoding="utf-8")
+    erp_text = Path("workflow/rules/epochs.smk").read_text(encoding="utf-8")
 
     assert "rule run_lmeeeg:" in erp_text
     assert "evoked_models = {" in erp_text
@@ -110,7 +108,7 @@ def test_run_lmeeeg_is_evoked_only() -> None:
 def test_fpp_spp_conf_disc_workflow_target_is_wired() -> None:
     targets_text = Path("workflow/rules/targets.smk").read_text(encoding="utf-8")
     figures_text = Path("workflow/rules/figures.smk").read_text(encoding="utf-8")
-    erp_text = Path("workflow/rules/erp.smk").read_text(encoding="utf-8")
+    erp_text = Path("workflow/rules/epochs.smk").read_text(encoding="utf-8")
 
     assert "rule downsample_fpp_spp_conf_disc_induced_epochs_subject:" in targets_text
     assert "rule run_fpp_spp_conf_disc_alpha_beta_lmeeeg:" in targets_text
@@ -122,7 +120,7 @@ def test_fpp_spp_conf_disc_workflow_target_is_wired() -> None:
 
 
 def test_fpp_spp_conf_disc_config_contains_requested_models() -> None:
-    config_text = Path("config/lmeeeg_fpp_spp_conf_disc_alpha_beta.yaml").read_text(encoding="utf-8")
+    config_text = Path("config/induced/alpha_beta_conf_disc.yaml").read_text(encoding="utf-8")
 
     assert 'analysis_name: "fpp_spp_conf_disc_alpha_beta"' in config_text
     assert 'induced_epochs_subdir: "induced_epochs_fpp_spp_conf_disc_alpha_beta_lmeeeg"' in config_text

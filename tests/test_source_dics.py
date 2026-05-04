@@ -315,7 +315,7 @@ def test_source_dics_target_name_exists() -> None:
 
 
 def test_source_dics_workflow_uses_per_record_parallel_rule() -> None:
-    workflow_path = Path(__file__).resolve().parents[1] / "workflow" / "rules" / "source_dics.smk"
+    workflow_path = Path(__file__).resolve().parents[1] / "workflow" / "rules" / "source_localisation.smk"
     workflow_text = workflow_path.read_text(encoding="utf-8")
 
     assert "rule run_source_dics_fpp_spp_alpha_beta_record:" in workflow_text

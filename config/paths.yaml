@@ -10,7 +10,11 @@ lm_feature_dir: "/Users/hiro/Datasets/hyperscanning-bids/derivatives/converted_l
 
 output_dir: "/Users/hiro/Datasets/working/cas-refactoring"
 
+io:
+  out_dir: "/Users/hiro/Datasets/working/cas-refactoring"
+
 paths:
+  out_dir: "/Users/hiro/Datasets/working/cas-refactoring"
   logs: "{output_dir}/logs"
   cache: "{output_dir}/cache"
   manifests: "{output_dir}/manifests"

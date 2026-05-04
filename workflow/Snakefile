@@ -2,7 +2,6 @@
 #                              CAS ROOT SNAKEFILE
 ###############################################################################
 
-import csv
 import os
 import sys
 import yaml
@@ -20,11 +19,10 @@ CONFIG_DIR = f"{PROJECT_ROOT}/config"
 
 PATHS_CONFIG_PATH = f"{CONFIG_DIR}/paths.yaml"
 PREPROCESSING_CONFIG_PATH = f"{CONFIG_DIR}/preprocessing.yaml"
-TRF_CONFIG_PATH = f"{CONFIG_DIR}/trf.yaml"
-ACOUSTIC_CONFIG_PATH = f"{CONFIG_DIR}/acoustic.yaml"
+TRF_CONFIG_PATH = f"{CONFIG_DIR}/trf/trf_surprisal.yaml"
+ACOUSTIC_CONFIG_PATH = f"{CONFIG_DIR}/features/acoustic.yaml"
 EVENTS_CONFIG_PATH = f"{CONFIG_DIR}/events.yaml"
-EPOCHS_CONFIG_PATH = f"{CONFIG_DIR}/epochs.yaml"
-DYADS_CSV_PATH = f"{CONFIG_DIR}/dyads.csv"
+EPOCHS_CONFIG_PATH = f"{CONFIG_DIR}/epochs/erp.yaml"
 with open(PATHS_CONFIG_PATH, encoding="utf-8") as f:
     PATHS_CONFIG = yaml.safe_load(f) or {}
 with open(PREPROCESSING_CONFIG_PATH, encoding="utf-8") as f:
@@ -88,22 +86,15 @@ TRF_SCORE_PATTERN = f"{TRF_OUTPUT_ROOT}/sub-{{subject}}/trf.scores.json"
 TRF_COEF_PATTERN = f"{TRF_OUTPUT_ROOT}/sub-{{subject}}/trf.coefs.npz"
 
 
-def _load_partner_map(dyads_csv_path: str) -> dict[str, str]:
-    with open(dyads_csv_path, encoding="utf-8") as f:
-        rows = csv.DictReader(f)
-        return {row["subject_id"]: row["partner_id"] for row in rows}
+def _canonical_partner_id(subject_id: str) -> str:
+    subject_number = int(subject_id.replace("sub-", "", 1))
+    partner_number = subject_number + 1 if subject_number % 2 == 1 else subject_number - 1
+    return f"sub-{partner_number:03d}"
 
 
-PARTNER_MAP = _load_partner_map(DYADS_CSV_PATH)
-
-
-def _load_subject_to_dyad_map(dyads_csv_path: str) -> dict[str, str]:
-    with open(dyads_csv_path, encoding="utf-8") as f:
-        rows = csv.DictReader(f)
-        return {row["subject_id"]: row["dyad_id"] for row in rows}
-
-
-SUBJECT_TO_DYAD_MAP = _load_subject_to_dyad_map(DYADS_CSV_PATH)
+def _canonical_dyad_id(subject_id: str) -> str:
+    subject_number = int(subject_id.replace("sub-", "", 1))
+    return f"dyad-{(subject_number + 1) // 2:03d}"
 
 
 def _discover_audio_records() -> list[dict[str, str]]:
@@ -133,6 +124,14 @@ def _discover_audio_records() -> list[dict[str, str]]:
 
 
 AUDIO_RECORDS = _discover_audio_records()
+PARTNER_MAP = {
+    f"sub-{record['subject']}": _canonical_partner_id(f"sub-{record['subject']}")
+    for record in AUDIO_RECORDS
+}
+SUBJECT_TO_DYAD_MAP = {
+    f"sub-{record['subject']}": _canonical_dyad_id(f"sub-{record['subject']}")
+    for record in AUDIO_RECORDS
+}
 AUDIO_RECORD_SUBJECTS = [record["subject"] for record in AUDIO_RECORDS]
 AUDIO_RECORD_TASKS = [record["task"] for record in AUDIO_RECORDS]
 AUDIO_RECORD_RUNS = [record["run"] for record in AUDIO_RECORDS]
@@ -189,17 +188,13 @@ TRF_COEF_OUTPUTS = expand(TRF_COEF_PATTERN, subject=TRF_SUBJECTS)
 # -----------------------------------------------------------------------------
 # Include rule modules
 # -----------------------------------------------------------------------------
-include: "rules/dataset.smk"
 include: "rules/features.smk"
 include: "rules/events.smk"
 include: "rules/preprocessing.smk"
 include: "rules/trf.smk"
-include: "rules/action_models.smk"
-include: "rules/erp.smk"
+include: "rules/epochs.smk"
 include: "rules/behavior.smk"
-include: "rules/neural_state.smk"
-include: "rules/source_dics.smk"
-include: "rules/stats.smk"
+include: "rules/source_localisation.smk"
 include: "rules/figures.smk"
 include: "rules/targets.smk"
 

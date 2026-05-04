@@ -69,18 +69,34 @@ def _load_yaml(path: Path) -> dict:
 
 
 def _load_paths_config(config_root: Path) -> dict:
-    paths_path = config_root / "paths.yaml"
+    paths_path = _discover_config_root(config_root) / "paths.yaml"
     if not paths_path.exists():
         raise FileNotFoundError(f"Paths config not found: {paths_path}")
     return _load_yaml(paths_path)
 
 
+def _discover_config_root(start: Path) -> Path:
+    for candidate in (start, *start.parents):
+        if (candidate / "paths.yaml").exists():
+            return candidate
+    return start
+
+
 def _resolve_out_dir(config_root: Path) -> Path:
     paths_config = _load_paths_config(config_root)
-    derivatives_root = paths_config.get("derivatives_root")
-    if not isinstance(derivatives_root, str) or not derivatives_root:
-        raise ValueError(f"`derivatives_root` is missing from {config_root / 'paths.yaml'}.")
-    return Path(derivatives_root)
+    candidates = (
+        paths_config.get("output_dir"),
+        ((paths_config.get("io") or {}).get("out_dir") if isinstance(paths_config.get("io"), dict) else None),
+        ((paths_config.get("paths") or {}).get("out_dir") if isinstance(paths_config.get("paths"), dict) else None),
+        paths_config.get("derivatives_root"),
+    )
+    for candidate in candidates:
+        if isinstance(candidate, str) and candidate.strip():
+            return Path(candidate).resolve()
+    raise ValueError(
+        f"`output_dir`, `io.out_dir`, `paths.out_dir`, or `derivatives_root` must be configured in "
+        f"{_discover_config_root(config_root) / 'paths.yaml'}."
+    )
 
 
 def _resolve_path(path_str: str, *, project_root: Path, fallback_root: Path | None = None) -> Path:
@@ -327,7 +343,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "trf-config",
         help="Run TRF nested CV from config-driven self/other predictor definitions.",
     )
-    trf_config_parser.add_argument("--config", required=True, help="Path to config/trf.yaml.")
+    trf_config_parser.add_argument("--config", required=True, help="Path to config/trf/trf_surprisal.yaml.")
     trf_config_parser.add_argument("--subject", required=True, help="Target subject id, e.g. sub-001.")
     trf_config_parser.add_argument(
         "--project-root",
@@ -428,7 +444,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Extract VoxAtlas speech envelope and F0 from a WAV file.",
     )
     acoustic_parser.add_argument("--input", required=True, help="Input .wav path.")
-    acoustic_parser.add_argument("--config", required=True, help="Path to config/acoustic.yaml.")
+    acoustic_parser.add_argument("--config", required=True, help="Path to config/features/acoustic.yaml.")
     acoustic_parser.add_argument(
         "--envelope-output",
         required=True,
@@ -455,7 +471,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Extract only the VoxAtlas frame-aligned speech envelope from a WAV file.",
     )
     acoustic_envelope_parser.add_argument("--input", required=True, help="Input .wav path.")
-    acoustic_envelope_parser.add_argument("--config", required=True, help="Path to config/acoustic.yaml.")
+    acoustic_envelope_parser.add_argument("--config", required=True, help="Path to config/features/acoustic.yaml.")
     acoustic_envelope_parser.add_argument(
         "--output",
         required=True,
@@ -472,7 +488,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Extract only the VoxAtlas frame-aligned F0 from a WAV file.",
     )
     acoustic_f0_parser.add_argument("--input", required=True, help="Input .wav path.")
-    acoustic_f0_parser.add_argument("--config", required=True, help="Path to config/acoustic.yaml.")
+    acoustic_f0_parser.add_argument("--config", required=True, help="Path to config/features/acoustic.yaml.")
     acoustic_f0_parser.add_argument(
         "--output",
         required=True,
@@ -605,7 +621,7 @@ def _build_parser() -> argparse.ArgumentParser:
     figures_lmeeeg_parser.add_argument(
         "--config-root",
         default="config",
-        help="Directory containing paths.yaml, lmeeeg.yaml, and viz.yaml.",
+        help="Directory containing paths.yaml, induced lmeEEG config(s), and viz.yaml.",
     )
     figures_lmeeeg_parser.add_argument(
         "--viz-config",
@@ -630,7 +646,7 @@ def _build_parser() -> argparse.ArgumentParser:
     figures_lmeeeg_inference_parser.add_argument(
         "--config-root",
         default="config",
-        help="Directory containing paths.yaml and viz.yaml.",
+        help="Directory containing paths.yaml, induced lmeEEG config(s), and viz.yaml.",
     )
     figures_lmeeeg_inference_parser.add_argument(
         "--viz-config",
@@ -1023,7 +1039,10 @@ def _lmeeeg_analysis_root(out_dir: Path) -> Path:
 
 
 def _resolve_lmeeeg_config_path(*, config_root: Path, explicit_config_path: str | None) -> Path:
-    return Path(explicit_config_path).resolve() if explicit_config_path else config_root / "lmeeeg.yaml"
+    if explicit_config_path:
+        return Path(explicit_config_path).resolve()
+    resolved_root = _discover_config_root(config_root)
+    return resolved_root / "induced" / "alpha_beta_lmeeeg.yaml"
 
 
 def _lmeeeg_analysis_name(config: dict[str, object]) -> str | None:
@@ -1413,21 +1432,12 @@ def _build_config_driven_trf_inputs(
     project_root: Path,
     config_root: Path,
 ) -> tuple[list[np.ndarray], list[np.ndarray], list[str]]:
-    from cas.trf.prepare import load_dyad_table, resolve_predictor_paths
+    from cas.trf.prepare import resolve_predictor_paths
 
     trf_section = trf_config.get("trf", {})
     paths_config = _load_paths_config(config_root)
     predictors = trf_section.get("predictors", [])
     target_config = trf_section.get("target", {})
-    pairing_config = trf_section.get("pairing", {})
-
-    dyads_csv = pairing_config.get("dyads_csv")
-    if not isinstance(dyads_csv, str) or not dyads_csv:
-        raise ValueError("TRF config must define trf.pairing.dyads_csv.")
-    dyad_table = load_dyad_table(
-        _resolve_path(dyads_csv, project_root=project_root, fallback_root=config_root)
-    )
-
     target_path_template = target_config.get("path")
     if not isinstance(target_path_template, str) or not target_path_template:
         raise ValueError("TRF config must define trf.target.path.")
@@ -1445,7 +1455,7 @@ def _build_config_driven_trf_inputs(
                 subject_id,
                 run,
                 predictors,
-                dyad_table,
+                None,
                 feature_root=paths_config["features_root"],
             )
             predictor_arrays = [
@@ -1493,7 +1503,7 @@ def _run_trf_config(args: argparse.Namespace) -> int:
     project_root = Path(args.project_root).resolve()
     config_path = _resolve_path(args.config, project_root=project_root).resolve()
     trf_config = _load_yaml(config_path)
-    config_root = config_path.parent.parent if config_path.parent.name == "config" else config_path.parent
+    config_root = _discover_config_root(config_path.parent)
     trf_section = trf_config.get("trf", {})
     timing_config = trf_section.get("timing", {})
     model_config = trf_section.get("model", {})

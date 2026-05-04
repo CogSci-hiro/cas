@@ -22,7 +22,7 @@ def add_info_rate_induced_lmeeg_parser(
     )
     parser.add_argument(
         "--config",
-        default="config/info_rate_induced_lmeeg.yaml",
+        default="config/induced/info_rate_induced_lmeeg.yaml",
         help="Path to the info-rate induced lmeEEG YAML config.",
     )
 
