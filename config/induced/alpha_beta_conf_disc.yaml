@@ -1,0 +1,99 @@
+lmeeeg:
+  enabled: true
+  backend: "lmeeeg"
+  analysis_name: "fpp_spp_conf_disc_alpha_beta"
+  event_table: "/Users/hiro/Datasets/working/cas/events/events.csv"
+
+  input:
+    induced_epochs_subdir: "induced_epochs_fpp_spp_conf_disc_alpha_beta_lmeeeg"
+
+  post_power_downsampling:
+    enabled: true
+    target_sfreq: 20
+    method: "mean_bin"
+    apply_after: "trial_power"
+    apply_before: "lmeeeg"
+
+  design:
+    column_mapping:
+      subject: "subject_id"
+      duration: "duration"
+    predictors:
+      categorical:
+        - "class_3"
+      continuous:
+        - "run"
+        - "duration"
+        - "log_duration"
+        - "log_duration_within_class"
+    required_columns:
+      - "subject"
+      - "run"
+      - "class_3"
+      - "duration"
+      - "log_duration"
+      - "log_duration_within_class"
+    categorical_levels:
+      class_3:
+        allowed: ["FPP", "SPP_CONF", "SPP_DISC"]
+        required: ["FPP", "SPP_CONF", "SPP_DISC"]
+    reference_levels:
+      class_3: "FPP"
+
+  selection:
+    metadata_query: "event_lock == 'onset' and class_3 != 'OTHER'"
+
+  models:
+    class_3:
+      modality: "induced"
+      contrast_of_interest: "class_3"
+      formula: "power ~ class_3 + (1 | subject)"
+      random_effect_group: "subject"
+      eligibility:
+        not_null:
+          - "class_3"
+          - "duration"
+          - "log_duration"
+      test_predictors:
+        - "class_3"
+
+    class_3_plus_duration:
+      modality: "induced"
+      contrast_of_interest: "class_3"
+      formula: "power ~ class_3 + log_duration_within_class + (1 | subject)"
+      random_effect_group: "subject"
+      eligibility:
+        not_null:
+          - "class_3"
+          - "duration"
+          - "log_duration_within_class"
+      test_predictors:
+        - "class_3"
+        - "log_duration_within_class"
+
+    duration_only_sanity:
+      modality: "induced"
+      contrast_of_interest: "log_duration"
+      formula: "power ~ log_duration + (1 | subject)"
+      random_effect_group: "subject"
+      eligibility:
+        not_null:
+          - "duration"
+          - "log_duration"
+      test_predictors:
+        - "log_duration"
+
+  test:
+    method: "tfce"
+    n_permutations: 40
+    tail: 0
+    adjacency: "mne_default"
+    montage: "biosemi64"
+    cluster_forming_alpha: 0.002
+    seed: 0
+    tfce_threshold:
+      start: 0.0
+      step: 0.01
+
+induced_epochs:
+  bands: ["alpha", "beta"]

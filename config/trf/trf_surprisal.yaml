@@ -1,0 +1,57 @@
+trf:
+  # Analysis identifier used to isolate all TRF outputs under
+  # derivatives/trf/{analysis_id}/...
+  analysis_id: "env_self_other"
+
+  # Predictors are defined by canonical feature family plus dyadic role.
+  # The TRF prep code resolves "self" to the target subject and "other"
+  # to the canonical partner implied by subject numbering.
+  predictors:
+    - name: "self_envelope"
+      base_feature: "envelope"
+      role: "self"
+      kind: "continuous"
+
+    - name: "other_envelope"
+      base_feature: "envelope"
+      role: "other"
+      kind: "continuous"
+
+  # Continuous EEG target for the current smoke test.
+  target:
+    name: "eeg"
+    kind: "continuous"
+    path: "evoked/{subject}/run-{run}.npy"
+
+  # Central timing parameters for TRF design construction.
+  timing:
+    target_sfreq_hz: 100
+    tmin_s: -0.2
+    tmax_s: 0.6
+
+  # Nested leave-one-run-out CV over the eight runs in the dataset.
+  cv:
+    outer: "leave_one_run_out"
+    inner: "leave_one_run_out"
+    n_runs: 8
+
+  # Model hyperparameters for the current ridge-based smoke test.
+  model:
+    backend: "spyeeg"
+    estimator: "ridge"
+    alphas: [0.1, 1.0, 10.0, 100.0, 1000.0]
+    fit_intercept: false
+    standardize_X: true
+    standardize_Y: false
+
+  # Primary evaluation metric saved with fold-wise scores.
+  scoring:
+    metric: "corr"
+
+  # Analysis-scoped outputs prevent unrelated TRF analyses from invalidating
+  # each other's Snakemake cache paths.
+  output:
+    root: "{analysis_id}"
+    save_betas: true
+    save_scores: true
+    save_predictions: false

@@ -1,0 +1,32 @@
+epochs:
+  output:
+    root: "epochs"
+  timing:
+    tmin_s: -0.2
+    tmax_s: 0.8
+    baseline_s:
+      - -0.2
+      - 0.0
+  event_types:
+    - "self_fpp_onset"
+    - "self_fpp_offset"
+    - "other_fpp_onset"
+    - "other_fpp_offset"
+    - "self_spp_onset"
+    - "self_spp_offset"
+    - "other_spp_onset"
+    - "other_spp_offset"
+  reject_by_annotation: true
+
+induced_source_epochs:
+  output:
+    root: "induced_source_epochs"
+  timing:
+    tmin_s: -1.0
+    tmax_s: 0.3
+    baseline_s:
+      - -1.0
+      - 0.3
+
+induced_epochs:
+  bands: ["theta", "alpha", "beta"]
