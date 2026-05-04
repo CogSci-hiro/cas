@@ -156,7 +156,6 @@ def test_legacy_inventory_mentions_retired_constrained_model() -> None:
 
 def test_hazard_pipeline_isolation_imports_without_latency_regime_artifacts() -> None:
     from cas.hazard_behavior.pipeline import run_behaviour_hazard_pipeline  # noqa: F401
-    from cas.cli.commands.hazard_behavior_fpp import add_hazard_behavior_fpp_parser  # noqa: F401
 
     assert "model_d_constrained_mixture_of_experts" not in MODEL_LABELS
 

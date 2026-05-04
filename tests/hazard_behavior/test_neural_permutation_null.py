@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-import sys
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from cas.cli.main import main
 from cas.hazard_behavior.neural_lowlevel import FittedFormulaModel
 from cas.hazard_behavior.neural_permutation_null import (
     circular_shift_events_within_episode,
@@ -197,75 +195,6 @@ def test_plotting_smoke(tmp_path: Path) -> None:
     assert (tmp_path / "fpp_neural_permutation_delta_bic_ecdf.png").exists()
     assert (tmp_path / "fpp_neural_permutation_real_vs_null_summary.png").exists()
     assert (tmp_path / "fpp_neural_permutation_shift_qc.png").exists()
-
-
-def test_default_pipeline_isolation(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    riskset_path = tmp_path / "riskset.csv"
-    _base_riskset().to_csv(riskset_path, index=False)
-
-    def fake_behaviour_run(args) -> int:  # type: ignore[no-untyped-def]
-        print(args.out_dir)
-        return 0
-
-    def fail_if_called(*args, **kwargs):  # type: ignore[no-untyped-def]
-        raise AssertionError("Permutation null should not run for hazard-behavior-fpp.")
-
-    monkeypatch.setattr("cas.cli.main.run_hazard_behavior_fpp_command", fake_behaviour_run)
-    monkeypatch.setattr("cas.cli.main.run_fpp_neural_permutation_null_command", fail_if_called)
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "cas",
-            "hazard-behavior-fpp",
-            "--events",
-            str(riskset_path),
-            "--surprisal",
-            str(riskset_path),
-            "--out-dir",
-            str(tmp_path / "behaviour"),
-        ],
-    )
-    assert main() == 0
-
-
-def test_cli_command_runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    riskset_path = tmp_path / "riskset.csv"
-    _base_riskset().to_csv(riskset_path, index=False)
-    called = {"value": False}
-
-    def fake_command(args) -> int:  # type: ignore[no-untyped-def]
-        called["value"] = True
-        assert args.command == "run-fpp-neural-permutation-null"
-        assert args.neural_family == "beta"
-        return 0
-
-    monkeypatch.setattr("cas.cli.main.run_fpp_neural_permutation_null_command", fake_command)
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "cas",
-            "run-fpp-neural-permutation-null",
-            "--riskset-path",
-            str(riskset_path),
-            "--output-dir",
-            str(tmp_path / "out"),
-            "--neural-family",
-            "beta",
-            "--n-permutations",
-            "2",
-            "--seed",
-            "7",
-            "--max-permutations-for-smoke-test",
-            "2",
-        ],
-    )
-    assert main() == 0
-    assert called["value"] is True
 
 
 def _write_riskset_csv(table: pd.DataFrame, directory: Path) -> Path:

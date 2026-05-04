@@ -4,12 +4,10 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
-import sys
 
 import pandas as pd
 import pytest
 
-from cas.cli.main import main
 from cas.hazard_behavior.plot_r_results import plot_behaviour_hazard_results
 from cas.hazard_behavior.r_export import export_behaviour_glmm_data
 
@@ -274,123 +272,6 @@ def test_plotting_smoke_test_writes_expected_figures(tmp_path: Path) -> None:
     assert not any("prop_actual" in path.name for path in figures_dir.iterdir())
     assert not any("cumulative_info" in path.name and "expected_info" not in path.name for path in figures_dir.iterdir())
     assert not any("M2a" in path.name or "M2b" in path.name or "M2c" in path.name for path in figures_dir.iterdir())
-
-
-def test_cli_export_behaviour_glmm_data_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    riskset = _tiny_riskset()
-    riskset_path = tmp_path / "hazard_behavior_riskset_with_timing_controls.tsv"
-    riskset.to_csv(riskset_path, sep="\t", index=False)
-    selected_lags_json = _write_selected_lags_json(tmp_path, information_rate_lag_ms=0, expected_lag_ms=300)
-    output_csv = tmp_path / "behaviour_glmm_data.csv"
-    output_qc_json = tmp_path / "behaviour_glmm_export_qc.json"
-
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "cas",
-            "export-behaviour-glmm-data",
-            "--input-riskset",
-            str(riskset_path),
-            "--selected-lags-json",
-            str(selected_lags_json),
-            "--output-csv",
-            str(output_csv),
-            "--output-qc-json",
-            str(output_qc_json),
-        ],
-    )
-
-    assert main() == 0
-    assert output_csv.exists()
-    assert output_qc_json.exists()
-
-
-def test_cli_plot_behaviour_glmm_results_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    r_results_dir = tmp_path / "models"
-    models_dir = r_results_dir / "lag_selection"
-    predictions_dir = r_results_dir / "predictions"
-    figures_dir = tmp_path / "figures"
-    qc_dir = tmp_path / "qc_plots" / "lag_selection"
-    r_results_dir.mkdir()
-    models_dir.mkdir(parents=True)
-    predictions_dir.mkdir(parents=True)
-    pd.DataFrame(
-        {
-            "predictor_family": ["information_rate", "prop_expected_cumulative_info"],
-            "lag_ms": [0, 300],
-            "delta_bic": [-2.5, -3.0],
-        }
-    ).to_csv(models_dir / "behaviour_timing_control_lag_selection.csv", index=False)
-    pd.DataFrame(
-        {
-            "predictor_family": ["information_rate"],
-            "lag_ms": [100],
-            "child_BIC": [90.0],
-            "delta_BIC": [-2.0],
-            "beta": [0.10],
-            "conf_low": [0.01],
-            "conf_high": [0.19],
-            "odds_ratio": [1.11],
-            "odds_ratio_conf_low": [1.01],
-            "odds_ratio_conf_high": [1.21],
-            "converged": [True],
-        }
-    ).to_csv(r_results_dir / "r_glmm_information_rate_lag_sweep.csv", index=False)
-    pd.DataFrame(
-        {
-            "predictor_family": ["prop_expected"],
-            "lag_ms": [300],
-            "child_BIC": [88.0],
-            "delta_BIC": [-1.0],
-            "beta": [0.20],
-            "conf_low": [0.08],
-            "conf_high": [0.32],
-            "odds_ratio": [1.22],
-            "odds_ratio_conf_low": [1.08],
-            "odds_ratio_conf_high": [1.38],
-            "converged": [True],
-        }
-    ).to_csv(r_results_dir / "r_glmm_prop_expected_lag_sweep.csv", index=False)
-    (r_results_dir / "r_glmm_selected_behaviour_lags.json").write_text(
-        '{"best_information_rate_lag_ms": 100, "best_prop_expected_lag_ms": 300}',
-        encoding="utf-8",
-    )
-    pd.DataFrame({"child_model": ["M_final_glmm"], "delta_BIC": [-2.0], "delta_AIC": [-2.5]}).to_csv(
-        r_results_dir / "r_glmm_final_behaviour_model_comparison.csv",
-        index=False,
-    )
-    pd.DataFrame(
-        {
-            "predictor": ["z_information_rate_lag_100ms"],
-            "predictor_value": [0],
-            "predicted_probability": [0.11],
-            "conf_low": [0.09],
-            "conf_high": [0.14],
-            "fixed_effect_only": [True],
-        }
-    ).to_csv(predictions_dir / "behaviour_r_glmm_final_predicted_hazard_information_rate.csv", index=False)
-
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "cas",
-            "plot-behaviour-hazard-results",
-            "--r-results-dir",
-            str(r_results_dir),
-            "--timing-control-models-dir",
-            str(models_dir),
-            "--qc-output-dir",
-            str(qc_dir),
-            "--output-dir",
-            str(figures_dir),
-        ],
-    )
-
-    assert main() == 0
-    assert (figures_dir / "behaviour_r_glmm_coefficient_by_lag.png").exists()
-    assert (qc_dir / "behaviour_pooled_delta_bic_by_lag.png").exists()
 
 
 def test_r_glmm_smoke_test(tmp_path: Path) -> None:

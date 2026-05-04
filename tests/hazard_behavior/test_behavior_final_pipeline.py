@@ -2,13 +2,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import sys
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from cas.cli.main import main
 from cas.hazard_behavior.config import BehaviourHazardConfig
 from cas.hazard_behavior.episodes import build_event_positive_episodes
 from cas.hazard_behavior.final_behavior import (
@@ -622,85 +620,3 @@ def test_compare_rejects_zero_spp_event_bins_before_pooled_fit(tmp_path: Path, m
     with pytest.raises(ValueError, match="SPP negative-control comparison could not be evaluated because the SPP risk set contained zero event bins"):
         run_behavior_final_compare(cfg_path, selected_path, fpp_dir / "riskset.parquet", spp_dir / "riskset.parquet", cmp_dir)
     assert called["fit"] == 0
-
-
-def test_cli_commands_write_expected_outputs(tmp_path: Path, monkeypatch) -> None:
-    cfg_path = _write_config_copy(tmp_path)
-    lag_dir = tmp_path / "results" / "lag_selection"
-    fpp_dir = tmp_path / "results" / "fpp"
-    spp_dir = tmp_path / "results" / "spp_control"
-    cmp_dir = tmp_path / "results" / "fpp_vs_spp"
-
-    def fake_build_anchor_riskset(cfg, anchor, out_dir):
-        seed = 41 if anchor == "fpp" else 42
-        return _make_synthetic_riskset(anchor, seed=seed), _make_synthetic_episodes(anchor, 24), []
-
-    monkeypatch.setattr("cas.hazard_behavior.final_behavior._build_anchor_riskset", fake_build_anchor_riskset)
-
-    monkeypatch.setattr(sys, "argv", ["cas", "behavior-final-select-lag", "--config", str(cfg_path), "--out-dir", str(lag_dir)])
-    assert main() == 0
-
-    selected = lag_dir / "selected_lag.json"
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["cas", "behavior-final-fit", "--config", str(cfg_path), "--anchor-type", "fpp", "--selected-lag", str(selected), "--out-dir", str(fpp_dir)],
-    )
-    assert main() == 0
-
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["cas", "behavior-final-fit", "--config", str(cfg_path), "--anchor-type", "spp", "--selected-lag", str(selected), "--out-dir", str(spp_dir)],
-    )
-    assert main() == 0
-
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "cas",
-            "behavior-final-compare",
-            "--config",
-            str(cfg_path),
-            "--selected-lag",
-            str(selected),
-            "--fpp-riskset",
-            str(fpp_dir / "riskset.parquet"),
-            "--spp-riskset",
-            str(spp_dir / "riskset.parquet"),
-            "--out-dir",
-            str(cmp_dir),
-        ],
-    )
-    assert main() == 0
-
-    expected = [
-        lag_dir / "fpp_lag_selection_table.csv",
-        lag_dir / "selected_lag.json",
-        lag_dir / "lag_selection_plot.png",
-        lag_dir / "qc_plot_manifest.json",
-        fpp_dir / "models" / "model_summary.csv",
-        fpp_dir / "models" / "timing_information_rate_interaction_summary.csv",
-        fpp_dir / "models" / "timing_information_rate_interaction_coefficients.csv",
-        fpp_dir / "models" / "timing_information_rate_interaction_comparison.csv",
-        fpp_dir / "figures" / "timing_information_rate_interaction_onset.png",
-        fpp_dir / "figures" / "timing_information_rate_interaction_offset.png",
-        spp_dir / "models" / "model_summary.csv",
-        spp_dir / "models" / "timing_information_rate_interaction_summary.csv",
-        spp_dir / "models" / "timing_information_rate_interaction_coefficients.csv",
-        spp_dir / "models" / "timing_information_rate_interaction_comparison.csv",
-        spp_dir / "figures" / "timing_information_rate_interaction_onset.png",
-        spp_dir / "figures" / "timing_information_rate_interaction_offset.png",
-        cmp_dir / "interaction_model_summary.csv",
-        cmp_dir / "interaction_coefficients.csv",
-        cmp_dir / "information_effect_contrasts.csv",
-        cmp_dir / "timing_information_rate_anchor_interaction_summary.csv",
-        cmp_dir / "timing_information_rate_anchor_interaction_coefficients.csv",
-        cmp_dir / "timing_information_rate_anchor_interaction_contrasts.csv",
-        cmp_dir / "fpp_vs_spp_report.md",
-        cmp_dir / "fpp_vs_spp_report.json",
-        cmp_dir / "qc_plot_manifest.json",
-    ]
-    for path in expected:
-        assert path.exists(), str(path)

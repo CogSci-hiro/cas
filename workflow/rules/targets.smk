@@ -365,84 +365,6 @@ rule info_rate_induced_lmeeg_all:
     input:
         *INFO_RATE_INDUCED_LMEEEG_OUTPUTS
 
-
-rule tde_hmm_all:
-    input:
-        GLHMM_FIT_SUMMARY_OUTPUT
-
-
-rule hazard_behavior_all:
-    input:
-        HAZARD_BEHAVIOR_RISKSET_OUTPUT,
-        *HAZARD_BEHAVIOR_TIMING_CONTROL_OUTPUTS,
-        *HAZARD_BEHAVIOR_GLMM_EXPORT_OUTPUTS,
-        *HAZARD_BEHAVIOR_GLMM_MODEL_OUTPUTS,
-        *HAZARD_BEHAVIOR_GLMM_FIGURES
-
-
-rule hazard_behavior_timing_control_all:
-    input:
-        *HAZARD_BEHAVIOR_TIMING_CONTROL_OUTPUTS
-
-
-rule hazard_behavior_glmm_all:
-    input:
-        *HAZARD_BEHAVIOR_GLMM_EXPORT_OUTPUTS,
-        *HAZARD_BEHAVIOR_GLMM_MODEL_OUTPUTS,
-        *HAZARD_BEHAVIOR_GLMM_FIGURES
-
-
-rule hazard_behavior_latency_regime_all:
-    input:
-        *HAZARD_BEHAVIOR_LATENCY_REGIME_EXPORT_OUTPUTS,
-        *HAZARD_BEHAVIOR_LATENCY_REGIME_MODEL_OUTPUTS,
-        *HAZARD_BEHAVIOR_LATENCY_REGIME_FIGURES,
-        *HAZARD_BEHAVIOR_LATENCY_REGIME_BIMODALITY_FIGURES,
-        *HAZARD_BEHAVIOR_LATENCY_REGIME_BIMODALITY_DIAGNOSTICS
-
-
-rule hazard_behavior_final_all:
-    input:
-        rules.behavior_final_all.input
-
-
-rule hazard_neural_all:
-    input:
-        *HAZARD_NEURAL_ALL_OUTPUTS
-
-
-rule hazard_neural_riskset_all:
-    input:
-        *HAZARD_NEURAL_RISKSET_OUTPUTS
-
-
-rule hazard_neural_models_all:
-    input:
-        *HAZARD_NEURAL_MODEL_OUTPUTS
-
-
-rule hazard_neural_lag_selection_all:
-    # Aggregates the lag-selection-specific neural outputs so we can request one target
-    # instead of remembering the individual model, JSON, null-summary, and figure paths.
-    input:
-        *HAZARD_NEURAL_LAG_SELECTION_OUTPUTS
-
-
-rule hazard_neural_permutation_null_all:
-    input:
-        *HAZARD_NEURAL_PERMUTATION_NULL_OUTPUTS
-
-
-rule hazard_neural_figures_all:
-    input:
-        *HAZARD_NEURAL_FIGURES
-
-
-rule neural_hazard_fpp_spp:
-    input:
-        *NEURAL_HAZARD_FPP_SPP_OUTPUTS
-
-
 rule source_dics_fpp_spp_alpha_beta_all:
     input:
         SOURCE_DICS_FPP_SPP_ALPHA_BETA_SUMMARY_OUTPUT,
@@ -471,8 +393,3 @@ rule figures_lme_eeg_fpp_spp_conf_disc_alpha_beta:
     input:
         FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_FIGURE_MANIFEST,
         FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_INFERENCE_FIGURE_MANIFEST
-
-
-rule neural_hazard_fpp_spp_renyi_alpha:
-    input:
-        *NEURAL_HAZARD_FPP_SPP_RENYI_ALPHA_OUTPUTS

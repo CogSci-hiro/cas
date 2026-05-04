@@ -14,70 +14,14 @@ import yaml
 from scipy.io import wavfile
 
 from cas.cli.commands.annotations import add_annotations_parser, run_annotations_command
-from cas.cli.commands.behavior_final import (
-    add_behavior_final_compare_parser,
-    add_behavior_final_fit_parser,
-    add_behavior_final_select_lag_parser,
-    run_behavior_final_compare_command,
-    run_behavior_final_fit_command,
-    run_behavior_final_select_lag_command,
-)
-from cas.cli.commands.build_tde_hmm_entropy_features import (
-    add_build_tde_hmm_entropy_features_parser,
-    run_build_tde_hmm_entropy_features_command,
-)
-from cas.cli.commands.diagnose_behaviour_latency_regime import (
-    add_diagnose_behaviour_latency_regime_parser,
-    run_diagnose_behaviour_latency_regime_command,
-)
-from cas.cli.commands.diagnose_behaviour_latency_regime_bimodality import (
-    add_diagnose_behaviour_latency_regime_bimodality_parser,
-    run_diagnose_behaviour_latency_regime_bimodality_command,
-)
+from cas.cli.commands.behavior_hazard import add_behavior_hazard_parser, run_behavior_hazard_command
 from cas.cli.commands.diagnose_spp_neural_hazard_failure import (
     add_diagnose_spp_neural_hazard_failure_parser,
     run_diagnose_spp_neural_hazard_failure_command,
 )
-from cas.cli.commands.export_behaviour_glmm_data import (
-    add_export_behaviour_glmm_data_parser,
-    run_export_behaviour_glmm_data_command,
-)
-from cas.cli.commands.export_behaviour_latency_regime_data import (
-    add_export_behaviour_latency_regime_data_parser,
-    run_export_behaviour_latency_regime_data_command,
-)
-from cas.cli.commands.fit_tde_hmm import add_fit_tde_hmm_parser, run_fit_tde_hmm_command
-from cas.cli.commands.hazard_behavior_fpp import (
-    add_hazard_behavior_fpp_parser,
-    run_hazard_behavior_fpp_command,
-)
 from cas.cli.commands.info_rate_induced_lmeeg import (
     add_info_rate_induced_lmeeg_parser,
     run_info_rate_induced_lmeeg_command,
-)
-from cas.cli.commands.hazard_fpp_tde_hmm import (
-    add_hazard_fpp_tde_hmm_parser,
-    run_hazard_fpp_tde_hmm_command,
-)
-from cas.cli.commands.neural_hazard_fpp_spp import (
-    add_neural_hazard_fpp_spp_parser,
-    run_neural_hazard_fpp_spp_command,
-)
-from cas.cli.commands.neural_hazard_fpp_spp_renyi import (
-    add_neural_hazard_fpp_spp_renyi_alpha_parser,
-    run_neural_hazard_fpp_spp_renyi_alpha_command,
-)
-from cas.cli.commands.plot_behaviour_glmm_results import (
-    add_plot_behaviour_glmm_results_parser,
-    run_plot_behaviour_glmm_results_command,
-)
-from cas.cli.commands.plot_behaviour_latency_regime_results import (
-    add_plot_behaviour_latency_regime_results_parser,
-    run_plot_behaviour_latency_regime_results_command,
-)
-from cas.cli.commands.run_fpp_neural_permutation_null import (
-    add_run_fpp_neural_permutation_null_parser,
-    run_fpp_neural_permutation_null_command,
 )
 from cas.cli.commands.source_dics_fpp_spp import (
     add_source_dics_fpp_spp_parser,
@@ -364,25 +308,10 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="cas", description="CAS command line interface.")
     subparsers = parser.add_subparsers(dest="command", required=True)
     add_annotations_parser(subparsers)
-    add_behavior_final_compare_parser(subparsers)
-    add_behavior_final_fit_parser(subparsers)
-    add_behavior_final_select_lag_parser(subparsers)
-    add_build_tde_hmm_entropy_features_parser(subparsers)
-    add_diagnose_behaviour_latency_regime_parser(subparsers)
-    add_diagnose_behaviour_latency_regime_bimodality_parser(subparsers)
+    add_behavior_hazard_parser(subparsers)
     add_diagnose_spp_neural_hazard_failure_parser(subparsers)
-    add_export_behaviour_glmm_data_parser(subparsers)
-    add_export_behaviour_latency_regime_data_parser(subparsers)
-    add_fit_tde_hmm_parser(subparsers)
-    add_hazard_behavior_fpp_parser(subparsers)
-    add_hazard_fpp_tde_hmm_parser(subparsers)
     add_info_rate_induced_lmeeg_parser(subparsers)
-    add_neural_hazard_fpp_spp_parser(subparsers)
-    add_neural_hazard_fpp_spp_renyi_alpha_parser(subparsers)
-    add_plot_behaviour_glmm_results_parser(subparsers)
-    add_plot_behaviour_latency_regime_results_parser(subparsers)
     add_plot_tde_hmm_qc_parser(subparsers)
-    add_run_fpp_neural_permutation_null_parser(subparsers)
     add_source_dics_fpp_spp_parser(subparsers)
     add_plot_source_dics_fpp_spp_parser(subparsers)
 
@@ -1721,48 +1650,18 @@ def main() -> int:
     args = parser.parse_args()
     if args.command == "annotations":
         return run_annotations_command(args)
-    if args.command == "behavior-final-compare":
-        return run_behavior_final_compare_command(args)
-    if args.command == "behavior-final-fit":
-        return run_behavior_final_fit_command(args)
-    if args.command == "behavior-final-select-lag":
-        return run_behavior_final_select_lag_command(args)
-    if args.command == "diagnose-behaviour-latency-regime":
-        return run_diagnose_behaviour_latency_regime_command(args)
-    if args.command == "diagnose-behaviour-latency-regime-bimodality":
-        return run_diagnose_behaviour_latency_regime_bimodality_command(args)
+    if args.command == "behavior":
+        return run_behavior_hazard_command(args)
     if args.command == "diagnose-spp-neural-hazard-failure":
         return run_diagnose_spp_neural_hazard_failure_command(args)
-    if args.command == "build-tde-hmm-entropy-features":
-        return run_build_tde_hmm_entropy_features_command(args)
-    if args.command == "export-behaviour-glmm-data":
-        return run_export_behaviour_glmm_data_command(args)
-    if args.command == "export-behaviour-latency-regime-data":
-        return run_export_behaviour_latency_regime_data_command(args)
-    if args.command == "fit-tde-hmm":
-        return run_fit_tde_hmm_command(args)
-    if args.command == "hazard-behavior-fpp":
-        return run_hazard_behavior_fpp_command(args)
-    if args.command == "hazard-fpp-tde-hmm":
-        return run_hazard_fpp_tde_hmm_command(args)
     if args.command == "info-rate-induced-lmeeg":
         return run_info_rate_induced_lmeeg_command(args)
-    if args.command == "neural-hazard-fpp-spp":
-        return run_neural_hazard_fpp_spp_command(args)
-    if args.command == "neural-hazard-fpp-spp-renyi-alpha":
-        return run_neural_hazard_fpp_spp_renyi_alpha_command(args)
     if args.command == "source-dics-fpp-spp":
         return run_source_dics_fpp_spp_command(args)
     if args.command == "plot-source-dics-fpp-spp":
         return run_plot_source_dics_fpp_spp_command(args)
-    if args.command in {"plot-behaviour-glmm-results", "plot-behaviour-hazard-results"}:
-        return run_plot_behaviour_glmm_results_command(args)
-    if args.command == "plot-behaviour-latency-regime-results":
-        return run_plot_behaviour_latency_regime_results_command(args)
     if args.command == "plot-tde-hmm-qc":
         return run_plot_tde_hmm_qc_command(args)
-    if args.command == "run-fpp-neural-permutation-null":
-        return run_fpp_neural_permutation_null_command(args)
     if args.command == "trf":
         return _run_trf(args)
     if args.command == "trf-config":

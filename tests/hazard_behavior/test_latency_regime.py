@@ -10,7 +10,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from cas.cli.main import main
 from cas.hazard_behavior.latency_regime_export import export_behaviour_latency_regime_data, prepare_latency_regime_data
 from cas.hazard_behavior.plot_latency_regime import plot_behaviour_latency_regime_results, skew_normal_pdf
 
@@ -270,63 +269,13 @@ def test_ppc_plot_smoke_and_missing_ppc_skip(tmp_path: Path) -> None:
     assert not (missing_output_dir / "behaviour_latency_regime_ppc.png").exists()
 
 
-def test_cli_latency_regime_commands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    riskset = _tiny_latency_riskset()
-    riskset_path = tmp_path / "hazard_behavior_riskset_with_timing_controls.tsv"
-    selected_lags_json = _write_selected_lags_json(tmp_path, information_rate_lag_ms=100, expected_lag_ms=300)
-    output_csv = tmp_path / "behaviour_latency_regime_data.csv"
-    output_qc_json = tmp_path / "behaviour_latency_regime_export_qc.json"
-    riskset.to_csv(riskset_path, sep="\t", index=False)
-
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "cas",
-            "export-behaviour-latency-regime-data",
-            "--input-riskset",
-            str(riskset_path),
-            "--selected-lags-json",
-            str(selected_lags_json),
-            "--output-csv",
-            str(output_csv),
-            "--output-qc-json",
-            str(output_qc_json),
-        ],
-    )
-    assert main() == 0
-    assert output_csv.exists()
-    assert output_qc_json.exists()
-
-    stan_dir, event_csv = _write_fake_latency_plot_inputs(tmp_path / "plotting")
-    figures_dir = tmp_path / "latency_figures"
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "cas",
-            "plot-behaviour-latency-regime-results",
-            "--stan-results-dir",
-            str(stan_dir),
-            "--event-data-csv",
-            str(event_csv),
-            "--output-dir",
-            str(figures_dir),
-        ],
-    )
-    assert main() == 0
-    assert (figures_dir / "behaviour_latency_regime_components.png").exists()
-
-
 def test_primary_pipeline_import_does_not_require_stan_or_r() -> None:
     result = subprocess.run(
         [
             sys.executable,
             "-c",
             (
-                "from cas.hazard_behavior.pipeline import run_behaviour_hazard_pipeline; "
-                "from cas.cli.commands.hazard_behavior_fpp import add_hazard_behavior_fpp_parser; "
-                "print('ok')"
+                "from cas.hazard_behavior.pipeline import run_behaviour_hazard_pipeline; print('ok')"
             ),
         ],
         cwd="/Users/hiro/Projects/active/cas",
