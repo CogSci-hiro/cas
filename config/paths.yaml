@@ -5,7 +5,7 @@
 project_root: "."
 bids_root: "/Users/hiro/Datasets/hyperscanning-bids"
 annotations_dir: "/Users/hiro/Datasets/hyperscanning-bids/derivatives/anais"
-ica_dir: "/Users/hiro/Datasets/working/hyperscanning/precomputed_ica"
+ica_dir: "/Users/hiro/Datasets/working/duet-extra-data/precomputed_ica"
 lm_feature_dir: "/Users/hiro/Datasets/hyperscanning-bids/derivatives/converted_lm_features/features/events"
 
 output_dir: "/Users/hiro/Datasets/working/cas-refactoring"

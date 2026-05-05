@@ -417,6 +417,52 @@ def _build_parser() -> argparse.ArgumentParser:
     trf_spp_onset_control_group_parser.add_argument("--kernel-png", required=True, help="Joint kernel PNG output path.")
     trf_spp_onset_control_group_parser.add_argument("--kernel-pdf", required=True, help="Joint kernel PDF output path.")
 
+    trf_partner_info_fit_parser = subparsers.add_parser(
+        "trf-partner-info-fit",
+        help="Fit the subject-level partner-turn information-tracking TRF.",
+    )
+    trf_partner_info_fit_parser.add_argument("--config", required=True, help="Path to the partner-info TRF config.")
+    trf_partner_info_fit_parser.add_argument("--subject", required=True, help="Target subject id, e.g. sub-001.")
+    trf_partner_info_fit_parser.add_argument(
+        "--project-root",
+        default=".",
+        help="Project root used to resolve relative config paths. Defaults to cwd.",
+    )
+    trf_partner_info_fit_parser.add_argument(
+        "--runs",
+        nargs="+",
+        type=int,
+        default=None,
+        help="Optional run list. Defaults to 1..n_runs from the partner-info TRF config.",
+    )
+    trf_partner_info_fit_parser.add_argument("--output-json", required=True, help="Subject summary JSON output path.")
+    trf_partner_info_fit_parser.add_argument("--output-npz", required=True, help="Subject coefficient NPZ output path.")
+
+    trf_partner_info_group_parser = subparsers.add_parser(
+        "trf-partner-info-group",
+        help="Aggregate subject-level partner-turn information-tracking TRF outputs.",
+    )
+    trf_partner_info_group_parser.add_argument("--subject-jsons", nargs="+", required=True)
+    trf_partner_info_group_parser.add_argument("--subject-npzs", nargs="+", required=True)
+    trf_partner_info_group_parser.add_argument("--summary-json", required=True)
+    trf_partner_info_group_parser.add_argument("--subject-csv", required=True)
+    trf_partner_info_group_parser.add_argument("--fold-csv", required=True)
+    trf_partner_info_group_parser.add_argument("--comparison-csv", required=True)
+    trf_partner_info_group_parser.add_argument("--diagnostics-csv", required=True)
+    trf_partner_info_group_parser.add_argument("--model-comparison-png", required=True)
+    trf_partner_info_group_parser.add_argument("--model-comparison-pdf", required=True)
+    trf_partner_info_group_parser.add_argument("--kernel-dir", required=True)
+    trf_partner_info_group_parser.add_argument("--sigma-png", required=True)
+    trf_partner_info_group_parser.add_argument("--sigma-pdf", required=True)
+    trf_partner_info_group_parser.add_argument("--alpha-png", required=True)
+    trf_partner_info_group_parser.add_argument("--alpha-pdf", required=True)
+    trf_partner_info_group_parser.add_argument("--fold-scores-png", required=True)
+    trf_partner_info_group_parser.add_argument("--fold-scores-pdf", required=True)
+    trf_partner_info_group_parser.add_argument("--predictor-corr-png", required=True)
+    trf_partner_info_group_parser.add_argument("--predictor-corr-pdf", required=True)
+    trf_partner_info_group_parser.add_argument("--predictor-variance-png", required=True)
+    trf_partner_info_group_parser.add_argument("--predictor-variance-pdf", required=True)
+
     eeg_array_parser = subparsers.add_parser(
         "eeg-array",
         help="Convert raw EEG (.edf or .fif) into a channel-wise NumPy array for TRF input.",
@@ -1619,6 +1665,57 @@ def _run_trf_spp_onset_control_group(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_trf_partner_info_fit(args: argparse.Namespace) -> int:
+    from cas.trf.partner_info import fit_partner_info_subject, write_partner_info_subject_outputs
+
+    result = fit_partner_info_subject(
+        config_path=args.config,
+        subject_id=args.subject,
+        project_root=args.project_root,
+        runs=list(args.runs) if args.runs is not None else None,
+    )
+    write_partner_info_subject_outputs(
+        result=result,
+        summary_json=args.output_json,
+        coefficients_npz=args.output_npz,
+    )
+    print(f"Saved partner-info TRF summary to {args.output_json}")
+    print(f"Saved partner-info TRF coefficients to {args.output_npz}")
+    return 0
+
+
+def _run_trf_partner_info_group(args: argparse.Namespace) -> int:
+    from cas.trf.partner_info import summarize_partner_info_group, write_partner_info_group_outputs
+
+    summary = summarize_partner_info_group(
+        subject_summary_paths=list(args.subject_jsons),
+        subject_coefficient_paths=list(args.subject_npzs),
+    )
+    write_partner_info_group_outputs(
+        summary=summary,
+        summary_json=args.summary_json,
+        subject_csv=args.subject_csv,
+        fold_csv=args.fold_csv,
+        comparison_csv=args.comparison_csv,
+        diagnostics_csv=args.diagnostics_csv,
+        model_comparison_png=args.model_comparison_png,
+        model_comparison_pdf=args.model_comparison_pdf,
+        kernel_dir=args.kernel_dir,
+        sigma_png=args.sigma_png,
+        sigma_pdf=args.sigma_pdf,
+        alpha_png=args.alpha_png,
+        alpha_pdf=args.alpha_pdf,
+        fold_scores_png=args.fold_scores_png,
+        fold_scores_pdf=args.fold_scores_pdf,
+        predictor_corr_png=args.predictor_corr_png,
+        predictor_corr_pdf=args.predictor_corr_pdf,
+        predictor_variance_png=args.predictor_variance_png,
+        predictor_variance_pdf=args.predictor_variance_pdf,
+    )
+    print(f"Saved partner-info TRF group summary to {args.summary_json}")
+    return 0
+
+
 def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
@@ -1640,6 +1737,10 @@ def main() -> int:
         return _run_trf_spp_onset_control_fit(args)
     if args.command == "trf-spp-onset-control-group":
         return _run_trf_spp_onset_control_group(args)
+    if args.command == "trf-partner-info-fit":
+        return _run_trf_partner_info_fit(args)
+    if args.command == "trf-partner-info-group":
+        return _run_trf_partner_info_group(args)
     if args.command == "eeg-array":
         return _run_eeg_array(args)
     if args.command == "envelope":

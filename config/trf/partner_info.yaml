@@ -1,0 +1,88 @@
+analysis:
+  name: "partner_info_trf"
+  description: "partner-turn information-tracking TRF"
+
+inputs:
+  behavior_config: "config/behavior/hazard.yaml"
+  ipu_gap_threshold_s: 0.3
+
+targets:
+  include: ["alpha", "beta", "raw"]
+  modelling_sampling_rate_hz: 50
+
+predictors:
+  zscore: true
+  controls:
+    - "acoustic_envelope"
+    - "word_onset_impulse"
+    - "partner_onset_impulse"
+    - "partner_offset_impulse"
+    - "time_from_partner_onset"
+    - "time_from_partner_offset"
+    - "time_from_partner_offset_squared"
+  information:
+    - "information_rate"
+    - "prop_expected_cumulative_info"
+
+information_rate:
+  source_column: "surprisal"
+  duration_mode: "token_offset_minus_onset"
+  encoding: "duration_filled_rate"
+  smoothing: "gaussian"
+
+prop_expected_cumulative_info:
+  source_column: "surprisal"
+  denominator: "expected_total_info"
+  encoding: "word_onset_step"
+  smoothing: "gaussian"
+
+smoothing:
+  unified_sigma: true
+  sigma_ms_grid: [50, 100, 200, 400]
+
+trf:
+  analysis_id: "partner_info_trf"
+  lag_start_ms: 0
+  lag_stop_ms: 1500
+  regularization: "ridge"
+  ridge_alpha_grid: [0.001, 0.01, 0.1, 1, 10, 100, 1000]
+  fit_intercept: false
+  standardize_X: false
+  standardize_Y: false
+  output:
+    root: "results/{analysis_id}"
+
+cv:
+  outer: "leave_one_run_out"
+  inner: "leave_one_run_out"
+  n_runs: 8
+  scoring: "pearson_r"
+  scoring_metric: "corr"
+
+time_frequency:
+  method: "morlet"
+  bands:
+    alpha:
+      fmin: 8
+      fmax: 12
+    beta:
+      fmin: 13
+      fmax: 30
+  morlet:
+    n_cycles: 6
+    freq_step_hz: 1.0
+    decim: null
+    use_fft: true
+
+outputs:
+  main:
+    - "model_comparison"
+    - "trf_kernels"
+  supp: []
+  qc:
+    - "hyperparameter_sanity"
+    - "fold_scores"
+    - "predictor_diagnostics"
+
+logging:
+  verbose: true

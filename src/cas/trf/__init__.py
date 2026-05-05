@@ -1,6 +1,6 @@
 """TRF utilities."""
 
-from cas.trf.nested_cv import loro_nested_cv
+from cas.trf.nested_cv import loro_nested_cv, loro_nested_cv_design_grid
 from cas.trf.prepare import (
     build_feature_path,
     get_partner_id,
@@ -14,6 +14,7 @@ __all__ = [
     "build_feature_path",
     "get_partner_id",
     "loro_nested_cv",
+    "loro_nested_cv_design_grid",
     "load_dyad_table",
     "prepare_trf_runs",
     "resolve_feature_subject_id",

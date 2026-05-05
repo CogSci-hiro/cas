@@ -5,9 +5,9 @@ inputs:
   surprisal_tsv: /Users/hiro/Datasets/hyperscanning-bids/derivatives/converted_lm_features/features/events/**/*desc-lmSurprisal_features.tsv
 
 behavior:
-  model_backend: "glm"              # options: "glm", "glmm"
+  model_backend: "glmm"              # options: "glm", "glmm"
   lag_selection_criterion: "bic"    # options: "bic", "log_likelihood"
-  only_overlap: true
+  only_overlap: false
   hazard:
     bin_size_ms: 50
 
@@ -15,7 +15,7 @@ behavior:
       fpp: FPP
       spp_control: SPP
 
-    candidate_lags_ms: [0, 50, 100, 150, 200, 250, 300, 400, 500]
+    candidate_lags_ms: [0, 50, 100, 150, 200, 250, 300, 400, 500, 550, 600, ] #[0, 50, 100, 150, 200, 250, 300, 400, 500]
 
     lag_selection:
       dataset: FPP

@@ -301,3 +301,184 @@ def loro_nested_cv(
             f"sd_fold_score={float(np.nanstd(mean_scores)):.6f}"
         )
     return fold_scores, fold_coefficients
+
+
+def loro_nested_cv_design_grid(
+    *,
+    X_runs_grid: list[tuple[dict[str, object], list[np.ndarray]]],
+    Y_runs: list[np.ndarray],
+    alphas: list[float],
+    srate: float,
+    tmin_s: float,
+    tmax_s: float,
+    fit_intercept: bool = False,
+    scoring: str = "corr",
+    standardize_X: bool = True,
+    standardize_Y: bool = False,
+    verbose: bool = False,
+) -> tuple[list[dict[str, object]], list[np.ndarray]]:
+    """Fit leave-one-run-out nested CV over a grid of design matrices and alphas.
+
+    Parameters
+    ----------
+    X_runs_grid
+        Sequence of ``(metadata, X_runs)`` pairs. Each ``X_runs`` entry must be a
+        run-aligned design matrix list comparable to ``Y_runs``. ``metadata`` is
+        copied into the selected outer-fold payload so analysis-specific callers
+        can track which setting won the inner CV.
+    Y_runs
+        Run-wise neural targets.
+    alphas
+        Ridge alphas searched inside the inner CV.
+    """
+
+    if not X_runs_grid:
+        raise ValueError("At least one design-grid entry must be provided.")
+    if not alphas:
+        raise ValueError("At least one ridge alpha must be provided.")
+    if len(Y_runs) < 2:
+        raise ValueError("At least two runs are required for leave-one-run-out CV.")
+
+    run_indices = list(range(len(Y_runs)))
+    for metadata, X_runs in X_runs_grid:
+        if len(X_runs) != len(Y_runs):
+            raise ValueError(
+                "Every design-grid entry must match the number of Y runs. "
+                f"Got {len(X_runs)} X runs and {len(Y_runs)} Y runs for metadata={metadata!r}."
+            )
+
+    fold_scores: list[dict[str, object]] = []
+    fold_coefficients: list[np.ndarray] = []
+
+    if verbose:
+        print(
+            f"[trf] starting nested CV design-grid: n_runs={len(Y_runs)} "
+            f"n_designs={len(X_runs_grid)} n_alphas={len(alphas)} "
+            f"srate={float(srate):.3f}Hz lag_window=[{float(tmin_s):.3f}, {float(tmax_s):.3f}]s"
+        )
+
+    outer_iterator = _progress_iter(
+        run_indices,
+        enabled=verbose,
+        desc="TRF outer folds",
+        total=len(run_indices),
+    )
+    for outer_test_index in outer_iterator:
+        outer_train_indices = [index for index in run_indices if index != outer_test_index]
+        if verbose:
+            print(
+                f"[trf] outer fold test_run={outer_test_index + 1} "
+                f"train_runs={[index + 1 for index in outer_train_indices]}"
+            )
+
+        candidate_records: list[dict[str, object]] = []
+        design_iterator = _progress_iter(
+            X_runs_grid,
+            enabled=verbose,
+            desc=f"fold {outer_test_index + 1} designs",
+            total=len(X_runs_grid),
+        )
+        for metadata, X_runs in design_iterator:
+            alpha_validation_means: list[float] = []
+            for alpha in alphas:
+                inner_fold_means: list[float] = []
+                for inner_valid_index in outer_train_indices:
+                    inner_train_indices = [
+                        index for index in outer_train_indices if index != inner_valid_index
+                    ]
+                    X_train = _concat_runs(X_runs, inner_train_indices)
+                    Y_train = _concat_runs(Y_runs, inner_train_indices)
+                    X_valid = np.asarray(X_runs[inner_valid_index], dtype=float)
+                    Y_valid = np.asarray(Y_runs[inner_valid_index], dtype=float)
+
+                    if standardize_X:
+                        X_train, X_valid = _safe_standardize(X_train, X_valid)
+                    if standardize_Y:
+                        Y_train, Y_valid = _safe_standardize(Y_train, Y_valid)
+
+                    model = _make_trf_estimator(
+                        srate=srate,
+                        tmin_s=tmin_s,
+                        tmax_s=tmax_s,
+                        alpha=float(alpha),
+                        fit_intercept=fit_intercept,
+                    )
+                    model.fit(X_train, Y_train)
+                    valid_scores = np.asarray(model.score(X_valid, Y_valid, scoring=scoring), dtype=float)
+                    inner_fold_means.append(float(np.nanmean(valid_scores)))
+
+                alpha_validation_means.append(float(np.nanmean(inner_fold_means)))
+
+            best_alpha_index = int(np.nanargmax(np.asarray(alpha_validation_means, dtype=float)))
+            candidate_records.append(
+                {
+                    "metadata": dict(metadata),
+                    "X_runs": X_runs,
+                    "selected_alpha": float(alphas[best_alpha_index]),
+                    "mean_validation_score": float(alpha_validation_means[best_alpha_index]),
+                    "inner_mean_scores_by_alpha": [float(value) for value in alpha_validation_means],
+                }
+            )
+
+        best_candidate_index = int(
+            np.nanargmax(
+                np.asarray(
+                    [record["mean_validation_score"] for record in candidate_records],
+                    dtype=float,
+                )
+            )
+        )
+        best_candidate = candidate_records[best_candidate_index]
+        selected_alpha = float(best_candidate["selected_alpha"])
+        selected_metadata = dict(best_candidate["metadata"])
+        X_runs = best_candidate["X_runs"]
+
+        X_outer_train = _concat_runs(X_runs, outer_train_indices)
+        Y_outer_train = _concat_runs(Y_runs, outer_train_indices)
+        X_outer_test = np.asarray(X_runs[outer_test_index], dtype=float)
+        Y_outer_test = np.asarray(Y_runs[outer_test_index], dtype=float)
+        if standardize_X:
+            X_outer_train, X_outer_test = _safe_standardize(X_outer_train, X_outer_test)
+        if standardize_Y:
+            Y_outer_train, Y_outer_test = _safe_standardize(Y_outer_train, Y_outer_test)
+
+        final_model = _make_trf_estimator(
+            srate=srate,
+            tmin_s=tmin_s,
+            tmax_s=tmax_s,
+            alpha=selected_alpha,
+            fit_intercept=fit_intercept,
+        )
+        final_model.fit(X_outer_train, Y_outer_train)
+        test_scores = np.asarray(final_model.score(X_outer_test, Y_outer_test, scoring=scoring), dtype=float)
+        channel_scores = np.asarray(test_scores[..., 0], dtype=float).reshape(-1)
+        coefficients = np.asarray(final_model.get_coef()[..., 0], dtype=float)
+
+        if verbose:
+            print(
+                f"[trf] completed outer fold test_run={outer_test_index + 1} "
+                f"selected_alpha={selected_alpha:.6g} "
+                f"selected_design={selected_metadata} "
+                f"mean_score={float(np.nanmean(channel_scores)):.6f}"
+            )
+
+        fold_scores.append(
+            {
+                "test_run": int(outer_test_index + 1),
+                "selected_alpha": selected_alpha,
+                "selected_design": selected_metadata,
+                "inner_mean_scores_by_alpha": list(best_candidate["inner_mean_scores_by_alpha"]),
+                "channel_scores": [float(value) for value in channel_scores],
+                "mean_score": float(np.nanmean(channel_scores)),
+                "mean_validation_score": float(best_candidate["mean_validation_score"]),
+            }
+        )
+        fold_coefficients.append(coefficients)
+
+    if verbose:
+        mean_scores = [float(fold["mean_score"]) for fold in fold_scores]
+        print(
+            f"[trf] completed nested CV design-grid: mean_fold_score={float(np.nanmean(mean_scores)):.6f} "
+            f"sd_fold_score={float(np.nanstd(mean_scores)):.6f}"
+        )
+    return fold_scores, fold_coefficients
