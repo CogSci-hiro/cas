@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 from cas.behavior._legacy_support import progress_iterable
-from cas.behavior.formulas import render_formula, strip_random_effects
+from cas.behavior.formulas import render_formula
 from cas.behavior.models import fit_formula_model
 
 
@@ -23,9 +23,15 @@ def select_behavior_lag(
     fpp_table: pd.DataFrame,
     *,
     candidate_lags_ms: list[int],
+    model_backend: str = "glm",
+    lag_selection_criterion: str = "log_likelihood",
     verbose: bool = False,
 ) -> SelectedLag:
-    baseline = fit_formula_model(fpp_table, model_id="A0_timing", formula=strip_random_effects(render_formula("A0_timing", lag_ms=0)))
+    baseline = fit_formula_model(
+        fpp_table,
+        model_id="M_0",
+        formula=render_formula("M_0", lag_ms=0, backend=model_backend),
+    )
     rows: list[dict[str, object]] = []
     for lag_ms in progress_iterable(
         list(candidate_lags_ms),
@@ -35,28 +41,38 @@ def select_behavior_lag(
     ):
         fitted = fit_formula_model(
             fpp_table,
-            model_id=f"A3_joint_information_lag_{lag_ms}",
-            formula=strip_random_effects(render_formula("A3_joint_information", lag_ms=lag_ms)),
+            model_id=f"M_3_lag_{lag_ms}",
+            formula=render_formula("M_3", lag_ms=lag_ms, backend=model_backend),
         )
         rows.append(
             {
                 "candidate_lag_ms": int(lag_ms),
                 "log_likelihood_baseline": baseline.log_likelihood,
-                "log_likelihood_joint_information": fitted.log_likelihood,
+                "log_likelihood_m3": fitted.log_likelihood,
                 "delta_log_likelihood": fitted.log_likelihood - baseline.log_likelihood,
                 "baseline_log_likelihood_finite": bool(np.isfinite(baseline.log_likelihood)),
-                "joint_log_likelihood_finite": bool(np.isfinite(fitted.log_likelihood)),
+                "m3_log_likelihood_finite": bool(np.isfinite(fitted.log_likelihood)),
             }
         )
     scores = pd.DataFrame(rows).sort_values(["candidate_lag_ms"], kind="mergesort").reset_index(drop=True)
-    finite_delta_mask = np.isfinite(pd.to_numeric(scores["delta_log_likelihood"], errors="coerce"))
+    criterion = str(lag_selection_criterion).strip().lower()
+    if criterion == "bic" and "bic" in scores:
+        finite_mask = np.isfinite(pd.to_numeric(scores["bic"], errors="coerce"))
+        scores["selection_score"] = pd.to_numeric(scores["bic"], errors="coerce")
+        choose_index = lambda frame: int(frame["selection_score"].astype(float).idxmin())
+        comparison_metric = "bic"
+    else:
+        finite_mask = np.isfinite(pd.to_numeric(scores["delta_log_likelihood"], errors="coerce"))
+        scores["selection_score"] = pd.to_numeric(scores["delta_log_likelihood"], errors="coerce")
+        choose_index = lambda frame: int(frame["selection_score"].astype(float).idxmax())
+        comparison_metric = "delta_log_likelihood"
     scores["selection_fallback"] = ""
-    if bool(finite_delta_mask.any()):
-        selected_idx = int(scores.loc[finite_delta_mask, "delta_log_likelihood"].astype(float).idxmax())
+    if bool(finite_mask.any()):
+        selected_idx = choose_index(scores.loc[finite_mask])
         selection_note = ""
     else:
         selected_idx = 0
-        selection_note = "All candidate lag delta log-likelihood values were non-finite; selected the first candidate lag as a fallback."
+        selection_note = "All candidate lag selection values were non-finite; selected the first candidate lag as a fallback."
         scores.loc[:, "selection_fallback"] = selection_note
     scores["selected"] = False
     scores.loc[selected_idx, "selected"] = True
@@ -64,9 +80,10 @@ def select_behavior_lag(
     payload = {
         "selected_lag_ms": selected_lag_ms,
         "candidate_lags_ms": [int(value) for value in candidate_lags_ms],
-        "comparison_metric": "delta_log_likelihood",
-        "baseline_model_id": "A0_timing",
-        "selected_model_id": "A3_joint_information",
+        "comparison_metric": comparison_metric,
+        "baseline_model_id": "M_0",
+        "selected_model_id": "M_3",
+        "model_backend": str(model_backend),
     }
     if selection_note:
         payload["selection_fallback"] = selection_note

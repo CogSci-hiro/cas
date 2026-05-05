@@ -316,26 +316,7 @@ rule induced_epochs_all:
     input:
         INDUCED_EPOCH_SUMMARY_OUTPUTS
 
-
-rule lmeeeg_all:
-    input:
-        LMEEEG_SUMMARY_OUTPUT,
-        *LMEEEG_EVOKED_MODEL_SUMMARY_OUTPUTS,
-        *LMEEEG_EVOKED_DURATION_QC_OUTPUTS
-
-
-rule induced_lmeeeg_all:
-    input:
-        LMEEEG_INDUCED_SUMMARY_OUTPUT
-
-
-rule lme_eeg_fpp_spp_cycle_position:
-    input:
-        FPP_SPP_CYCLE_POSITION_LMEEEG_SUMMARY_OUTPUT,
-        *FPP_SPP_CYCLE_POSITION_LMEEEG_CONTRAST_OUTPUTS
-
-
-rule run_fpp_spp_conf_disc_alpha_beta_lmeeeg:
+rule build_induced_sensor_conf_disc:
     input:
         epochs=EPOCH_OUTPUTS,
         induced=FPP_SPP_CONF_DISC_ALPHA_BETA_DOWNSAMPLED_SUMMARY_OUTPUTS,
@@ -353,18 +334,6 @@ rule run_fpp_spp_conf_disc_alpha_beta_lmeeeg:
             output_dir=os.path.dirname(output.summary),
         )
 
-
-rule lme_eeg_fpp_spp_conf_disc_alpha_beta:
-    input:
-        FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_SUMMARY_OUTPUT,
-        *FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_MODEL_SUMMARY_OUTPUTS,
-        *FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_CONTRAST_OUTPUTS
-
-
-rule info_rate_induced_lmeeg_all:
-    input:
-        *INFO_RATE_INDUCED_LMEEEG_OUTPUTS
-
 rule source_dics_fpp_spp_alpha_beta_all:
     input:
         SOURCE_DICS_FPP_SPP_ALPHA_BETA_SUMMARY_OUTPUT,
@@ -375,21 +344,3 @@ rule source_dics_all:
     input:
         SOURCE_DICS_FPP_SPP_ALPHA_BETA_SUMMARY_OUTPUT,
         SOURCE_DICS_FPP_SPP_ALPHA_BETA_FIGURES_INDEX
-
-
-rule figures_lmeeeg_all:
-    input:
-        LMEEEG_FIGURE_MANIFEST,
-        LMEEEG_INFERENCE_FIGURE_MANIFEST
-
-
-rule figures_lme_eeg_fpp_spp_cycle_position:
-    input:
-        FPP_SPP_CYCLE_POSITION_LMEEEG_FIGURE_MANIFEST,
-        FPP_SPP_CYCLE_POSITION_LMEEEG_INFERENCE_FIGURE_MANIFEST
-
-
-rule figures_lme_eeg_fpp_spp_conf_disc_alpha_beta:
-    input:
-        FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_FIGURE_MANIFEST,
-        FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_INFERENCE_FIGURE_MANIFEST

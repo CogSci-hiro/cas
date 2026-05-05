@@ -54,12 +54,12 @@ def trf_input_files(wildcards):
     return [TRF_CONFIG_PATH] + envelope_inputs + partner_envelope_inputs + eeg_inputs
 
 
-rule fit_trf:
+rule fit_trf_subject:
     input:
         trf_input_files,
     output:
-        score="/Users/hiro/Datasets/working/cas/derivatives/trf/env_self_other/sub-{subject}/trf.scores.json",
-        coef="/Users/hiro/Datasets/working/cas/derivatives/trf/env_self_other/sub-{subject}/trf.coefs.npz"
+        score=TRF_SCORE_PATTERN,
+        coef=TRF_COEF_PATTERN
     params:
         src_dir=SRC_DIR,
         config_path=TRF_CONFIG_PATH,
@@ -71,6 +71,12 @@ rule fit_trf:
             --subject "sub-{wildcards.subject}" \
             --project-root "{params.data_root}"
         """
+
+
+rule fit_trf:
+    input:
+        TRF_SCORE_OUTPUTS,
+        TRF_COEF_OUTPUTS
 
 
 TRF_SPP_ONSET_CONTROL_CONFIG_PATH = f"{CONFIG_DIR}/trf/spp_onset_control.yaml"

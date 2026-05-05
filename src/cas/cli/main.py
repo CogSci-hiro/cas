@@ -15,10 +15,6 @@ from scipy.io import wavfile
 
 from cas.cli.commands.annotations import add_annotations_parser, run_annotations_command
 from cas.cli.commands.behavior_hazard import add_behavior_hazard_parser, run_behavior_hazard_command
-from cas.cli.commands.info_rate_induced_lmeeg import (
-    add_info_rate_induced_lmeeg_parser,
-    run_info_rate_induced_lmeeg_command,
-)
 from cas.cli.commands.source_dics_fpp_spp import (
     add_source_dics_fpp_spp_parser,
     run_source_dics_fpp_spp_command,
@@ -26,6 +22,13 @@ from cas.cli.commands.source_dics_fpp_spp import (
 from cas.cli.commands.plot_source_dics_fpp_spp import (
     add_plot_source_dics_fpp_spp_parser,
     run_plot_source_dics_fpp_spp_command,
+)
+from cas.eeg.induced import (
+    discover_config_root as _induced_discover_config_root,
+    resolve_induced_lmeeeg_config_path,
+    resolve_out_dir as _induced_resolve_out_dir,
+    resolve_sensor_figure_manifest_path,
+    run_induced_workflow_target,
 )
 
 if TYPE_CHECKING:
@@ -69,34 +72,15 @@ def _load_yaml(path: Path) -> dict:
 
 
 def _load_paths_config(config_root: Path) -> dict:
-    paths_path = _discover_config_root(config_root) / "paths.yaml"
-    if not paths_path.exists():
-        raise FileNotFoundError(f"Paths config not found: {paths_path}")
-    return _load_yaml(paths_path)
+    return _load_yaml(_induced_discover_config_root(config_root) / "paths.yaml")
 
 
 def _discover_config_root(start: Path) -> Path:
-    for candidate in (start, *start.parents):
-        if (candidate / "paths.yaml").exists():
-            return candidate
-    return start
+    return _induced_discover_config_root(start)
 
 
 def _resolve_out_dir(config_root: Path) -> Path:
-    paths_config = _load_paths_config(config_root)
-    candidates = (
-        paths_config.get("output_dir"),
-        ((paths_config.get("io") or {}).get("out_dir") if isinstance(paths_config.get("io"), dict) else None),
-        ((paths_config.get("paths") or {}).get("out_dir") if isinstance(paths_config.get("paths"), dict) else None),
-        paths_config.get("derivatives_root"),
-    )
-    for candidate in candidates:
-        if isinstance(candidate, str) and candidate.strip():
-            return Path(candidate).resolve()
-    raise ValueError(
-        f"`output_dir`, `io.out_dir`, `paths.out_dir`, or `derivatives_root` must be configured in "
-        f"{_discover_config_root(config_root) / 'paths.yaml'}."
-    )
+    return _induced_resolve_out_dir(config_root)
 
 
 def _resolve_path(path_str: str, *, project_root: Path, fallback_root: Path | None = None) -> Path:
@@ -317,9 +301,41 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     add_annotations_parser(subparsers)
     add_behavior_hazard_parser(subparsers)
-    add_info_rate_induced_lmeeg_parser(subparsers)
     add_source_dics_fpp_spp_parser(subparsers)
     add_plot_source_dics_fpp_spp_parser(subparsers)
+
+    induced_parser = subparsers.add_parser(
+        "induced",
+        help="Grouped induced alpha/beta analysis commands.",
+    )
+    induced_subparsers = induced_parser.add_subparsers(dest="induced_command", required=True)
+    induced_default_config = "config/induced/alpha_beta_lmeeeg.yaml"
+    for name, help_text in (
+        ("power", "Run the induced-power preparation workflow."),
+        ("sensor-lmeeeg", "Run sensor-level induced alpha/beta lmeEEG."),
+        ("tables", "Build induced summary tables and model outputs."),
+        ("all", "Run the full induced alpha/beta workflow."),
+    ):
+        induced_cmd = induced_subparsers.add_parser(name, help=help_text)
+        induced_cmd.add_argument("--config-root", default="config")
+        induced_cmd.add_argument("--config", default=induced_default_config)
+
+    source_induced_cmd = induced_subparsers.add_parser(
+        "source-lmeeeg",
+        help="Run source-level induced alpha/beta analysis.",
+    )
+    source_induced_cmd.add_argument("--config-root", default="config")
+    source_induced_cmd.add_argument("--config", default="config/induced/source_localisation.yaml")
+
+    for name, help_text in (
+        ("figures", "Render centralized induced figures."),
+        ("qc", "Render centralized induced QC figures."),
+    ):
+        induced_cmd = induced_subparsers.add_parser(name, help=help_text)
+        induced_cmd.add_argument("--config-root", default="config")
+        induced_cmd.add_argument("--config", default=induced_default_config)
+        induced_cmd.add_argument("--viz-config", default=None)
+        induced_cmd.add_argument("--output", default=None)
 
     trf_parser = subparsers.add_parser("trf", help="Run TRF nested CV from run-wise arrays.")
     trf_parser.add_argument("--eeg-runs", nargs="+", required=True, help="Run-wise EEG .npy paths.")
@@ -593,82 +609,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Precomputed ICA .fif path.",
     )
 
-    lmeeeg_parser = subparsers.add_parser(
-        "lmeeeg",
-        help="Run config-driven lmeEEG analysis from one or more existing epochs files.",
-    )
-    lmeeeg_parser.add_argument("--epochs", nargs="+", required=True, help="One or more input epochs .fif paths.")
-    lmeeeg_parser.add_argument(
-        "--config",
-        required=True,
-        help="Standalone lmeEEG YAML config path.",
-    )
-    lmeeeg_parser.add_argument(
-        "--output-dir",
-        required=True,
-        help="Directory where lmeEEG outputs will be written.",
-    )
-    lmeeeg_parser.add_argument(
-        "--metadata-csv",
-        default=None,
-        help="Optional metadata CSV path when epochs.metadata is missing or should be overridden.",
-    )
-
-    figures_lmeeeg_parser = subparsers.add_parser(
-        "figures-lmeeeg",
-        help="Render pooled lmeEEG QC plots and write a figure manifest.",
-    )
-    figures_lmeeeg_parser.add_argument(
-        "--config-root",
-        default="config",
-        help="Directory containing paths.yaml, induced lmeEEG config(s), and viz.yaml.",
-    )
-    figures_lmeeeg_parser.add_argument(
-        "--viz-config",
-        default=None,
-        help="Optional explicit viz.yaml path.",
-    )
-    figures_lmeeeg_parser.add_argument(
-        "--lmeeeg-config",
-        default=None,
-        help="Optional explicit lmeEEG config path.",
-    )
-    figures_lmeeeg_parser.add_argument(
-        "--output",
-        default=None,
-        help="Optional explicit QC manifest output path.",
-    )
-
-    figures_lmeeeg_inference_parser = subparsers.add_parser(
-        "figures-lmeeeg-inference",
-        help="Render pooled lmeEEG inference plots and write a figure manifest.",
-    )
-    figures_lmeeeg_inference_parser.add_argument(
-        "--config-root",
-        default="config",
-        help="Directory containing paths.yaml, induced lmeEEG config(s), and viz.yaml.",
-    )
-    figures_lmeeeg_inference_parser.add_argument(
-        "--viz-config",
-        default=None,
-        help="Optional explicit viz.yaml path.",
-    )
-    figures_lmeeeg_inference_parser.add_argument(
-        "--lmeeeg-config",
-        default=None,
-        help="Optional explicit lmeEEG config path.",
-    )
-    figures_lmeeeg_inference_parser.add_argument(
-        "--output",
-        default=None,
-        help="Optional explicit inference manifest output path.",
-    )
     return parser
 
 
 def _run_trf(args: argparse.Namespace) -> int:
-    from trf.nested_cv import loro_nested_cv
-    from trf.prepare import prepare_trf_runs
+    from cas.trf.nested_cv import loro_nested_cv
+    from cas.trf.prepare import prepare_trf_runs
 
     eeg_runs = _load_runs(args.eeg_runs, label="eeg")
     predictor_runs = _load_runs(args.predictor_runs, label="predictor")
@@ -1012,37 +958,15 @@ def _run_apply_ica(args: argparse.Namespace) -> int:
     return 0
 
 
-def _run_lmeeeg(args: argparse.Namespace) -> int:
-    from cas.stats.lmeeeg_pipeline import run_lmeeeg_analysis, run_pooled_lmeeeg_analysis
-
-    if len(args.epochs) == 1:
-        summary = run_lmeeeg_analysis(
-            epochs_path=args.epochs[0],
-            config_path=args.config,
-            output_dir=args.output_dir,
-            metadata_csv=args.metadata_csv,
-        )
-    else:
-        if args.metadata_csv is not None:
-            raise ValueError("--metadata-csv is only supported for single-file lmeeeg runs.")
-        summary = run_pooled_lmeeeg_analysis(
-            epochs_paths=args.epochs,
-            config_path=args.config,
-            output_dir=args.output_dir,
-        )
-    print(json.dumps(summary, indent=2))
-    return 0
-
-
 def _lmeeeg_analysis_root(out_dir: Path) -> Path:
     return out_dir / "lmeeeg"
 
 
 def _resolve_lmeeeg_config_path(*, config_root: Path, explicit_config_path: str | None) -> Path:
-    if explicit_config_path:
-        return Path(explicit_config_path).resolve()
-    resolved_root = _discover_config_root(config_root)
-    return resolved_root / "induced" / "alpha_beta_lmeeeg.yaml"
+    return resolve_induced_lmeeeg_config_path(
+        config_root=config_root,
+        explicit_config_path=explicit_config_path,
+    )
 
 
 def _lmeeeg_analysis_name(config: dict[str, object]) -> str | None:
@@ -1060,9 +984,17 @@ def _lmeeeg_inference_figure_dirname(config: dict[str, object]) -> str:
 
 
 def _lmeeeg_analysis_root_for_config(out_dir: Path, *, config: dict[str, object]) -> Path:
-    analysis_root = _lmeeeg_analysis_root(out_dir)
+    output_root_dirname = str(config.get("output_root_dirname", "lmeeeg")).strip().strip("/")
+    analysis_root = out_dir / output_root_dirname
     analysis_name = _lmeeeg_analysis_name(config)
     return analysis_root / analysis_name if analysis_name else analysis_root
+
+
+def _resolve_manifest_figure_subdir(*, out_dir: Path, output_path: Path, default_subdir: str) -> str:
+    try:
+        return output_path.parent.relative_to(out_dir / "figures").as_posix()
+    except ValueError:
+        return default_subdir
 
 
 def _load_lmeeeg_analysis_summary(*, out_dir: Path, config: dict[str, object]) -> dict[str, object]:
@@ -1242,12 +1174,17 @@ def _run_figures_lmeeeg(args: argparse.Namespace) -> int:
         explicit_config_path=getattr(args, "lmeeeg_config", None),
     )
     lmeeeg_config = load_lmeeeg_config(lmeeeg_config_path)
-    figure_dirname = _lmeeeg_figure_dirname(lmeeeg_config)
     viz_section = _load_viz_section(config_root, args.viz_config)
     figure_section = dict((viz_section.get("figures") or {}).get("lmeeeg") or {})
     formats = tuple(figure_section.get("formats", viz_section.get("formats", ["png", "pdf"])))
     dpi = int(viz_section.get("dpi", 300))
-    output_path = Path(args.output) if args.output else out_dir / "figures" / figure_dirname / "figure_manifest.json"
+    default_figure_dirname = _lmeeeg_figure_dirname(lmeeeg_config)
+    output_path = Path(args.output) if args.output else out_dir / "figures" / default_figure_dirname / "figure_manifest.json"
+    figure_dirname = _resolve_manifest_figure_subdir(
+        out_dir=out_dir,
+        output_path=output_path,
+        default_subdir=default_figure_dirname,
+    )
 
     analysis_summary = _load_lmeeeg_analysis_summary(out_dir=out_dir, config=lmeeeg_config)
     model_payloads = _load_lmeeeg_model_payloads(
@@ -1312,12 +1249,17 @@ def _run_figures_lmeeeg_inference(args: argparse.Namespace) -> int:
         explicit_config_path=getattr(args, "lmeeeg_config", None),
     )
     lmeeeg_config = load_lmeeeg_config(lmeeeg_config_path)
-    output_dirname = _lmeeeg_inference_figure_dirname(lmeeeg_config)
     viz_section = _load_viz_section(config_root, args.viz_config)
     figure_section = dict((viz_section.get("figures") or {}).get("lmeeeg_inference") or {})
     formats = tuple(figure_section.get("formats", viz_section.get("formats", ["png", "pdf"])))
     dpi = int(viz_section.get("dpi", 300))
-    output_path = Path(args.output) if args.output else out_dir / "figures" / output_dirname / "figure_manifest.json"
+    default_output_dirname = _lmeeeg_inference_figure_dirname(lmeeeg_config)
+    output_path = Path(args.output) if args.output else out_dir / "figures" / default_output_dirname / "figure_manifest.json"
+    output_dirname = _resolve_manifest_figure_subdir(
+        out_dir=out_dir,
+        output_path=output_path,
+        default_subdir=default_output_dirname,
+    )
 
     analysis_summary = _load_lmeeeg_analysis_summary(out_dir=out_dir, config=lmeeeg_config)
     plots: list[dict[str, object]] = []
@@ -1424,6 +1366,38 @@ def _run_figures_lmeeeg_inference(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_induced_command(args: argparse.Namespace) -> int:
+    if args.induced_command == "power":
+        return run_induced_workflow_target("induced_power")
+    if args.induced_command == "sensor-lmeeeg":
+        return run_induced_workflow_target("induced_sensor_lmeeeg")
+    if args.induced_command == "source-lmeeeg":
+        return run_induced_workflow_target("induced_source_lmeeeg")
+    if args.induced_command == "tables":
+        return run_induced_workflow_target("induced_tables")
+    if args.induced_command == "all":
+        return run_induced_workflow_target("induced_all")
+    if args.induced_command in {"figures", "qc"}:
+        config_root = Path(args.config_root).resolve()
+        lmeeeg_config_path = Path(args.config).resolve()
+        out_dir = _resolve_out_dir(config_root)
+        output_path = Path(args.output) if args.output else resolve_sensor_figure_manifest_path(
+            out_dir=out_dir,
+            config_path=lmeeeg_config_path,
+            figure_kind=args.induced_command,
+        )
+        delegated_args = argparse.Namespace(
+            config_root=str(config_root),
+            viz_config=args.viz_config,
+            lmeeeg_config=str(lmeeeg_config_path),
+            output=str(output_path),
+        )
+        if args.induced_command == "qc":
+            return _run_figures_lmeeeg(delegated_args)
+        return _run_figures_lmeeeg_inference(delegated_args)
+    raise ValueError(f"Unsupported induced command: {args.induced_command}")
+
+
 def _build_config_driven_trf_inputs(
     *,
     trf_config: dict,
@@ -1497,8 +1471,8 @@ def _default_trf_output_prefix(*, trf_config: dict, subject_id: str, config_root
 
 
 def _run_trf_config(args: argparse.Namespace) -> int:
-    from trf.nested_cv import loro_nested_cv
-    from trf.prepare import prepare_trf_runs
+    from cas.trf.nested_cv import loro_nested_cv
+    from cas.trf.prepare import prepare_trf_runs
 
     project_root = Path(args.project_root).resolve()
     config_path = _resolve_path(args.config, project_root=project_root).resolve()
@@ -1652,8 +1626,8 @@ def main() -> int:
         return run_annotations_command(args)
     if args.command == "behavior":
         return run_behavior_hazard_command(args)
-    if args.command == "info-rate-induced-lmeeg":
-        return run_info_rate_induced_lmeeg_command(args)
+    if args.command == "induced":
+        return _run_induced_command(args)
     if args.command == "source-dics-fpp-spp":
         return run_source_dics_fpp_spp_command(args)
     if args.command == "plot-source-dics-fpp-spp":
@@ -1690,12 +1664,6 @@ def main() -> int:
         return _run_average_reference(args)
     if args.command == "apply-ica":
         return _run_apply_ica(args)
-    if args.command == "lmeeeg":
-        return _run_lmeeeg(args)
-    if args.command == "figures-lmeeeg":
-        return _run_figures_lmeeeg(args)
-    if args.command == "figures-lmeeeg-inference":
-        return _run_figures_lmeeeg_inference(args)
     parser.error(f"Unknown command: {args.command}")
     return 2
 

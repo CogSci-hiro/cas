@@ -1521,7 +1521,9 @@ def _model_output_dir(
     """Return the output directory for one model (optionally band-specific)."""
     out_dir = Path(runtime_config["paths"]["out_dir"])
     analysis_name = str((runtime_config.get("lmeeeg") or {}).get("analysis_name", "")).strip()
-    lmeeeg_root = out_dir / "lmeeeg"
+    output_root_dirname = str((runtime_config.get("lmeeeg") or {}).get("output_root_dirname", "lmeeeg")).strip()
+    output_root_dirname = output_root_dirname.strip("/") or "lmeeeg"
+    lmeeeg_root = out_dir / output_root_dirname
     if analysis_name:
         lmeeeg_root = lmeeeg_root / analysis_name
     if band_name is not None:
@@ -1557,7 +1559,8 @@ def run_pooled_lmeeeg_analysis(
     config = load_lmeeeg_config(config_path)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    out_dir = _resolve_project_out_dir(output_dir)
+    configured_project_out_dir = str(config.get("project_out_dir", "")).strip()
+    out_dir = Path(configured_project_out_dir) if configured_project_out_dir else _resolve_project_out_dir(output_dir)
     _emit_status("Running SPP amplitude lmeEEG duration-control analysis")
     _emit_status(f"Loaded lmeEEG config: {Path(config_path)}")
     _emit_status(f"Writing lmeEEG outputs under: {output_dir}")

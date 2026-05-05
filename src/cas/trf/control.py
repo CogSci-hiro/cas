@@ -14,12 +14,12 @@ from scipy.stats import wilcoxon
 from cas.trf.prepare import (
     build_impulse_predictor,
     load_events_table,
+    prepare_trf_runs,
     resolve_predictor_paths,
     resolve_speaker_value,
     select_subject_run_events,
 )
-from trf.nested_cv import loro_nested_cv
-from trf.prepare import prepare_trf_runs
+from cas.trf.nested_cv import loro_nested_cv
 
 
 def _progress_iter(iterable, *, enabled: bool, desc: str, total: int | None = None):

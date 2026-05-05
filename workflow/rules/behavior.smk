@@ -31,14 +31,11 @@ BEHAVIOR_HAZARD_PREDICTOR_OUTPUTS = [
 BEHAVIOR_HAZARD_LAG_OUTPUTS = [
     f"{BEHAVIOR_HAZARD_ROOT}/lag_selection/candidate_lag_scores.csv",
     f"{BEHAVIOR_HAZARD_ROOT}/lag_selection/selected_lag.json",
-    f"{BEHAVIOR_HAZARD_ROOT}/lag_selection/family_lag_summary.csv",
-    f"{BEHAVIOR_HAZARD_ROOT}/lag_selection/family_lag_rankings.csv",
-    f"{BEHAVIOR_HAZARD_ROOT}/lag_selection/family_model_diagnostics.csv",
-    f"{BEHAVIOR_HAZARD_ROOT}/lag_selection/lag_selector_comparison.csv",
 ]
 
 BEHAVIOR_HAZARD_TABLE_OUTPUTS = [
     f"{BEHAVIOR_HAZARD_ROOT}/tables/model_comparisons.csv",
+    f"{BEHAVIOR_HAZARD_ROOT}/tables/model_summary.csv",
     f"{BEHAVIOR_HAZARD_ROOT}/tables/coefficient_summary.csv",
     f"{BEHAVIOR_HAZARD_ROOT}/tables/odds_ratios.csv",
     f"{BEHAVIOR_HAZARD_ROOT}/tables/event_rate_summary.csv",
@@ -59,7 +56,7 @@ BEHAVIOR_HAZARD_DIAGNOSTIC_OUTPUTS = [
 BEHAVIOR_HAZARD_FIGURE_OUTPUTS = [
     f"{BEHAVIOR_FIGURES_MAIN}/fig01_lag_selection.png",
     f"{BEHAVIOR_FIGURES_MAIN}/fig02_primary_information_effects.png",
-    f"{BEHAVIOR_FIGURES_MAIN}/fig03_timing_information_heatmaps.png",
+    f"{BEHAVIOR_FIGURES_MAIN}/fig03_timing_information_interaction.png",
 ]
 if bool(BEHAVIOR_HAZARD_MAIN_CONFIG.get("three_way_interaction", False)):
     BEHAVIOR_HAZARD_FIGURE_OUTPUTS.append(f"{BEHAVIOR_FIGURES_MAIN}/fig04_three_way_interaction.png")
@@ -127,14 +124,18 @@ rule behavior_hazard_models:
         *BEHAVIOR_HAZARD_PREDICTOR_OUTPUTS,
         *BEHAVIOR_HAZARD_LAG_OUTPUTS
     output:
-        f"{BEHAVIOR_HAZARD_ROOT}/models/primary_fpp/A0_timing.json",
-        f"{BEHAVIOR_HAZARD_ROOT}/models/primary_fpp/A1_information_rate.json",
-        f"{BEHAVIOR_HAZARD_ROOT}/models/primary_fpp/A2_expected_cum_info.json",
-        f"{BEHAVIOR_HAZARD_ROOT}/models/primary_fpp/A3_joint_information.json",
-        f"{BEHAVIOR_HAZARD_ROOT}/models/fpp_spp_control/B1_shared_information.json",
-        f"{BEHAVIOR_HAZARD_ROOT}/models/fpp_spp_control/B2_anchor_x_information.json",
-        f"{BEHAVIOR_HAZARD_ROOT}/models/timing_moderation/C1_onset_x_rate.json",
-        f"{BEHAVIOR_HAZARD_ROOT}/models/timing_moderation/C2_offset_x_rate.json",
+        f"{BEHAVIOR_HAZARD_ROOT}/models/fpp/M_0.json",
+        f"{BEHAVIOR_HAZARD_ROOT}/models/fpp/M_1.json",
+        f"{BEHAVIOR_HAZARD_ROOT}/models/fpp/M_2.json",
+        f"{BEHAVIOR_HAZARD_ROOT}/models/fpp/M_3.json",
+        f"{BEHAVIOR_HAZARD_ROOT}/models/fpp/M_4.json",
+        f"{BEHAVIOR_HAZARD_ROOT}/models/spp_control/M_0.json",
+        f"{BEHAVIOR_HAZARD_ROOT}/models/spp_control/M_1.json",
+        f"{BEHAVIOR_HAZARD_ROOT}/models/spp_control/M_2.json",
+        f"{BEHAVIOR_HAZARD_ROOT}/models/spp_control/M_3.json",
+        f"{BEHAVIOR_HAZARD_ROOT}/models/spp_control/M_4.json",
+        f"{BEHAVIOR_HAZARD_ROOT}/models/pooled_anchor/M_pooled_main.json",
+        f"{BEHAVIOR_HAZARD_ROOT}/models/pooled_anchor/M_pooled_anchor_interaction.json",
     shell:
         r"""
         set -euo pipefail
@@ -147,14 +148,18 @@ rule behavior_hazard_tables:
         BEHAVIOR_HAZARD_CONFIG_PATH,
         *BEHAVIOR_HAZARD_PREDICTOR_OUTPUTS,
         *BEHAVIOR_HAZARD_LAG_OUTPUTS,
-        f"{BEHAVIOR_HAZARD_ROOT}/models/primary_fpp/A0_timing.json",
-        f"{BEHAVIOR_HAZARD_ROOT}/models/primary_fpp/A1_information_rate.json",
-        f"{BEHAVIOR_HAZARD_ROOT}/models/primary_fpp/A2_expected_cum_info.json",
-        f"{BEHAVIOR_HAZARD_ROOT}/models/primary_fpp/A3_joint_information.json",
-        f"{BEHAVIOR_HAZARD_ROOT}/models/fpp_spp_control/B1_shared_information.json",
-        f"{BEHAVIOR_HAZARD_ROOT}/models/fpp_spp_control/B2_anchor_x_information.json",
-        f"{BEHAVIOR_HAZARD_ROOT}/models/timing_moderation/C1_onset_x_rate.json",
-        f"{BEHAVIOR_HAZARD_ROOT}/models/timing_moderation/C2_offset_x_rate.json",
+        f"{BEHAVIOR_HAZARD_ROOT}/models/fpp/M_0.json",
+        f"{BEHAVIOR_HAZARD_ROOT}/models/fpp/M_1.json",
+        f"{BEHAVIOR_HAZARD_ROOT}/models/fpp/M_2.json",
+        f"{BEHAVIOR_HAZARD_ROOT}/models/fpp/M_3.json",
+        f"{BEHAVIOR_HAZARD_ROOT}/models/fpp/M_4.json",
+        f"{BEHAVIOR_HAZARD_ROOT}/models/spp_control/M_0.json",
+        f"{BEHAVIOR_HAZARD_ROOT}/models/spp_control/M_1.json",
+        f"{BEHAVIOR_HAZARD_ROOT}/models/spp_control/M_2.json",
+        f"{BEHAVIOR_HAZARD_ROOT}/models/spp_control/M_3.json",
+        f"{BEHAVIOR_HAZARD_ROOT}/models/spp_control/M_4.json",
+        f"{BEHAVIOR_HAZARD_ROOT}/models/pooled_anchor/M_pooled_main.json",
+        f"{BEHAVIOR_HAZARD_ROOT}/models/pooled_anchor/M_pooled_anchor_interaction.json",
     output:
         *BEHAVIOR_HAZARD_TABLE_OUTPUTS,
         *BEHAVIOR_HAZARD_DIAGNOSTIC_OUTPUTS

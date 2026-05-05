@@ -404,21 +404,33 @@ def _lmeeeg_analysis_root_from_config(config_path: str) -> str:
 
 
 def _resolve_erp_output_dir(path_value: str | None, default_subdir: str) -> str:
+    workflow_out_dir = (
+        PATHS_CONFIG.get("output_dir")
+        or ((PATHS_CONFIG.get("io") or {}).get("out_dir") if isinstance(PATHS_CONFIG.get("io"), dict) else None)
+        or ((PATHS_CONFIG.get("paths") or {}).get("out_dir") if isinstance(PATHS_CONFIG.get("paths"), dict) else None)
+        or OUT_DIR
+    )
     if not isinstance(path_value, str) or not path_value.strip():
-        return f"{OUT_DIR}/{default_subdir}"
+        return f"{workflow_out_dir}/{default_subdir}"
     if os.path.isabs(path_value):
         return path_value
-    return f"{OUT_DIR}/{path_value.lstrip('/')}"
+    return f"{workflow_out_dir}/{path_value.lstrip('/')}"
 
 
 def _resolve_erp_input_path(path_value: str | None, default_relative: str) -> str:
+    workflow_out_dir = (
+        PATHS_CONFIG.get("output_dir")
+        or ((PATHS_CONFIG.get("io") or {}).get("out_dir") if isinstance(PATHS_CONFIG.get("io"), dict) else None)
+        or ((PATHS_CONFIG.get("paths") or {}).get("out_dir") if isinstance(PATHS_CONFIG.get("paths"), dict) else None)
+        or OUT_DIR
+    )
     path_text = default_relative if not isinstance(path_value, str) or not path_value.strip() else path_value
     if os.path.isabs(path_text):
         return path_text
     project_candidate = os.path.join(PROJECT_ROOT, path_text.lstrip("/"))
     if os.path.exists(project_candidate):
         return project_candidate
-    return os.path.join(OUT_DIR, path_text.lstrip("/"))
+    return os.path.join(str(workflow_out_dir), path_text.lstrip("/"))
 
 
 LMEEEG_EVOKED_MODEL_NAMES = _evoked_lmeeeg_model_names()
@@ -567,7 +579,7 @@ rule make_induced_source_epochs:
         )
 
 
-rule run_lmeeeg:
+rule build_sensor_lmeeeg_evoked:
     input:
         epochs=EPOCH_OUTPUTS,
         config=LMEEEG_CONFIG_PATH,
@@ -616,7 +628,7 @@ rule run_lmeeeg:
                 os.unlink(temp_config_path)
 
 
-rule run_induced_lmeeeg:
+rule build_induced_sensor_lmeeeg:
     input:
         epochs=EPOCH_OUTPUTS,
         induced_subjects=_induced_epoch_summary_outputs(),
@@ -672,7 +684,7 @@ rule run_induced_lmeeeg:
         Path(output.summary).write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-rule run_fpp_spp_cycle_position_lmeeeg:
+rule build_induced_sensor_cycle_position:
     input:
         epochs=EPOCH_OUTPUTS,
         induced=_induced_epoch_summary_outputs(),
@@ -693,7 +705,7 @@ rule run_fpp_spp_cycle_position_lmeeeg:
         )
 
 
-rule run_info_rate_induced_lmeeg:
+rule build_induced_binned_info_rate:
     input:
         epochs=INDUCED_SOURCE_EPOCH_OUTPUTS,
         config=INFO_RATE_INDUCED_LMEEEG_CONFIG_PATH,
@@ -705,6 +717,6 @@ rule run_info_rate_induced_lmeeg:
         set -euo pipefail
         mkdir -p "{resources.tmpdir}/mpl" "{resources.tmpdir}/cache"
         MPLCONFIGDIR="{resources.tmpdir}/mpl" XDG_CACHE_HOME="{resources.tmpdir}/cache" \
-        PYTHONPATH="{SRC_DIR}:{PROJECT_ROOT}" "{PYTHON_BIN}" -m cas.cli.main info-rate-induced-lmeeg \
-          --config "{input.config}"
+        PYTHONPATH="{SRC_DIR}:{PROJECT_ROOT}" "{PYTHON_BIN}" -c \
+          'from pathlib import Path; from cas.info_rate_induced_lmeeg import load_info_rate_induced_lmeeg_config, run_info_rate_induced_lmeeg_pipeline; cfg = load_info_rate_induced_lmeeg_config(Path(r"{input.config}")); result = run_info_rate_induced_lmeeg_pipeline(cfg); print(result.out_dir)'
         """

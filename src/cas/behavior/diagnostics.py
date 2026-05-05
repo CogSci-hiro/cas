@@ -54,7 +54,7 @@ def lag_sensitivity_rows(table: pd.DataFrame, candidate_lags_ms: list[int]) -> p
     from cas.behavior.models import fit_registered_model
 
     for lag_ms in candidate_lags_ms:
-        fitted = fit_registered_model(table, model_id="A3_joint_information", lag_ms=lag_ms)
+        fitted = fit_registered_model(table, model_id="M_3", lag_ms=lag_ms)
         conf = fitted.result.conf_int() if hasattr(fitted.result, "conf_int") else None
         for term in [f"z_information_rate_lag_{lag_ms}", f"z_prop_expected_cum_info_lag_{lag_ms}"]:
             if term not in fitted.result.params.index:

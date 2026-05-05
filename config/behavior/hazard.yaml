@@ -5,6 +5,8 @@ inputs:
   surprisal_tsv: /Users/hiro/Datasets/hyperscanning-bids/derivatives/converted_lm_features/features/events/**/*desc-lmSurprisal_features.tsv
 
 behavior:
+  model_backend: "glm"              # options: "glm", "glmm"
+  lag_selection_criterion: "bic"    # options: "bic", "log_likelihood"
   hazard:
     bin_size_ms: 50
 
@@ -16,10 +18,9 @@ behavior:
 
     lag_selection:
       dataset: FPP
-      baseline_model_id: A0_timing
-      candidate_model_id: A3_joint_information
-      comparison_metric: delta_log_likelihood
-      selected_lag_rule: max_delta_log_likelihood
+      selector_model_id: M_3
+      criterion: bic
+      selected_lag_rule: shared_fpp_selected_lag
 
     standardization:
       scope: within_anchor
@@ -37,41 +38,40 @@ behavior:
     modeling:
       use_splines: false
       run_as_categorical: false
-      backend: r_glmmTMB
+      model_backend: glmm # glmm
+      glm_covariance: model_based
+      glm_cluster: subject
       random_effects:
         dyad_intercept: true
         subject_intercept: true
 
     models:
-      primary_fpp:
+      fpp:
         enabled: true
         dataset: FPP
         model_ids:
-          - A0_timing
-          - A1_information_rate
-          - A2_expected_cum_info
-          - A3_joint_information
+          - M_0
+          - M_1
+          - M_2
+          - M_3
+          - M_4
 
-      fpp_spp_control:
+      spp:
+        enabled: true
+        dataset: SPP
+        model_ids:
+          - M_0
+          - M_1
+          - M_2
+          - M_3
+          - M_4
+
+      pooled_anchor:
         enabled: true
         dataset: pooled_fpp_spp
         model_ids:
-          - B1_shared_information
-          - B2_anchor_x_information
-
-      timing_moderation:
-        enabled: true
-        dataset: FPP
-        model_ids:
-          - C1_onset_x_rate
-          - C2_offset_x_rate
-
-      exploratory_three_way:
-        enabled: false
-        dataset: pooled_fpp_spp
-        model_ids:
-          - D1_two_way_reference
-          - D2_three_way
+          - M_pooled_main
+          - M_pooled_anchor_interaction
 
     diagnostics:
       convergence: true

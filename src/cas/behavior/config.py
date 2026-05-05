@@ -57,45 +57,105 @@ class BehaviorHazardConfig:
 
     @property
     def behavior(self) -> dict[str, Any]:
-        behavior = dict(self.raw.get("behavior") or {})
-        return dict(behavior.get("hazard") or {})
+        return dict(self.raw.get("behavior") or {})
+
+    @property
+    def behavior_root(self) -> dict[str, Any]:
+        return self.behavior
+
+    @property
+    def hazard(self) -> dict[str, Any]:
+        return dict(self.behavior_root.get("hazard") or {})
 
     @property
     def bin_size_ms(self) -> int:
-        return int(self.behavior.get("bin_size_ms", 50))
+        return int(self.hazard.get("bin_size_ms", 50))
 
     @property
     def candidate_lags_ms(self) -> list[int]:
+        values = self.hazard.get("candidate_lags_ms") or self.behavior_root.get("candidate_lags_ms") or [0, 50, 100, 150, 200, 250, 300, 400, 500]
         return [
             int(value)
-            for value in list(
-                self.behavior.get("candidate_lags_ms") or [0, 50, 100, 150, 200, 250, 300, 400, 500]
-            )
+            for value in list(values)
         ]
 
     @property
     def controls(self) -> list[str]:
-        return [str(value) for value in list(self.behavior.get("controls") or [])]
+        return [str(value) for value in list(self.hazard.get("controls") or [])]
 
     @property
     def standardization(self) -> dict[str, Any]:
-        return dict(self.behavior.get("standardization") or {})
+        return dict(self.hazard.get("standardization") or {})
 
     @property
     def diagnostics(self) -> dict[str, Any]:
-        return dict(self.behavior.get("diagnostics") or {})
+        return dict(self.hazard.get("diagnostics") or {})
 
     @property
     def figures(self) -> dict[str, Any]:
-        return dict(self.behavior.get("figures") or {})
+        return dict(self.hazard.get("figures") or {})
 
     @property
     def models(self) -> dict[str, Any]:
-        return dict(self.behavior.get("models") or {})
+        return dict(self.hazard.get("models") or {})
 
     @property
     def lag_selection(self) -> dict[str, Any]:
-        return dict(self.behavior.get("lag_selection") or {})
+        return dict(self.hazard.get("lag_selection") or {})
+
+    @property
+    def modeling(self) -> dict[str, Any]:
+        return dict(self.hazard.get("modeling") or {})
+
+    @property
+    def model_backend(self) -> str:
+        raw_backend = str(
+            self.behavior_root.get("model_backend")
+            or self.modeling.get("model_backend")
+            or self.modeling.get("backend")
+            or "glm"
+        ).strip()
+        normalized = raw_backend.lower()
+        if normalized in {"glmm", "r_glmmtmb", "r_glmmtmb_binomial_mixed"}:
+            return "glmm"
+        if normalized in {"glm", "fixed", "fixed_effect", "fixed_effects"}:
+            return "glm"
+        raise ValueError(
+            f"Unsupported behavior.model_backend / behavior.hazard.modeling.model_backend/backend value: {raw_backend!r}"
+        )
+
+    @property
+    def lag_selection_criterion(self) -> str:
+        raw_value = str(
+            self.behavior_root.get("lag_selection_criterion")
+            or self.lag_selection.get("criterion")
+            or "bic"
+        ).strip()
+        normalized = raw_value.lower()
+        if normalized in {"bic", "aic_bic_bic", "min_bic"}:
+            return "bic"
+        if normalized in {"log_likelihood", "loglik", "ll", "max_loglik"}:
+            return "log_likelihood"
+        raise ValueError(f"Unsupported behavior.lag_selection_criterion value: {raw_value!r}")
+
+    @property
+    def glm_covariance(self) -> str:
+        value = str(self.modeling.get("glm_covariance") or "model_based").strip().lower()
+        if value not in {"model_based", "cluster_robust"}:
+            raise ValueError(f"Unsupported behavior.hazard.modeling.glm_covariance value: {value!r}")
+        return value
+
+    @property
+    def glm_cluster(self) -> str | None:
+        raw_value = self.modeling.get("glm_cluster")
+        if raw_value is None:
+            return "subject" if self.glm_covariance == "cluster_robust" else None
+        value = str(raw_value).strip()
+        if not value:
+            return None
+        if value not in {"subject", "dyad_id"}:
+            raise ValueError(f"Unsupported behavior.hazard.modeling.glm_cluster value: {value!r}")
+        return value
 
     def model_group_enabled(self, name: str) -> bool:
         return bool((self.models.get(name) or {}).get("enabled", False))

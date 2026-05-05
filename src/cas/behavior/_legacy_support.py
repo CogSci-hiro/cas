@@ -1410,6 +1410,10 @@ def _build_ipu_rows_from_tokens(
                 "run": run,
                 "speaker": speaker,
                 "partner_ipu_id": f"{dyad_id}|run-{run}|{speaker}|ipu-{ipu_index:05d}",
+                # Legacy behavior_final effectively used a unique per-IPU grouping key
+                # for expected-total-information, so the denominator matched each IPU's
+                # own total surprisal rather than a pooled class mean.
+                "partner_ipu_class": f"{dyad_id}|run-{run}|{speaker}|ipu-{ipu_index:05d}",
                 "partner_ipu_onset": current_onset,
                 "partner_ipu_offset": current_offset,
                 "n_tokens": token_count,
@@ -1425,6 +1429,7 @@ def _build_ipu_rows_from_tokens(
             "run": run,
             "speaker": speaker,
             "partner_ipu_id": f"{dyad_id}|run-{run}|{speaker}|ipu-{ipu_index:05d}",
+            "partner_ipu_class": f"{dyad_id}|run-{run}|{speaker}|ipu-{ipu_index:05d}",
             "partner_ipu_onset": current_onset,
             "partner_ipu_offset": current_offset,
             "n_tokens": token_count,

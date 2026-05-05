@@ -267,7 +267,23 @@ def odds_ratio_rows(coefficients: pd.DataFrame) -> pd.DataFrame:
     out["odds_ratio"] = np.exp(pd.to_numeric(out["estimate"], errors="coerce"))
     out["ci_low"] = np.exp(pd.to_numeric(out["ci_low"], errors="coerce"))
     out["ci_high"] = np.exp(pd.to_numeric(out["ci_high"], errors="coerce"))
-    return out.loc[:, ["model_id", "term", "odds_ratio", "ci_low", "ci_high", "selected_lag_ms", "backend", "notes"]]
+    required_columns = {
+        "model_id": "",
+        "term": "",
+        "odds_ratio": np.nan,
+        "ci_low": np.nan,
+        "ci_high": np.nan,
+        "selected_lag_ms": np.nan,
+        "model_backend": "",
+        "backend": "",
+        "covariance_type": "",
+        "cluster_variable": "",
+        "notes": "",
+    }
+    for column, default in required_columns.items():
+        if column not in out.columns:
+            out[column] = default
+    return out.loc[:, list(required_columns)]
 
 
 def comparison_row(

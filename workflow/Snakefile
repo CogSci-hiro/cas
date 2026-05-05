@@ -197,6 +197,7 @@ include: "rules/behavior.smk"
 include: "rules/source_localisation.smk"
 include: "rules/figures.smk"
 include: "rules/targets.smk"
+include: "rules/induced.smk"
 
 
 # -----------------------------------------------------------------------------
