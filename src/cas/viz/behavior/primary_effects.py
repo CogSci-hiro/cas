@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 
-def plot_primary_effects(predictions: pd.DataFrame, output_path: Path) -> Path:
+def plot_primary_effects(predictions: pd.DataFrame, output_path: Path, *, title_suffix: str = "") -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig, axes = plt.subplots(1, 3, figsize=(12.0, 3.8), sharey=True)
     for axis, panel, title in zip(
@@ -22,7 +22,7 @@ def plot_primary_effects(predictions: pd.DataFrame, output_path: Path) -> Path:
             axis.plot(anchor_rows["x_value_original"], anchor_rows["predicted_hazard"], linewidth=2.0, label=str(anchor_type))
             if {"ci_low", "ci_high"} <= set(anchor_rows.columns):
                 axis.fill_between(anchor_rows["x_value_original"], anchor_rows["ci_low"], anchor_rows["ci_high"], alpha=0.2)
-        axis.set_title(title)
+        axis.set_title(f"{title}{title_suffix}")
         axis.set_xlabel("Back-transformed predictor")
     axes[0].set_ylabel("Predicted hazard")
     axes[-1].legend(frameon=False)

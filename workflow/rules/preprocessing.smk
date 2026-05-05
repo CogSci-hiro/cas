@@ -303,3 +303,12 @@ rule aggregate_preprocessing_qc:
 rule preprocess_eeg:
     input:
         PREPROCESSED_EEG_OUTPUTS
+
+
+rule preprocess_all:
+    input:
+        PREPROCESSED_EEG_OUTPUTS,
+        PREPROCESSING_SUMMARY_TABLE,
+        PREPROCESSING_BAD_CHANNELS_TABLE,
+        PREPROCESSING_REJECTED_SEGMENTS_TABLE,
+        PREPROCESSING_QC_SUMMARY

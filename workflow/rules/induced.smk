@@ -1,3 +1,53 @@
+FPP_SPP_CONF_DISC_ALPHA_BETA_DOWNSAMPLED_SUMMARY_OUTPUTS = expand(
+    (
+        f"{OUT_DIR}/{FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_INDUCED_SUBDIR}/"
+        "sub-{subject}/summary.json"
+    ),
+    subject=INDUCED_EPOCH_SUBJECTS,
+)
+
+
+rule downsample_fpp_spp_conf_disc_induced_epochs_subject:
+    input:
+        summary=f"{OUT_DIR}/induced_epochs/sub-{{subject}}/summary.json",
+        config=FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_CONFIG_PATH,
+    output:
+        summary=(
+            f"{OUT_DIR}/{FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_INDUCED_SUBDIR}/"
+            "sub-{subject}/summary.json"
+        ),
+    run:
+        from cas.eeg.induced.downsample import downsample_subject_induced_epochs
+
+        downsample_subject_induced_epochs(
+            subject=wildcards.subject,
+            summary_path=input.summary,
+            config_path=input.config,
+            output_root=OUT_DIR,
+        )
+
+
+rule build_induced_sensor_conf_disc:
+    input:
+        epochs=EPOCH_OUTPUTS,
+        induced=FPP_SPP_CONF_DISC_ALPHA_BETA_DOWNSAMPLED_SUMMARY_OUTPUTS,
+        config=FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_CONFIG_PATH,
+    output:
+        summary=FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_SUMMARY_OUTPUT,
+        model_summaries=FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_MODEL_SUMMARY_OUTPUTS,
+        contrast=FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_CONTRAST_OUTPUTS,
+    run:
+        import os
+
+        from cas.stats.lmeeeg_pipeline import run_pooled_lmeeeg_analysis
+
+        run_pooled_lmeeeg_analysis(
+            epochs_paths=list(input.epochs),
+            config_path=input.config,
+            output_dir=os.path.dirname(output.summary),
+        )
+
+
 INDUCED_POWER_OUTPUTS = [
     *INDUCED_EPOCH_SUMMARY_OUTPUTS,
     *_induced_epoch_band_summary_outputs(),

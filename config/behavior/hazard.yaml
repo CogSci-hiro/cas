@@ -7,6 +7,7 @@ inputs:
 behavior:
   model_backend: "glm"              # options: "glm", "glmm"
   lag_selection_criterion: "bic"    # options: "bic", "log_likelihood"
+  only_overlap: true
   hazard:
     bin_size_ms: 50
 

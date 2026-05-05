@@ -50,7 +50,13 @@ def _line_panel(axis, table: pd.DataFrame, *, title: str, norm: Normalize, cmap)
     axis.spines["right"].set_visible(False)
 
 
-def plot_timing_information_interaction(onset: pd.DataFrame, offset: pd.DataFrame, output_path: Path) -> Path:
+def plot_timing_information_interaction(
+    onset: pd.DataFrame,
+    offset: pd.DataFrame,
+    output_path: Path,
+    *,
+    title_suffix: str = "",
+) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     rate_values = pd.concat(
@@ -71,8 +77,8 @@ def plot_timing_information_interaction(onset: pd.DataFrame, offset: pd.DataFram
     norm = Normalize(vmin=rate_min, vmax=rate_max)
 
     fig, axes = plt.subplots(1, 2, figsize=(11.0, 4.8), constrained_layout=True)
-    _line_panel(axes[0], onset, title="Onset timing × information rate", norm=norm, cmap=cmap)
-    _line_panel(axes[1], offset, title="Offset timing × information rate", norm=norm, cmap=cmap)
+    _line_panel(axes[0], onset, title=f"Onset timing × information rate{title_suffix}", norm=norm, cmap=cmap)
+    _line_panel(axes[1], offset, title=f"Offset timing × information rate{title_suffix}", norm=norm, cmap=cmap)
 
     sm = cm.ScalarMappable(norm=norm, cmap=cmap)
     sm.set_array([])

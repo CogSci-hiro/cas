@@ -104,6 +104,10 @@ class BehaviorHazardConfig:
         return dict(self.hazard.get("lag_selection") or {})
 
     @property
+    def only_overlap(self) -> bool:
+        return bool(self.behavior_root.get("only_overlap", False))
+
+    @property
     def modeling(self) -> dict[str, Any]:
         return dict(self.hazard.get("modeling") or {})
 

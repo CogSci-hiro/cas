@@ -158,3 +158,15 @@ rule plot_source_dics_fpp_spp_alpha_beta:
 rule source_dics_fpp_spp_alpha_beta_figures:
     input:
         SOURCE_DICS_FPP_SPP_ALPHA_BETA_FIGURES_INDEX
+
+
+rule source_dics_fpp_spp_alpha_beta_all:
+    input:
+        SOURCE_DICS_FPP_SPP_ALPHA_BETA_SUMMARY_OUTPUT,
+        SOURCE_DICS_FPP_SPP_ALPHA_BETA_FIGURES_INDEX
+
+
+rule source_dics_all:
+    input:
+        SOURCE_DICS_FPP_SPP_ALPHA_BETA_SUMMARY_OUTPUT,
+        SOURCE_DICS_FPP_SPP_ALPHA_BETA_FIGURES_INDEX

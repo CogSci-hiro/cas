@@ -90,6 +90,29 @@ INDUCED_EPOCH_BANDS = [
     str(value)
     for value in dict(EPOCHS_CONFIG.get("induced_epochs") or {}).get("bands", ["theta"])
 ]
+INDUCED_EPOCH_SUBJECTS = sorted({record["subject"] for record in EPOCH_RECORDS})
+INDUCED_EPOCH_SUMMARY_OUTPUTS = expand(
+    f"{OUT_DIR}/induced_epochs/sub-{{subject}}/summary.json",
+    subject=INDUCED_EPOCH_SUBJECTS,
+)
+
+
+def induced_epoch_source_inputs(wildcards):
+    subject_records = [
+        record
+        for record in EPOCH_RECORDS
+        if record["subject"] == wildcards.subject
+    ]
+    if not subject_records:
+        raise ValueError(f"No epoch records found for subject {wildcards.subject}.")
+    return [
+        INDUCED_SOURCE_EPOCHS_OUTPUT_PATTERN.format(
+            subject=record["subject"],
+            task=record["task"],
+            run=record["run"],
+        )
+        for record in subject_records
+    ]
 
 
 def _induced_epoch_summary_outputs() -> list[str]:
@@ -577,6 +600,37 @@ rule make_induced_source_epochs:
             run=wildcards.run,
             settings=_epoching_settings("induced_source_epochs"),
         )
+
+
+rule epochs_all:
+    input:
+        EPOCH_OUTPUTS
+
+
+rule make_induced_epochs_subject:
+    input:
+        epochs=induced_epoch_source_inputs,
+        config=EPOCHS_CONFIG_PATH,
+    output:
+        summary=f"{OUT_DIR}/induced_epochs/sub-{{subject}}/summary.json",
+        band_summaries=expand(
+            f"{OUT_DIR}/induced_epochs/{{band}}/sub-{{{{subject}}}}/epoching_summary-time_s.json",
+            band=INDUCED_EPOCH_BANDS,
+        ),
+    run:
+        from cas.eeg.induced.epochs import build_subject_induced_epochs
+
+        build_subject_induced_epochs(
+            subject=wildcards.subject,
+            source_epoch_paths=list(input.epochs),
+            config_path=input.config,
+            output_root=OUT_DIR,
+        )
+
+
+rule induced_epochs_all:
+    input:
+        INDUCED_EPOCH_SUMMARY_OUTPUTS
 
 
 rule build_sensor_lmeeeg_evoked:

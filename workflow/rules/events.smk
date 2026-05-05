@@ -24,3 +24,9 @@ rule extract_events_csv:
                 pairing_margin_s=EVENTS_MATCHING_MARGIN_S,
             )
         )
+
+
+rule events_all:
+    input:
+        EVENTS_CSV_OUTPUT,
+        PAIRING_ISSUES_CSV_OUTPUT

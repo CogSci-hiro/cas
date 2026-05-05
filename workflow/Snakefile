@@ -196,50 +196,5 @@ include: "rules/epochs.smk"
 include: "rules/behavior.smk"
 include: "rules/source_localisation.smk"
 include: "rules/figures.smk"
-include: "rules/targets.smk"
 include: "rules/induced.smk"
-
-
-# -----------------------------------------------------------------------------
-# Confirmatory Core Targets
-# -----------------------------------------------------------------------------
-
-rule confirmatory_core:
-    input:
-        # Dataset + events
-        f"{OUT_DIR}/dataset/index.parquet",
-        f"{OUT_DIR}/events/events.parquet",
-
-        # Features
-        f"{OUT_DIR}/features/entropy/entropy.parquet",
-        f"{OUT_DIR}/neural/beta/beta.parquet",
-        f"{OUT_DIR}/neural/alpha/alpha.parquet",
-
-        # Models
-        f"{OUT_DIR}/models/lagged_logistic/results.parquet",
-        f"{OUT_DIR}/models/hazard/results.parquet",
-        f"{OUT_DIR}/models/mediation/results.parquet",
-
-        # ERP stats
-        f"{OUT_DIR}/stats/n400/results.parquet",
-
-        # Manifest marker
-        f"{OUT_DIR}/_meta/run_complete.txt"
-
-
-# -----------------------------------------------------------------------------
-# Optional Exploratory Layer
-# -----------------------------------------------------------------------------
-
-rule exploratory:
-    input:
-        rules.behavior_hazard_all.input
-
-
-# -----------------------------------------------------------------------------
-# Default rule
-# -----------------------------------------------------------------------------
-
-rule all:
-    input:
-        rules.confirmatory_core.input
+include: "rules/targets.smk"

@@ -307,11 +307,11 @@ def test_source_dics_cli_help_works() -> None:
 
 
 def test_source_dics_target_name_exists() -> None:
-    targets_path = Path(__file__).resolve().parents[1] / "workflow" / "rules" / "targets.smk"
-    target_text = targets_path.read_text(encoding="utf-8")
+    workflow_path = Path(__file__).resolve().parents[1] / "workflow" / "rules" / "source_localisation.smk"
+    workflow_text = workflow_path.read_text(encoding="utf-8")
 
-    assert "rule source_dics_fpp_spp_alpha_beta_all:" in target_text
-    assert "rule source_dics_all:" in target_text
+    assert "rule source_dics_fpp_spp_alpha_beta_all:" in workflow_text
+    assert "rule source_dics_all:" in workflow_text
 
 
 def test_source_dics_workflow_uses_per_record_parallel_rule() -> None:

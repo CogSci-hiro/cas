@@ -30,3 +30,21 @@ rule extract_acoustic_f0:
             --output "{output.f0}" \
             --summary-json "{output.f0_summary}"
         """
+
+
+rule envelope_all:
+    input:
+        ENVELOPE_OUTPUTS
+
+
+rule f0_all:
+    input:
+        F0_OUTPUTS
+
+
+rule acoustic_all:
+    input:
+        ENVELOPE_OUTPUTS,
+        ENVELOPE_SUMMARY_OUTPUTS,
+        F0_OUTPUTS,
+        F0_SUMMARY_OUTPUTS

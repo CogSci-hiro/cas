@@ -252,3 +252,18 @@ rule aggregate_trf_spp_onset_control:
             --kernel-png "{output.kernel_png}" \
             --kernel-pdf "{output.kernel_pdf}"
         """
+
+
+rule trf_all:
+    input:
+        TRF_SCORE_OUTPUTS,
+        TRF_COEF_OUTPUTS
+
+
+rule trf_spp_onset_control_all:
+    input:
+        TRF_SPP_ONSET_CONTROL_GROUP_SUMMARY_JSON,
+        TRF_SPP_ONSET_CONTROL_GROUP_SUBJECT_CSV,
+        TRF_SPP_ONSET_CONTROL_GROUP_FOLD_CSV,
+        TRF_SPP_ONSET_CONTROL_GROUP_KERNEL_PNG,
+        TRF_SPP_ONSET_CONTROL_GROUP_KERNEL_PDF

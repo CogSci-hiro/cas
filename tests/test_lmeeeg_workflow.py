@@ -35,11 +35,11 @@ def test_induced_public_target_family_collects_expected_outputs() -> None:
 
 def test_induced_sensor_workflow_uses_generic_internal_rules() -> None:
     epochs_text = Path("workflow/rules/epochs.smk").read_text(encoding="utf-8")
-    targets_text = Path("workflow/rules/targets.smk").read_text(encoding="utf-8")
+    induced_text = Path("workflow/rules/induced.smk").read_text(encoding="utf-8")
 
     assert "rule build_induced_sensor_lmeeeg:" in epochs_text
     assert "rule build_induced_sensor_cycle_position:" in epochs_text
-    assert "rule build_induced_sensor_conf_disc:" in targets_text
+    assert "rule build_induced_sensor_conf_disc:" in induced_text
     assert "rule build_induced_binned_info_rate:" in epochs_text
 
 
@@ -133,12 +133,11 @@ def test_induced_epochs_config_covers_lmeeeg_requested_bands() -> None:
 
 def test_lmeeeg_workflow_tracks_band_level_induced_epoch_outputs() -> None:
     epochs_text = Path("workflow/rules/epochs.smk").read_text(encoding="utf-8")
-    targets_text = Path("workflow/rules/targets.smk").read_text(encoding="utf-8")
 
     assert "_induced_epoch_band_summary_outputs" in epochs_text
     assert "epoching_summary-time_s.json" in epochs_text
-    assert "band_summaries=expand(" in targets_text
-    assert "config=EPOCHS_CONFIG_PATH" in targets_text
+    assert "band_summaries=expand(" in epochs_text
+    assert "config=EPOCHS_CONFIG_PATH" in epochs_text
 
 
 def test_fpp_spp_conf_disc_config_contains_requested_models() -> None:
