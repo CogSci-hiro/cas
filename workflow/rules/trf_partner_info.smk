@@ -67,17 +67,24 @@ def _partner_info_trf_subjects():
 
 PARTNER_INFO_TRF_ANALYSIS_ID = PARTNER_INFO_TRF_CONFIG["trf"]["analysis_id"]
 PARTNER_INFO_TRF_SUBJECTS = _partner_info_trf_subjects()
-PARTNER_INFO_TRF_OUTPUT_ROOT = os.path.join(
-    TRF_ROOT,
-    PARTNER_INFO_TRF_CONFIG["trf"]["output"]["root"].format(
-        analysis_id=PARTNER_INFO_TRF_ANALYSIS_ID
-    ),
+PARTNER_INFO_TRF_TARGETS = [
+    str(value)
+    for value in (PARTNER_INFO_TRF_CONFIG.get("targets") or {}).get("include", [])
+]
+PARTNER_INFO_TRF_WORKFLOW_OUTPUT_DIR = (
+    PATHS_CONFIG.get("output_dir")
+    or ((PATHS_CONFIG.get("io") or {}).get("out_dir") if isinstance(PATHS_CONFIG.get("io"), dict) else None)
+    or ((PATHS_CONFIG.get("paths") or {}).get("out_dir") if isinstance(PATHS_CONFIG.get("paths"), dict) else None)
+    or OUT_DIR
+)
+PARTNER_INFO_TRF_OUTPUT_ROOT = (
+    f"{PARTNER_INFO_TRF_WORKFLOW_OUTPUT_DIR}/trf/{PARTNER_INFO_TRF_ANALYSIS_ID}"
 )
 PARTNER_INFO_TRF_SUBJECT_SUMMARY_PATTERN = (
-    f"{PARTNER_INFO_TRF_OUTPUT_ROOT}/sub-{{subject}}/partner_info.summary.json"
+    f"{PARTNER_INFO_TRF_OUTPUT_ROOT}/subjects/sub-{{subject}}/partner_info.summary.json"
 )
 PARTNER_INFO_TRF_SUBJECT_COEF_PATTERN = (
-    f"{PARTNER_INFO_TRF_OUTPUT_ROOT}/sub-{{subject}}/partner_info.coefs.npz"
+    f"{PARTNER_INFO_TRF_OUTPUT_ROOT}/subjects/sub-{{subject}}/partner_info.coefs.npz"
 )
 PARTNER_INFO_TRF_SUBJECT_SUMMARIES = expand(
     PARTNER_INFO_TRF_SUBJECT_SUMMARY_PATTERN,
@@ -88,8 +95,12 @@ PARTNER_INFO_TRF_SUBJECT_COEFS = expand(
     subject=PARTNER_INFO_TRF_SUBJECTS,
 )
 PARTNER_INFO_TRF_GROUP_DIR = f"{PARTNER_INFO_TRF_OUTPUT_ROOT}/group"
-PARTNER_INFO_TRF_GROUP_MAIN_DIR = f"{PARTNER_INFO_TRF_GROUP_DIR}/main"
-PARTNER_INFO_TRF_GROUP_QC_DIR = f"{PARTNER_INFO_TRF_GROUP_DIR}/qc"
+PARTNER_INFO_TRF_GROUP_MAIN_DIR = (
+    f"{PARTNER_INFO_TRF_WORKFLOW_OUTPUT_DIR}/figures/main/trf/{PARTNER_INFO_TRF_ANALYSIS_ID}"
+)
+PARTNER_INFO_TRF_GROUP_QC_DIR = (
+    f"{PARTNER_INFO_TRF_WORKFLOW_OUTPUT_DIR}/figures/qc/trf/{PARTNER_INFO_TRF_ANALYSIS_ID}"
+)
 PARTNER_INFO_TRF_GROUP_KERNEL_DIR = f"{PARTNER_INFO_TRF_GROUP_MAIN_DIR}/kernels"
 PARTNER_INFO_TRF_GROUP_SUMMARY_JSON = f"{PARTNER_INFO_TRF_GROUP_DIR}/partner_info_trf_summary.json"
 PARTNER_INFO_TRF_GROUP_SUBJECT_CSV = f"{PARTNER_INFO_TRF_GROUP_DIR}/partner_info_trf_subject_scores.csv"
@@ -110,7 +121,7 @@ PARTNER_INFO_TRF_GROUP_PREDICTOR_VARIANCE_PNG = f"{PARTNER_INFO_TRF_GROUP_QC_DIR
 PARTNER_INFO_TRF_GROUP_PREDICTOR_VARIANCE_PDF = f"{PARTNER_INFO_TRF_GROUP_QC_DIR}/partner_info_trf_predictor_variance.pdf"
 PARTNER_INFO_TRF_GROUP_KERNEL_OUTPUTS = expand(
     f"{PARTNER_INFO_TRF_GROUP_KERNEL_DIR}/{{target}}_{{predictor}}_kernel_joint.{{ext}}",
-    target=["alpha", "beta", "raw"],
+    target=PARTNER_INFO_TRF_TARGETS,
     predictor=["r", "p"],
     ext=["png", "pdf"],
 )
@@ -121,6 +132,13 @@ def partner_info_trf_input_files(wildcards):
     subject_number = int(wildcards.subject)
     partner_number = subject_number + 1 if subject_number % 2 == 1 else subject_number - 1
     partner_subject = f"sub-{partner_number:03d}"
+    annotation_inputs = [
+        os.path.join(
+            ANNOTATIONS_DIR,
+            f"{_partner_info_trf_dyad_id(wildcards.subject)}_run-{run}_combined.TextGrid",
+        )
+        for run in RUNS
+    ]
     partner_envelopes = expand(
         ENVELOPE_OUTPUT_PATTERN,
         zip,
@@ -135,7 +153,7 @@ def partner_info_trf_input_files(wildcards):
         task=["conversation"] * len(RUNS),
         run=RUNS,
     )
-    return [PARTNER_INFO_TRF_CONFIG_PATH] + partner_envelopes + preprocessed_eeg
+    return [PARTNER_INFO_TRF_CONFIG_PATH] + annotation_inputs + partner_envelopes + preprocessed_eeg
 
 
 rule fit_trf_partner_info_subject:

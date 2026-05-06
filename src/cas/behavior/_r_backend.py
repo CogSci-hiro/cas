@@ -91,6 +91,7 @@ def run_r_model_bundle(
     lag_sensitivity_path: Path | None,
     figure_prediction_path: Path | None = None,
     timing_heatmap_path: Path | None = None,
+    timing_prop_path: Path | None = None,
     three_way_path: Path | None = None,
     verbose: bool = False,
 ) -> None:
@@ -116,6 +117,7 @@ def run_r_model_bundle(
                     "lag_sensitivity_path": str(lag_sensitivity_path) if lag_sensitivity_path else None,
                     "figure_prediction_path": str(figure_prediction_path) if figure_prediction_path else None,
                     "timing_heatmap_path": str(timing_heatmap_path) if timing_heatmap_path else None,
+                    "timing_prop_path": str(timing_prop_path) if timing_prop_path else None,
                     "three_way_path": str(three_way_path) if three_way_path else None,
                     "verbose": bool(verbose),
                 }
@@ -263,7 +265,7 @@ def _lag_selection_script() -> str:
           rate_col <- sprintf("z_information_rate_lag_%s", lag_ms)
           prop_col <- sprintf("z_prop_expected_cum_info_lag_%s", lag_ms)
           formula_fixed <- sprintf(
-            "event ~ z_time_from_partner_onset_s + z_time_from_partner_offset_s + z_time_from_partner_offset_s_squared + %s + %s",
+            "event ~ z_time_from_partner_onset_s + z_time_from_partner_onset_s_squared + z_time_from_partner_offset_s + z_time_from_partner_offset_s_squared + %s + %s",
             rate_col,
             prop_col
           )
@@ -539,7 +541,7 @@ def _model_bundle_script() -> str:
         selected_lag_ms <- as.integer(spec$selected_lag_ms)
         rate_col <- sprintf("z_information_rate_lag_%s", selected_lag_ms)
         prop_col <- sprintf("z_prop_expected_cum_info_lag_%s", selected_lag_ms)
-        timing_columns <- c("z_time_from_partner_onset_s", "z_time_from_partner_offset_s", "z_time_from_partner_offset_s_squared")
+        timing_columns <- c("z_time_from_partner_onset_s", "z_time_from_partner_onset_s_squared", "z_time_from_partner_offset_s", "z_time_from_partner_offset_s_squared")
 
         if (!is.null(spec$figure_prediction_path) && !is.null(fit_lookup[["fpp::M_3"]]) && !is.null(fit_lookup[["pooled::M_pooled_anchor_interaction"]])) {{
           log_msg("[behavior hazard][R] Building Figure 2 prediction table")
@@ -554,6 +556,7 @@ def _model_bundle_script() -> str:
 
           panel_a <- data.frame(
             z_time_from_partner_onset_s = rep(base_vals$z_time_from_partner_onset_s, length(rate_z)),
+            z_time_from_partner_onset_s_squared = rep(base_vals$z_time_from_partner_onset_s_squared, length(rate_z)),
             z_time_from_partner_offset_s = rep(base_vals$z_time_from_partner_offset_s, length(rate_z)),
             z_time_from_partner_offset_s_squared = rep(base_vals$z_time_from_partner_offset_s_squared, length(rate_z)),
             stringsAsFactors = FALSE
@@ -583,6 +586,7 @@ def _model_bundle_script() -> str:
 
           pooled_base <- data.frame(
             z_time_from_partner_onset_s = rep(stats::median(as.numeric(pooled$z_time_from_partner_onset_s), na.rm = TRUE), length(rate_z)),
+            z_time_from_partner_onset_s_squared = rep(stats::median(as.numeric(pooled$z_time_from_partner_onset_s_squared), na.rm = TRUE), length(rate_z)),
             z_time_from_partner_offset_s = rep(stats::median(as.numeric(pooled$z_time_from_partner_offset_s), na.rm = TRUE), length(rate_z)),
             z_time_from_partner_offset_s_squared = rep(stats::median(as.numeric(pooled$z_time_from_partner_offset_s_squared), na.rm = TRUE), length(rate_z)),
             stringsAsFactors = FALSE
@@ -618,6 +622,7 @@ def _model_bundle_script() -> str:
             rraw <- rate_levels_raw[[j]]
             onset_grid <- data.frame(
               z_time_from_partner_onset_s = onset_values_z,
+              z_time_from_partner_onset_s_squared = onset_values_z ^ 2,
               z_time_from_partner_offset_s = rep(0.0, length(onset_values_z)),
               z_time_from_partner_offset_s_squared = rep(0.0, length(onset_values_z)),
               stringsAsFactors = FALSE
@@ -635,6 +640,7 @@ def _model_bundle_script() -> str:
 
             offset_grid <- data.frame(
               z_time_from_partner_onset_s = rep(0.0, length(offset_values_z)),
+              z_time_from_partner_onset_s_squared = rep(0.0, length(offset_values_z)),
               z_time_from_partner_offset_s = offset_values_z,
               z_time_from_partner_offset_s_squared = offset_values_z ^ 2,
               stringsAsFactors = FALSE
@@ -653,6 +659,57 @@ def _model_bundle_script() -> str:
           timing_predictions <- do.call(rbind, rows)
           dir.create(dirname(spec$timing_heatmap_path), recursive = TRUE, showWarnings = FALSE)
           write.csv(timing_predictions, spec$timing_heatmap_path, row.names = FALSE)
+        }}
+
+        if (!is.null(spec$timing_prop_path) && !is.null(fit_lookup[["fpp::M_5"]])) {{
+          log_msg("[behavior hazard][R] Building Figure 4 timing interaction prediction table")
+          prop_levels_z <- seq(stats::quantile(fpp[[prop_col]], 0.05, na.rm = TRUE), stats::quantile(fpp[[prop_col]], 0.95, na.rm = TRUE), length.out = 11)
+          prop_levels_raw <- seq(stats::quantile(fpp$prop_expected_cum_info, 0.05, na.rm = TRUE), stats::quantile(fpp$prop_expected_cum_info, 0.95, na.rm = TRUE), length.out = 11)
+          onset_values_z <- seq(stats::quantile(fpp$z_time_from_partner_onset_s, 0.05, na.rm = TRUE), stats::quantile(fpp$z_time_from_partner_onset_s, 0.95, na.rm = TRUE), length.out = 60)
+          offset_values_z <- seq(stats::quantile(fpp$z_time_from_partner_offset_s, 0.05, na.rm = TRUE), stats::quantile(fpp$z_time_from_partner_offset_s, 0.95, na.rm = TRUE), length.out = 60)
+          rows <- list()
+          for (j in seq_along(prop_levels_z)) {{
+            pz <- prop_levels_z[[j]]
+            praw <- prop_levels_raw[[j]]
+            onset_grid <- data.frame(
+              z_time_from_partner_onset_s = onset_values_z,
+              z_time_from_partner_onset_s_squared = onset_values_z ^ 2,
+              z_time_from_partner_offset_s = rep(0.0, length(onset_values_z)),
+              z_time_from_partner_offset_s_squared = rep(0.0, length(onset_values_z)),
+              stringsAsFactors = FALSE
+            )
+            onset_grid[[rate_col]] <- rep(0.0, length(onset_values_z))
+            onset_grid[[prop_col]] <- rep(pz, length(onset_values_z))
+            pred_onset <- predict_frame(fit_lookup[["fpp::M_5"]], onset_grid)
+            pred_onset$panel <- "A"
+            pred_onset$timing_reference <- "partner_onset"
+            pred_onset$time_value_z <- onset_values_z
+            pred_onset$time_value_s <- onset_values_z
+            pred_onset$prop_expected_cum_info_z <- pz
+            pred_onset$prop_expected_cum_info_original <- praw
+            rows[[length(rows) + 1]] <- pred_onset[, c("panel", "timing_reference", "time_value_s", "time_value_z", "prop_expected_cum_info_z", "prop_expected_cum_info_original", "predicted_hazard", "ci_low", "ci_high"), drop = FALSE]
+
+            offset_grid <- data.frame(
+              z_time_from_partner_onset_s = rep(0.0, length(offset_values_z)),
+              z_time_from_partner_onset_s_squared = rep(0.0, length(offset_values_z)),
+              z_time_from_partner_offset_s = offset_values_z,
+              z_time_from_partner_offset_s_squared = offset_values_z ^ 2,
+              stringsAsFactors = FALSE
+            )
+            offset_grid[[rate_col]] <- rep(0.0, length(offset_values_z))
+            offset_grid[[prop_col]] <- rep(pz, length(offset_values_z))
+            pred_offset <- predict_frame(fit_lookup[["fpp::M_5"]], offset_grid)
+            pred_offset$panel <- "B"
+            pred_offset$timing_reference <- "partner_offset"
+            pred_offset$time_value_z <- offset_values_z
+            pred_offset$time_value_s <- offset_values_z
+            pred_offset$prop_expected_cum_info_z <- pz
+            pred_offset$prop_expected_cum_info_original <- praw
+            rows[[length(rows) + 1]] <- pred_offset[, c("panel", "timing_reference", "time_value_s", "time_value_z", "prop_expected_cum_info_z", "prop_expected_cum_info_original", "predicted_hazard", "ci_low", "ci_high"), drop = FALSE]
+          }}
+          timing_prop_predictions <- do.call(rbind, rows)
+          dir.create(dirname(spec$timing_prop_path), recursive = TRUE, showWarnings = FALSE)
+          write.csv(timing_prop_predictions, spec$timing_prop_path, row.names = FALSE)
         }}
 
         if (!is.null(spec$three_way_path)) {{

@@ -97,6 +97,8 @@ def standardize_predictors(
                 if not np.isfinite(sd) or sd <= 0.0:
                     sd = 1.0
                 out[f"z_{column}"] = (pd.to_numeric(out[column], errors="coerce") - mean) / sd
+        if "z_time_from_partner_onset_s" in out.columns:
+            out["z_time_from_partner_onset_s_squared"] = pd.to_numeric(out["z_time_from_partner_onset_s"], errors="coerce") ** 2
         if "z_time_from_partner_offset_s" in out.columns:
             out["z_time_from_partner_offset_s_squared"] = pd.to_numeric(out["z_time_from_partner_offset_s"], errors="coerce") ** 2
         return out

@@ -23,7 +23,7 @@ from cas.viz.behavior.lag_selection import plot_lag_selection
 from cas.viz.behavior.lag_sensitivity import plot_lag_sensitivity
 from cas.viz.behavior.primary_effects import plot_primary_effects
 from cas.viz.behavior.qc import plot_qc_bars
-from cas.viz.behavior.timing_heatmaps import plot_timing_information_interaction
+from cas.viz.behavior.timing import plot_timing_interaction
 
 
 LOGGER = logging.getLogger(__name__)
@@ -332,11 +332,13 @@ def _build_model_specs(config: BehaviorHazardConfig, *, selected_lag_ms: int) ->
         ("fpp", "FPP", "M_2"),
         ("fpp", "FPP", "M_3"),
         ("fpp", "FPP", "M_4"),
+        ("fpp", "FPP", "M_5"),
         ("spp", "SPP", "M_0"),
         ("spp", "SPP", "M_1"),
         ("spp", "SPP", "M_2"),
         ("spp", "SPP", "M_3"),
         ("spp", "SPP", "M_4"),
+        ("spp", "SPP", "M_5"),
         ("pooled", "pooled_fpp_spp", "M_pooled_main"),
         ("pooled", "pooled_fpp_spp", "M_pooled_anchor_interaction"),
     ]
@@ -558,6 +560,7 @@ def build_tables(config_path: str | Path, *, verbose: bool = False) -> dict[str,
         lag_sensitivity_path=None,
         figure_prediction_path=paths["tables"] / "figure_predictions.csv",
         timing_heatmap_path=paths["tables"] / "timing_heatmap_predictions.csv",
+        timing_prop_path=paths["tables"] / "timing_prop_predictions.csv",
         three_way_path=paths["tables"] / "three_way_heatmap_predictions.csv",
         verbose=verbose,
     )
@@ -575,6 +578,7 @@ def build_tables(config_path: str | Path, *, verbose: bool = False) -> dict[str,
     _write_csv(_append_analysis_metadata(event_rate_summary(pooled), metadata), paths["tables"] / "event_rate_summary.csv")
     collinearity_columns = [
         "z_time_from_partner_onset_s",
+        "z_time_from_partner_onset_s_squared",
         "z_time_from_partner_offset_s",
         "z_time_from_partner_offset_s_squared",
         f"z_information_rate_lag_{selected_lag_ms}",
@@ -641,13 +645,16 @@ def render_figures(config_path: str | Path, *, verbose: bool = False) -> dict[st
     selected_lag_ms = int(selected["selected_lag_ms"])
     primary_predictions = pd.read_csv(paths["tables"] / "figure_predictions.csv")
     timing_predictions = pd.read_csv(paths["tables"] / "timing_heatmap_predictions.csv")
+    timing_prop_predictions = pd.read_csv(paths["tables"] / "timing_prop_predictions.csv")
     lag_sensitivity = pd.read_csv(paths["diagnostics"] / "lag_sensitivity.csv")
     metadata = _analysis_metadata(config, overlap_filter_column=str(selected.get("overlap_filter_column", "")))
     title_suffix = " [overlap-only]" if config.only_overlap else ""
     primary_predictions = _append_analysis_metadata(primary_predictions, metadata)
     timing_predictions = _append_analysis_metadata(timing_predictions, metadata)
+    timing_prop_predictions = _append_analysis_metadata(timing_prop_predictions, metadata)
     _write_csv(primary_predictions, paths["tables"] / "figure_predictions.csv")
     _write_csv(timing_predictions, paths["tables"] / "timing_heatmap_predictions.csv")
+    _write_csv(timing_prop_predictions, paths["tables"] / "timing_prop_predictions.csv")
     if (paths["tables"] / "three_way_heatmap_predictions.csv").exists():
         three_way = pd.read_csv(paths["tables"] / "three_way_heatmap_predictions.csv")
         _write_csv(_append_analysis_metadata(three_way, metadata), paths["tables"] / "three_way_heatmap_predictions.csv")
@@ -657,10 +664,20 @@ def render_figures(config_path: str | Path, *, verbose: bool = False) -> dict[st
     outputs: dict[str, Path] = {}
     outputs["lag_selection"] = plot_lag_selection(lag_scores, paths["figures_main"] / "fig01_lag_selection.png", title_suffix=title_suffix)
     outputs["primary_effects"] = plot_primary_effects(primary_predictions, paths["figures_main"] / "fig02_primary_information_effects.png", title_suffix=title_suffix)
-    outputs["timing"] = plot_timing_information_interaction(
+    outputs["timing"] = plot_timing_interaction(
         timing_predictions.loc[timing_predictions["panel"].astype(str) == "A"].copy(),
         timing_predictions.loc[timing_predictions["panel"].astype(str) == "B"].copy(),
         paths["figures_main"] / "fig03_timing_information_interaction.png",
+        predictor_column="information_rate_original",
+        predictor_label="information rate",
+        title_suffix=title_suffix,
+    )
+    outputs["timing_prop"] = plot_timing_interaction(
+        timing_prop_predictions.loc[timing_prop_predictions["panel"].astype(str) == "A"].copy(),
+        timing_prop_predictions.loc[timing_prop_predictions["panel"].astype(str) == "B"].copy(),
+        paths["figures_main"] / "fig04_timing_prop_cum_info_interaction.png",
+        predictor_column="prop_expected_cum_info_original",
+        predictor_label="proportion cumulative info",
         title_suffix=title_suffix,
     )
     if not lag_sensitivity.empty:
@@ -668,7 +685,7 @@ def render_figures(config_path: str | Path, *, verbose: bool = False) -> dict[st
     else:
         _write_placeholder_figure(paths["figures_supp"] / "figS01_lag_sensitivity.png", title="Lag sensitivity", message="Lag sensitivity table was unavailable.")
     _write_placeholder_figure(paths["figures_supp"] / "figS02_extra_timing_maps.png", title="Supplementary timing maps", message="Main Figure 3 now uses ridge plots from M_4.")
-    _write_placeholder_figure(paths["figures_supp"] / "figS03_three_way_interaction.png", title="Three-way interaction", message="The active behavioral target uses per-anchor M_0–M_4 models plus the pooled omnibus anchor-interaction model, and does not fit an exploratory three-way interaction model.")
+    _write_placeholder_figure(paths["figures_supp"] / "figS03_three_way_interaction.png", title="Three-way interaction", message="The active behavioral target uses per-anchor M_0–M_5 models plus the pooled omnibus anchor-interaction model, and does not fit an exploratory three-way interaction model.")
     return outputs
 
 

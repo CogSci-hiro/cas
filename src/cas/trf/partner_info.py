@@ -21,7 +21,9 @@ from scipy.ndimage import gaussian_filter1d
 from scipy.signal import resample_poly
 from scipy.stats import wilcoxon
 
-from cas.behavior._legacy_support import build_partner_ipus_from_tokens, read_surprisal_tables, resolve_surprisal_paths
+from cas.annotations.autocorrect import normalize_tier_name
+from cas.annotations.io import load_textgrid
+from cas.behavior._legacy_support import read_surprisal_tables, resolve_surprisal_paths
 from cas.preprocessing.config import build_preprocessing_run_paths, resolve_preprocessing_output_layout
 from cas.trf.nested_cv import loro_nested_cv_design_grid
 from cas.trf.prepare import canonical_dyad_id, other_speaker_label, prepare_trf_runs
@@ -42,6 +44,13 @@ class PartnerInfoSubjectResult:
     channel_names: list[str]
     lag_times_s: np.ndarray
     target_results: dict[str, dict[str, Any]]
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationWindow:
+    run: int
+    anchor_time_s: float
+    duration_s: float
 
 
 def lag_window_samples(*, start_ms: float, stop_ms: float, sfreq_hz: float) -> np.ndarray:
@@ -138,10 +147,22 @@ def build_prop_expected_cumulative_info_predictor(
     return zscore_predictor(_smooth_continuous(raw, sfreq_hz=sfreq_hz, sigma_ms=sigma_ms))
 
 
-def build_partner_info_model_specs(control_predictors: Sequence[str]) -> dict[str, list[str]]:
+def build_partner_info_model_specs(
+    control_predictors: Sequence[str],
+    models_config: Mapping[str, Any] | None = None,
+) -> dict[str, list[str]]:
     """Return the four-model predictor specification used by the analysis."""
 
     controls = [str(value) for value in control_predictors]
+    if models_config:
+        explicit_specs: dict[str, list[str]] = {}
+        for model_name in ("N0", "N1", "N2", "N3"):
+            model_cfg = dict(models_config.get(model_name) or {})
+            predictor_names = [str(value) for value in (model_cfg.get("predictors") or [])]
+            if not predictor_names:
+                raise ValueError(f"partner_info_trf config model {model_name} is missing predictors.")
+            explicit_specs[model_name] = predictor_names
+        return explicit_specs
     return {
         "N0": controls,
         "N1": controls + ["information_rate"],
@@ -167,6 +188,7 @@ def fit_partner_info_subject(
 
     analysis_cfg = dict(config.get("analysis") or {})
     targets_cfg = dict(config.get("targets") or {})
+    models_cfg = dict(config.get("models") or {})
     smoothing_cfg = dict(config.get("smoothing") or {})
     trf_cfg = dict(config.get("trf") or {})
     cv_cfg = dict(config.get("cv") or {})
@@ -185,10 +207,11 @@ def fit_partner_info_subject(
         raise ValueError("partner_info_trf requires modelling_sampling_rate_hz below 64 Hz.")
 
     control_predictors = [str(value) for value in predictor_cfg.get("controls", [])]
-    model_specs = build_partner_info_model_specs(control_predictors)
+    model_specs = build_partner_info_model_specs(control_predictors, models_cfg)
     target_kinds = [str(value) for value in targets_cfg.get("include", [])]
     sigma_grid_ms = [float(value) for value in smoothing_cfg.get("sigma_ms_grid", [])]
     ridge_alpha_grid = [float(value) for value in trf_cfg.get("ridge_alpha_grid", [])]
+    conversation_duration_s = float((config.get("inputs") or {}).get("conversation_duration_s", 240.0))
     lag_samples = lag_window_samples(
         start_ms=float(trf_cfg["lag_start_ms"]),
         stop_ms=float(trf_cfg["lag_stop_ms"]),
@@ -214,6 +237,15 @@ def fit_partner_info_subject(
     verbose = bool((config.get("logging") or {}).get("verbose", False))
     target_results: dict[str, dict[str, Any]] = {}
     channel_names_reference: list[str] | None = None
+    conversation_windows = [
+        _resolve_conversation_window(
+            subject_id=subject_id,
+            run=int(run),
+            duration_s=conversation_duration_s,
+            paths_config=paths_config,
+        )
+        for run in requested_runs
+    ]
 
     for target_kind in target_kinds:
         target_runs, channel_names, target_sfreq_hz = _load_target_runs(
@@ -224,6 +256,7 @@ def fit_partner_info_subject(
             paths_config=paths_config,
             project_root=project_root_path,
             config_root=config_root,
+            conversation_windows=conversation_windows,
         )
         if channel_names_reference is None:
             channel_names_reference = channel_names
@@ -241,6 +274,7 @@ def fit_partner_info_subject(
                 sigma_ms=float(sigma_ms),
                 target_runs=target_runs,
                 target_sfreq_hz=target_sfreq_hz,
+                conversation_windows=conversation_windows,
             )
             predictor_designs_by_sigma[float(sigma_ms)] = predictor_runs_by_name
             if "information_rate" in predictor_runs_by_name and "prop_expected_cumulative_info" in predictor_runs_by_name:
@@ -664,6 +698,7 @@ def _load_target_runs(
     paths_config: Mapping[str, Any],
     project_root: Path,
     config_root: Path,
+    conversation_windows: Sequence[ConversationWindow],
 ) -> tuple[list[np.ndarray], list[str], float]:
     _configure_mne_runtime()
     import mne
@@ -683,7 +718,7 @@ def _load_target_runs(
     target_runs: list[np.ndarray] = []
     channel_names: list[str] | None = None
     sfreq_hz: float | None = None
-    for run in runs:
+    for run, conversation_window in zip(runs, conversation_windows):
         raw_path = build_preprocessing_run_paths(
             layout=preprocessing_layout,
             subject=subject_id,
@@ -692,6 +727,15 @@ def _load_target_runs(
             dyad_id=canonical_dyad_id(subject_id),
         ).eeg_path
         raw = mne.io.read_raw_fif(raw_path, preload=True, verbose="ERROR").pick("eeg")
+        crop_stop_s = min(
+            float(conversation_window.anchor_time_s + conversation_window.duration_s),
+            float(raw.times[-1]) + (1.0 / float(raw.info["sfreq"])),
+        )
+        raw.crop(
+            tmin=float(conversation_window.anchor_time_s),
+            tmax=crop_stop_s,
+            include_tmax=False,
+        )
         if channel_names is None:
             channel_names = [str(value) for value in raw.ch_names]
         data = raw.get_data()
@@ -767,6 +811,7 @@ def _build_partner_info_predictor_runs(
     sigma_ms: float,
     target_runs: Sequence[np.ndarray],
     target_sfreq_hz: float,
+    conversation_windows: Sequence[ConversationWindow],
 ) -> dict[str, list[np.ndarray]]:
     predictor_runs_by_name: dict[str, list[np.ndarray]] = {
         "acoustic_envelope": [],
@@ -779,12 +824,11 @@ def _build_partner_info_predictor_runs(
         "information_rate": [],
         "prop_expected_cumulative_info": [],
     }
-    ipu_gap_threshold_s = float((config.get("inputs") or {}).get("ipu_gap_threshold_s", 0.3))
     partner_subject_id = canonical_dyad_id(subject_id)  # placeholder to keep mypy quiet
     del partner_subject_id
     partner_label = other_speaker_label(subject_id)
     dyad_id = canonical_dyad_id(subject_id)
-    for run_index, run in enumerate(runs):
+    for run_index, (run, conversation_window) in enumerate(zip(runs, conversation_windows)):
         duration_s = float(target_runs[run_index].shape[0]) / float(target_sfreq_hz)
         n_samples = max(2, int(np.rint(duration_s * modelling_sfreq_hz)))
         sample_times_s = np.arange(n_samples, dtype=float) / float(modelling_sfreq_hz)
@@ -794,15 +838,13 @@ def _build_partner_info_predictor_runs(
             & (surprisal_table["speaker"].astype(str) == partner_label)
         ].copy()
         run_tokens = run_tokens.sort_values(["onset", "offset"], kind="mergesort").reset_index(drop=True)
-        ipu_table = build_partner_ipus_from_tokens(
-            run_tokens,
-            gap_threshold_s=ipu_gap_threshold_s,
+        ipu_table = _load_partner_ipus_from_annotations(
+            subject_id=subject_id,
+            run=int(run),
+            dyad_id=dyad_id,
+            partner_label=partner_label,
+            paths_config=paths_config,
         )
-        ipu_table = ipu_table.loc[
-            (ipu_table["dyad_id"].astype(str) == dyad_id)
-            & (ipu_table["run"].astype(str) == str(int(run)))
-            & (ipu_table["speaker"].astype(str) == partner_label)
-        ].copy()
         token_table = _annotate_tokens_with_ipu_information(run_tokens, ipu_table)
 
         envelope, _ = _load_partner_envelope_run(
@@ -881,6 +923,112 @@ def _load_partner_envelope_run(
         source_sfreq_hz = float(payload.get("sampling_rate_hz", source_sfreq_hz))
     resampled = _resample_1d(values, source_length=values.shape[0], target_length=int(target_n_samples))
     return resampled, source_sfreq_hz
+
+
+def _resolve_conversation_window(
+    *,
+    subject_id: str,
+    run: int,
+    duration_s: float,
+    paths_config: Mapping[str, Any],
+) -> ConversationWindow:
+    _configure_mne_runtime()
+    import mne
+
+    bids_root = Path(str(paths_config["bids_root"]))
+    candidates = [
+        bids_root / subject_id / "eeg" / f"{subject_id}_task-conversation_run-{run}_eeg.edf",
+        bids_root / subject_id / "eeg" / f"{subject_id}_task-conversation_run-{run}_eeg.fif",
+    ]
+    raw_path = next((candidate for candidate in candidates if candidate.exists()), None)
+    if raw_path is None:
+        raise FileNotFoundError(f"No raw EEG file found for {subject_id} run {run}.")
+
+    raw = mne.io.read_raw(raw_path, preload=False, verbose="ERROR")
+    anchor_kwargs: dict[str, Any] = {"shortest_event": 1, "verbose": "ERROR"}
+    if "Status" in raw.ch_names:
+        anchor_kwargs["stim_channel"] = "Status"
+    anchor_events = mne.find_events(raw, **anchor_kwargs)
+    if anchor_events.size == 0:
+        raise ValueError(f"No conversation-start trigger found for {subject_id} run {run}.")
+
+    anchor_sample = int(anchor_events[0, 0])
+    anchor_time_s = float((anchor_sample - raw.first_samp) / raw.info["sfreq"])
+    return ConversationWindow(
+        run=int(run),
+        anchor_time_s=anchor_time_s,
+        duration_s=float(duration_s),
+    )
+
+def _load_partner_ipus_from_annotations(
+    *,
+    subject_id: str,
+    run: int,
+    dyad_id: str,
+    partner_label: str,
+    paths_config: Mapping[str, Any],
+) -> pd.DataFrame:
+    annotation_path = (
+        Path(str(paths_config["annotations_dir"]))
+        / f"{canonical_dyad_id(subject_id)}_run-{int(run)}_combined.TextGrid"
+    )
+    textgrid = load_textgrid(annotation_path)
+    target_tier_name = f"ipu-{partner_label}"
+
+    rows: list[dict[str, Any]] = []
+    for tier in textgrid.tiers:
+        normalized_name = normalize_tier_name(tier.name).value
+        if normalized_name != target_tier_name:
+            continue
+        for interval_index, interval in enumerate(tier.intervals, start=1):
+            if not str(interval.text).strip():
+                continue
+            onset = float(interval.xmin)
+            offset = float(interval.xmax)
+            if not np.isfinite(onset) or not np.isfinite(offset) or offset <= onset:
+                continue
+            rows.append(
+                {
+                    "dyad_id": str(dyad_id),
+                    "run": str(int(run)),
+                    "speaker": str(partner_label),
+                    "partner_ipu_id": f"{dyad_id}|run-{int(run)}|{partner_label}|ipu-{interval_index:05d}",
+                    "partner_ipu_class": f"{dyad_id}|run-{int(run)}|{partner_label}|ipu-{interval_index:05d}",
+                    "partner_ipu_onset": onset,
+                    "partner_ipu_offset": offset,
+                    "anchor_source": "annotation_ipu_tier",
+                }
+            )
+        break
+
+    if not rows:
+        return pd.DataFrame(
+            columns=[
+                "dyad_id",
+                "run",
+                "speaker",
+                "partner_ipu_id",
+                "partner_ipu_class",
+                "partner_ipu_onset",
+                "partner_ipu_offset",
+                "partner_ipu_duration",
+                "next_partner_ipu_onset",
+                "anchor_source",
+            ]
+        )
+
+    ipu_table = pd.DataFrame(rows).sort_values(
+        ["partner_ipu_onset", "partner_ipu_offset"],
+        kind="mergesort",
+    ).reset_index(drop=True)
+    ipu_table["partner_ipu_duration"] = (
+        pd.to_numeric(ipu_table["partner_ipu_offset"], errors="coerce")
+        - pd.to_numeric(ipu_table["partner_ipu_onset"], errors="coerce")
+    )
+    ipu_table["next_partner_ipu_onset"] = (
+        pd.to_numeric(ipu_table["partner_ipu_onset"], errors="coerce").shift(-1)
+    )
+    return ipu_table
 
 
 def _annotate_tokens_with_ipu_information(

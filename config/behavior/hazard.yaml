@@ -5,17 +5,17 @@ inputs:
   surprisal_tsv: /Users/hiro/Datasets/hyperscanning-bids/derivatives/converted_lm_features/features/events/**/*desc-lmSurprisal_features.tsv
 
 behavior:
-  model_backend: "glmm"              # options: "glm", "glmm"
+  model_backend: "glm"              # options: "glm", "glmm"
   lag_selection_criterion: "bic"    # options: "bic", "log_likelihood"
-  only_overlap: false
+  only_overlap: true
   hazard:
-    bin_size_ms: 50
+    bin_size_ms: 10
 
     anchor_types:
       fpp: FPP
       spp_control: SPP
 
-    candidate_lags_ms: [0, 50, 100, 150, 200, 250, 300, 400, 500, 550, 600, ] #[0, 50, 100, 150, 200, 250, 300, 400, 500]
+    candidate_lags_ms: [0, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 550, 600] #[0, 50, 100, 150, 200, 250, 300, 400, 500]
 
     lag_selection:
       dataset: FPP
@@ -33,13 +33,14 @@ behavior:
 
     controls:
       - z_time_from_partner_onset_s
+      # - z_time_from_partner_onset_s_squared
       - z_time_from_partner_offset_s
       - z_time_from_partner_offset_s_squared
 
     modeling:
       use_splines: false
       run_as_categorical: false
-      model_backend: glmm # glmm
+      model_backend: glm # glmm
       glm_covariance: model_based
       glm_cluster: subject
       random_effects:
@@ -56,6 +57,7 @@ behavior:
           - M_2
           - M_3
           - M_4
+          - M_5
 
       spp:
         enabled: true
@@ -66,6 +68,7 @@ behavior:
           - M_2
           - M_3
           - M_4
+          - M_5
 
       pooled_anchor:
         enabled: true

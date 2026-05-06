@@ -8,6 +8,7 @@ from typing import Callable
 
 TIMING_TERMS = [
     "z_time_from_partner_onset_s",
+    "z_time_from_partner_onset_s_squared",
     "z_time_from_partner_offset_s",
     "z_time_from_partner_offset_s_squared",
 ]
@@ -64,6 +65,19 @@ def _M_4(lag_ms: int) -> str:
     )
 
 
+def _M_5(lag_ms: int) -> str:
+    prop = lag_prop_term(lag_ms)
+    return _base_formula(
+        _join_terms(
+            timing_terms(),
+            lag_rate_term(lag_ms),
+            prop,
+            f"z_time_from_partner_onset_s:{prop}",
+            f"z_time_from_partner_offset_s:{prop}",
+        )
+    )
+
+
 def _M_pooled_main(lag_ms: int) -> str:
     return _base_formula(_join_terms("anchor_type", timing_terms(), lag_rate_term(lag_ms), lag_prop_term(lag_ms)))
 
@@ -78,6 +92,7 @@ def _M_pooled_anchor_interaction(lag_ms: int) -> str:
             rate,
             prop,
             "anchor_type:z_time_from_partner_onset_s",
+            "anchor_type:z_time_from_partner_onset_s_squared",
             "anchor_type:z_time_from_partner_offset_s",
             "anchor_type:z_time_from_partner_offset_s_squared",
             f"z_time_from_partner_onset_s:{rate}",
@@ -94,6 +109,7 @@ FORMULA_REGISTRY: dict[str, Callable[[int], str]] = {
     "M_2": _M_2,
     "M_3": _M_3,
     "M_4": _M_4,
+    "M_5": _M_5,
     "M_pooled_main": _M_pooled_main,
     "M_pooled_anchor_interaction": _M_pooled_anchor_interaction,
 }

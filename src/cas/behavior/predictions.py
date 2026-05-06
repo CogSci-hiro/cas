@@ -46,7 +46,9 @@ def primary_effect_predictions(
 ) -> pd.DataFrame:
     base_columns = [
         "z_time_from_partner_onset_s",
+        "z_time_from_partner_onset_s_squared",
         "z_time_from_partner_offset_s",
+        "z_time_from_partner_offset_s_squared",
         "z_run",
         "z_time_within_run",
         "z_planned_response_duration",
@@ -202,7 +204,9 @@ def timing_heatmap_predictions(
                     }
                 )
                 row["z_time_from_partner_onset_s"] = (row["time_from_partner_onset_s"] - onset_mean) / onset_sd
+                row["z_time_from_partner_onset_s_squared"] = row["z_time_from_partner_onset_s"] ** 2
                 row["z_time_from_partner_offset_s"] = (row["time_from_partner_offset_s"] - offset_mean) / offset_sd
+                row["z_time_from_partner_offset_s_squared"] = row["z_time_from_partner_offset_s"] ** 2
                 row["information_rate_z"] = float(z_value)
                 row["information_rate_original"] = float(raw)
                 rows.append(row)
@@ -243,7 +247,9 @@ def three_way_predictions(
         30,
     )
     medians = {
+        "z_time_from_partner_onset_s_squared": float(pd.to_numeric(pooled_table["z_time_from_partner_onset_s_squared"], errors="coerce").median()),
         "z_time_from_partner_offset_s": float(pd.to_numeric(pooled_table["z_time_from_partner_offset_s"], errors="coerce").median()),
+        "z_time_from_partner_offset_s_squared": float(pd.to_numeric(pooled_table["z_time_from_partner_offset_s_squared"], errors="coerce").median()),
         "z_run": float(pd.to_numeric(pooled_table["z_run"], errors="coerce").median()),
         "z_time_within_run": float(pd.to_numeric(pooled_table["z_time_within_run"], errors="coerce").median()),
         "z_planned_response_duration": float(pd.to_numeric(pooled_table["z_planned_response_duration"], errors="coerce").median()),
@@ -262,6 +268,7 @@ def three_way_predictions(
                         "anchor_type": anchor_type,
                         "time_from_partner_onset_s": float(time_value_s),
                         "z_time_from_partner_onset_s": float((time_value_s - onset_mean) / onset_sd),
+                        "z_time_from_partner_onset_s_squared": float(((time_value_s - onset_mean) / onset_sd) ** 2),
                         f"z_information_rate_lag_{lag_ms}": float(info_z),
                         "information_rate_z": float(info_z),
                         "information_rate_original": float(info_raw),

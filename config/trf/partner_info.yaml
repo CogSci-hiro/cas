@@ -4,10 +4,11 @@ analysis:
 
 inputs:
   behavior_config: "config/behavior/hazard.yaml"
-  ipu_gap_threshold_s: 0.3
+  preprocessing_config: "config/preprocessing.yaml"
+  conversation_duration_s: 240.0
 
 targets:
-  include: ["alpha", "beta", "raw"]
+  include: ["beta"] # ["alpha", "beta", "raw"]
   modelling_sampling_rate_hz: 50
 
 predictors:
@@ -23,6 +24,52 @@ predictors:
   information:
     - "information_rate"
     - "prop_expected_cumulative_info"
+
+models:
+  N0:
+    description: "controls only"
+    predictors:
+      - "acoustic_envelope"
+      - "word_onset_impulse"
+      - "partner_onset_impulse"
+      - "partner_offset_impulse"
+      - "time_from_partner_onset"
+      - "time_from_partner_offset"
+      - "time_from_partner_offset_squared"
+  N1:
+    description: "controls + information rate"
+    predictors:
+      - "acoustic_envelope"
+      - "word_onset_impulse"
+      - "partner_onset_impulse"
+      - "partner_offset_impulse"
+      - "time_from_partner_onset"
+      - "time_from_partner_offset"
+      - "time_from_partner_offset_squared"
+      - "information_rate"
+  N2:
+    description: "controls + proportional expected cumulative information"
+    predictors:
+      - "acoustic_envelope"
+      - "word_onset_impulse"
+      - "partner_onset_impulse"
+      - "partner_offset_impulse"
+      - "time_from_partner_onset"
+      - "time_from_partner_offset"
+      - "time_from_partner_offset_squared"
+      - "prop_expected_cumulative_info"
+  N3:
+    description: "controls + information rate + proportional expected cumulative information"
+    predictors:
+      - "acoustic_envelope"
+      - "word_onset_impulse"
+      - "partner_onset_impulse"
+      - "partner_offset_impulse"
+      - "time_from_partner_onset"
+      - "time_from_partner_offset"
+      - "time_from_partner_offset_squared"
+      - "information_rate"
+      - "prop_expected_cumulative_info"
 
 information_rate:
   source_column: "surprisal"
@@ -42,12 +89,12 @@ smoothing:
 
 trf:
   analysis_id: "partner_info_trf"
-  lag_start_ms: 0
-  lag_stop_ms: 1500
+  lag_start_ms: -100
+  lag_stop_ms: 400
   regularization: "ridge"
-  ridge_alpha_grid: [0.001, 0.01, 0.1, 1, 10, 100, 1000]
+  ridge_alpha_grid: [0.1, 1, 10, 100, 1000]
   fit_intercept: false
-  standardize_X: false
+  standardize_X: true
   standardize_Y: false
   output:
     root: "results/{analysis_id}"

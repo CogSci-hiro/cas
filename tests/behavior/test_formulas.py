@@ -8,7 +8,7 @@ from cas.behavior.pipeline import _build_comparison_specs, _build_model_specs
 
 
 def test_behavior_formula_registry_contains_required_model_ids() -> None:
-    required = {"M_0", "M_1", "M_2", "M_3", "M_4", "M_pooled_main", "M_pooled_anchor_interaction"}
+    required = {"M_0", "M_1", "M_2", "M_3", "M_4", "M_5", "M_pooled_main", "M_pooled_anchor_interaction"}
     assert required <= set(FORMULA_REGISTRY)
 
 
@@ -21,10 +21,19 @@ def test_render_formula_uses_selected_lag_columns() -> None:
 def test_pooled_anchor_interaction_formula_contains_anchor_interactions() -> None:
     formula = render_fixed_formula("M_pooled_anchor_interaction", lag_ms=250)
     assert "anchor_type:z_time_from_partner_onset_s" in formula
+    assert "anchor_type:z_time_from_partner_onset_s_squared" in formula
     assert "anchor_type:z_time_from_partner_offset_s" in formula
     assert "anchor_type:z_time_from_partner_offset_s_squared" in formula
     assert "anchor_type:z_information_rate_lag_250" in formula
     assert "anchor_type:z_prop_expected_cum_info_lag_250" in formula
+
+
+def test_m5_uses_prop_cumulative_info_timing_interactions() -> None:
+    formula = render_fixed_formula("M_5", lag_ms=250)
+    assert "z_time_from_partner_onset_s:z_prop_expected_cum_info_lag_250" in formula
+    assert "z_time_from_partner_offset_s:z_prop_expected_cum_info_lag_250" in formula
+    assert "z_time_from_partner_onset_s:z_information_rate_lag_250" not in formula
+    assert "z_time_from_partner_offset_s:z_information_rate_lag_250" not in formula
 
 
 def test_glmm_formulas_include_random_effects() -> None:
@@ -46,7 +55,7 @@ def test_glmm_and_glm_share_same_fixed_effect_terms() -> None:
 
 def test_behavior_config_uses_shared_lag_defaults() -> None:
     config = load_behavior_hazard_config(Path("config/behavior/hazard.yaml"))
-    assert config.candidate_lags_ms == [0, 50, 100, 150, 200, 250, 300, 400, 500]
+    assert config.candidate_lags_ms == [0, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 550, 600]
     assert config.model_backend == "glm"
     assert config.lag_selection_criterion == "bic"
 
@@ -59,6 +68,7 @@ def test_build_model_specs_routes_shared_lag_to_all_models() -> None:
     by_anchor_and_model = {(str(spec["anchor_subset"]), str(spec["model_id"])): spec for spec in specs}
     assert by_anchor_and_model[("fpp", "M_3")]["formula_fixed"] == render_fixed_formula("M_3", lag_ms=150)
     assert by_anchor_and_model[("spp", "M_4")]["formula_fixed"] == render_fixed_formula("M_4", lag_ms=150)
+    assert by_anchor_and_model[("fpp", "M_5")]["formula_fixed"] == render_fixed_formula("M_5", lag_ms=150)
     assert by_anchor_and_model[("pooled", "M_pooled_anchor_interaction")]["formula_fixed"] == render_fixed_formula("M_pooled_anchor_interaction", lag_ms=150)
 
 
@@ -81,5 +91,6 @@ def test_comparison_specs_cover_nested_sequence() -> None:
     comparison_ids = {str(spec["comparison_id"]) for spec in _build_comparison_specs()}
     assert "fpp__M_0__vs__M_1" in comparison_ids
     assert "fpp__M_3__vs__M_4" in comparison_ids
+    assert "fpp__M_3__vs__M_5" in comparison_ids
     assert "spp__M_0__vs__M_2" in comparison_ids
     assert "pooled__M_pooled_main__vs__M_pooled_anchor_interaction" in comparison_ids
