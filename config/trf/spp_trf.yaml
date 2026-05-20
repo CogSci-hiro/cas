@@ -1,0 +1,128 @@
+trf:
+  # Analysis identifier used to isolate all TRF outputs under
+  # derivatives/trf/{analysis_id}/...
+  analysis_id: "spp_trf"
+
+  annotation_csv:
+    root: "/Users/hiro/Projects/active/diapix-annotations/EEG/annotations"
+
+  predictor_definitions:
+    envelope:
+      kind: "continuous"
+      base_feature: "envelope"
+      role: "other"
+
+    self_speech_onset:
+      kind: "annotation_csv_impulse"
+      source_kind: "ipu"
+      speaker_role: "self"
+      time_kind: "onset"
+
+    self_speech_offset:
+      kind: "annotation_csv_impulse"
+      source_kind: "ipu"
+      speaker_role: "self"
+      time_kind: "offset"
+
+    other_speech_onset:
+      kind: "annotation_csv_impulse"
+      source_kind: "ipu"
+      speaker_role: "other"
+      time_kind: "onset"
+
+    other_speech_offset:
+      kind: "annotation_csv_impulse"
+      source_kind: "ipu"
+      speaker_role: "other"
+      time_kind: "offset"
+
+    phoneme_onset:
+      kind: "annotation_csv_impulse"
+      source_kind: "phoneme"
+      speaker_role: "other"
+
+    syllable_onset:
+      kind: "annotation_csv_impulse"
+      source_kind: "syllable"
+      speaker_role: "other"
+
+    word_onset:
+      kind: "annotation_csv_impulse"
+      source_kind: "word"
+      speaker_role: "other"
+
+    spp_conf_vs_disconf:
+      kind: "weighted_impulse"
+      speaker_column: "speaker_spp"
+      speaker_role: "other"
+      time_column: "spp_onset"
+      label_column: "spp_label"
+      label_prefix_weights:
+        "SPP_CONF": -1.0
+        "SPP_DISC": 1.0
+
+  models:
+    M0:
+      predictors:
+        - "envelope"
+        - "self_speech_onset"
+        - "self_speech_offset"
+        - "other_speech_onset"
+        - "other_speech_offset"
+        - "phoneme_onset"
+        - "syllable_onset"
+        - "word_onset"
+
+    M1:
+      predictors:
+        - "envelope"
+        - "self_speech_onset"
+        - "self_speech_offset"
+        - "other_speech_onset"
+        - "other_speech_offset"
+        - "phoneme_onset"
+        - "syllable_onset"
+        - "word_onset"
+        - "spp_conf_vs_disconf"
+
+  # Continuous EEG target for the current config-driven TRF analysis.
+  target:
+    name: "eeg"
+    kind: "continuous"
+    path: "evoked/{subject}/run-{run}.npy"
+
+  events:
+    csv_path: "/Users/hiro/Datasets/working/cas/events/events.csv"
+
+  # Central timing parameters for TRF design construction.
+  timing:
+    target_sfreq_hz: 32
+    tmin_s: -0.2
+    tmax_s: 0.6
+
+  # Nested leave-one-run-out CV over the eight runs in the dataset.
+  cv:
+    outer: "leave_one_run_out"
+    inner: "leave_one_run_out"
+    n_runs: 8
+
+  # Model hyperparameters for the current ridge-based smoke test.
+  model:
+    backend: "spyeeg"
+    estimator: "ridge"
+    alphas: [0.1, 1.0, 10.0, 100.0, 1000.0]
+    fit_intercept: false
+    standardize_X: true
+    standardize_Y: false
+
+  # Primary evaluation metric saved with fold-wise scores.
+  scoring:
+    metric: "corr"
+
+  # Analysis-scoped outputs prevent unrelated TRF analyses from invalidating
+  # each other's Snakemake cache paths.
+  output:
+    root: "{analysis_id}"
+    save_betas: true
+    save_scores: true
+    save_predictions: false
