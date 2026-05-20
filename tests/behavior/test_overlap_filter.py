@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from cas.behavior.config import BehaviorHazardConfig, BehaviorHazardPaths, load_behavior_hazard_config
+from cas.behavior.risksets import _legacy_config
 from cas.behavior.pipeline import _apply_overlap_filter, add_predictors, select_lag
 
 
@@ -61,6 +62,53 @@ def test_load_behavior_hazard_config_defaults_only_overlap_false(tmp_path: Path)
     config = load_behavior_hazard_config(config_path)
 
     assert config.only_overlap is False
+    assert config.information_rate_window_ms == 500
+
+
+def test_load_behavior_hazard_config_reads_information_rate_window_ms(tmp_path: Path) -> None:
+    paths_path = tmp_path / "paths.yaml"
+    paths_path.write_text(f"output_dir: {tmp_path / 'derivatives'}\n", encoding="utf-8")
+    config_path = tmp_path / "hazard.yaml"
+    config_path.write_text(
+        (
+            f"paths_config: {paths_path}\n"
+            "inputs:\n"
+            "  events_csv: dummy.csv\n"
+            "behavior:\n"
+            "  hazard:\n"
+            "    bin_size_ms: 50\n"
+            "    information_rate_window_ms: 750\n"
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_behavior_hazard_config(config_path)
+
+    assert config.information_rate_window_ms == 750
+
+
+def test_legacy_config_uses_information_rate_window_from_config(tmp_path: Path) -> None:
+    config = BehaviorHazardConfig(
+        path=tmp_path / "hazard.yaml",
+        raw={
+            "inputs": {"events_csv": "dummy.csv"},
+            "behavior": {"hazard": {"bin_size_ms": 50, "information_rate_window_ms": 750}},
+        },
+        paths_config_path=tmp_path / "paths.yaml",
+        paths_config={"output_dir": str(tmp_path / "derivatives")},
+        paths=BehaviorHazardPaths(
+            output_dir=tmp_path / "derivatives",
+            behavior_root=tmp_path / "derivatives" / "behavior",
+            hazard_root=tmp_path / "derivatives" / "behavior" / "hazard",
+            figures_main_behavior=tmp_path / "derivatives" / "figures" / "main" / "behavior",
+            figures_supp_behavior=tmp_path / "derivatives" / "figures" / "supp" / "behavior",
+            figures_qc_behavior=tmp_path / "derivatives" / "figures" / "qc" / "behavior",
+        ),
+    )
+
+    legacy = _legacy_config(config)
+
+    assert legacy.information_rate_window_s == pytest.approx(0.75)
 
 
 def test_apply_overlap_filter_keeps_full_episode_rows_for_negative_latency() -> None:

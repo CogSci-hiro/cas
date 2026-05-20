@@ -6,10 +6,11 @@ inputs:
 
 behavior:
   model_backend: "glm"              # options: "glm", "glmm"
-  lag_selection_criterion: "bic"    # options: "bic", "log_likelihood"
+  lag_selection_criterion: "log_likelihood"    # options: "bic", "log_likelihood"
   only_overlap: true
   hazard:
-    bin_size_ms: 10
+    bin_size_ms: 50
+    information_rate_window_ms: 100
 
     anchor_types:
       fpp: FPP
@@ -20,7 +21,7 @@ behavior:
     lag_selection:
       dataset: FPP
       selector_model_id: M_3
-      criterion: bic
+      criterion: log_likelihood
       selected_lag_rule: shared_fpp_selected_lag
 
     standardization:
@@ -33,7 +34,7 @@ behavior:
 
     controls:
       - z_time_from_partner_onset_s
-      # - z_time_from_partner_onset_s_squared
+      - z_time_from_partner_onset_s_squared
       - z_time_from_partner_offset_s
       - z_time_from_partner_offset_s_squared
 

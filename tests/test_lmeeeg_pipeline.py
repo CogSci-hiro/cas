@@ -115,6 +115,60 @@ def test_select_epochs_from_config_raises_on_empty_selection():
         select_epochs_from_config(epochs, metadata, config)
 
 
+def test_select_epochs_from_config_applies_min_duration_only_to_spp_rows():
+    metadata = pd.DataFrame(
+        {
+            "event_family": ["fpp", "spp", "spp", "fpp"],
+            "spp_duration": [0.2, 0.3, 0.5, 0.1],
+            "fpp_duration": [0.7, 0.7, 0.7, 0.8],
+            "event_type": ["self_fpp_onset", "self_spp_onset", "self_spp_onset", "self_fpp_onset"],
+        }
+    )
+    epochs = FakeEpochs(metadata)
+    config = {
+        "selection": {"min_duration_s": 0.4},
+        "models": {"demo": {"formula": "~ spp_duration", "test_predictors": ["spp_duration"]}},
+    }
+
+    selected_epochs, selected_metadata = select_epochs_from_config(epochs, metadata, config)
+
+    assert len(selected_epochs) == 3
+    assert selected_epochs.selection.tolist() == [0, 2, 3]
+    assert selected_metadata["event_family"].tolist() == ["fpp", "spp", "fpp"]
+
+
+def test_select_epochs_from_config_applies_min_duration_using_class_3_fallback():
+    metadata = pd.DataFrame(
+        {
+            "class_3": ["FPP", "SPP_CONF", "SPP_DISC"],
+            "duration": [0.8, 0.35, 0.45],
+        }
+    )
+    epochs = FakeEpochs(metadata)
+    config = {
+        "selection": {"min_duration_s": 0.4},
+        "models": {"demo": {"formula": "~ duration", "test_predictors": ["duration"]}},
+    }
+
+    selected_epochs, selected_metadata = select_epochs_from_config(epochs, metadata, config)
+
+    assert len(selected_epochs) == 2
+    assert selected_epochs.selection.tolist() == [0, 2]
+    assert selected_metadata["class_3"].tolist() == ["FPP", "SPP_DISC"]
+
+
+def test_select_epochs_from_config_rejects_negative_min_duration():
+    metadata = pd.DataFrame({"event_family": ["spp"], "spp_duration": [0.3]})
+    epochs = FakeEpochs(metadata)
+    config = {
+        "selection": {"min_duration_s": -0.1},
+        "models": {"demo": {"formula": "~ spp_duration", "test_predictors": ["spp_duration"]}},
+    }
+
+    with pytest.raises(ValueError, match="min_duration_s"):
+        select_epochs_from_config(epochs, metadata, config)
+
+
 def test_augment_lmeeeg_metadata_derives_duration_from_event_family():
     metadata = pd.DataFrame(
         {
@@ -432,7 +486,7 @@ def test_prepare_model_inputs_rejects_non_positive_event_duration():
         )
 
 
-def test_apply_duration_controls_creates_log_spline_and_bin_features():
+def test_apply_duration_controls_creates_log_and_bin_features():
     runtime_config = {
         "lmeeeg": {
             "models": {
@@ -443,15 +497,6 @@ def test_apply_duration_controls_creates_log_spline_and_bin_features():
                             "enabled": True,
                             "output_column": "z_log_spp_duration",
                             "offset_s": 0.001,
-                            "standardize": True,
-                        },
-                        "spline_duration": {
-                            "enabled": True,
-                            "source": "z_log_spp_duration",
-                            "output_prefix": "spline_log_spp_duration",
-                            "df": 4,
-                            "degree": 3,
-                            "include_intercept": False,
                             "standardize": True,
                         },
                         "duration_bins": {
@@ -480,32 +525,11 @@ def test_apply_duration_controls_creates_log_spline_and_bin_features():
 
     assert "z_log_spp_duration" in prepared.columns
     assert np.isclose(prepared["z_log_spp_duration"].mean(), 0.0)
-    spline_columns = [column for column in prepared.columns if column.startswith("spline_log_spp_duration_")]
-    assert len(spline_columns) == 3
     assert "spp_duration_bin" in prepared.columns
-    assert artifacts["term_aliases"]["spline_log_spp_duration"] == spline_columns
-    design = np.column_stack(
-        [
-            np.ones(len(prepared), dtype=float),
-            prepared["z_log_spp_duration"].to_numpy(dtype=float),
-            prepared[spline_columns].to_numpy(dtype=float),
-        ]
-    )
-    assert np.linalg.matrix_rank(design) == design.shape[1]
-    for column in spline_columns:
-        reduced_columns = [
-            np.ones(len(prepared), dtype=float),
-            prepared["z_log_spp_duration"].to_numpy(dtype=float),
-        ]
-        reduced_columns.extend(
-            prepared[other].to_numpy(dtype=float)
-            for other in spline_columns
-            if other != column
-        )
-        reduced = np.column_stack(reduced_columns)
-        effect = prepared[column].to_numpy(dtype=float)
-        residualized = effect - reduced @ (np.linalg.pinv(reduced) @ effect)
-        assert float(residualized @ residualized) > 1e-8
+    assert artifacts["enabled_controls"] == ["log_duration", "duration_bins"]
+    assert artifacts["formula_terms"] == ["z_log_spp_duration", "spp_duration_bin"]
+    assert artifacts["term_aliases"]["z_log_spp_duration"] == ["z_log_spp_duration"]
+    assert artifacts["term_aliases"]["spp_duration_bin"] == ["spp_duration_bin"]
 
 
 def test_apply_duration_controls_keeps_zero_duration_when_log_offset_is_configured():
@@ -621,13 +645,11 @@ def test_resolve_model_formula_adds_log_only_duration_term():
     assert "z_log_spp_duration" in formula
 
 
-def test_resolve_model_formula_adds_spline_and_bin_terms_to_one_full_model():
+def test_resolve_model_formula_adds_log_and_bin_terms_to_one_full_model():
     runtime_config = {"lmeeeg": {"models": {"demo": {"formula": "~ spp_class_1 + latency + run"}}}}
     duration_artifacts = {
         "formula_terms": [
             "z_log_spp_duration",
-            "spline_log_spp_duration_1",
-            "spline_log_spp_duration_2",
             "spp_duration_bin",
         ]
     }
@@ -639,8 +661,7 @@ def test_resolve_model_formula_adds_spline_and_bin_terms_to_one_full_model():
     )
 
     assert formula_rhs == (
-        "spp_class_1 + latency + run + z_log_spp_duration + "
-        "spline_log_spp_duration_1 + spline_log_spp_duration_2 + spp_duration_bin"
+        "spp_class_1 + latency + run + z_log_spp_duration + spp_duration_bin"
     )
 
 
@@ -652,7 +673,6 @@ def test_resolve_term_tests_groups_duration_terms():
                     "term_tests": {
                         "class_effect": {"enabled": True, "terms": ["spp_class_1"]},
                         "duration_log": {"enabled": True, "terms": ["z_log_spp_duration"]},
-                        "duration_spline": {"enabled": True, "terms": ["spline_log_spp_duration"]},
                         "duration_bin": {"enabled": True, "terms": ["spp_duration_bin"]},
                     }
                 }
@@ -666,9 +686,7 @@ def test_resolve_term_tests_groups_duration_terms():
             "spp_duration_bin": pd.Categorical(["dur_q1", "dur_q2"]),
         }
     )
-    duration_artifacts = {
-        "term_aliases": {"spline_log_spp_duration": ["spline_log_spp_duration_1", "spline_log_spp_duration_2"]}
-    }
+    duration_artifacts = {}
 
     groups = _resolve_term_tests(
         runtime_config,
@@ -680,7 +698,6 @@ def test_resolve_term_tests_groups_duration_terms():
     assert [group["group_name"] for group in groups] == [
         "class_effect",
         "duration_log",
-        "duration_spline",
         "duration_bin",
     ]
 
@@ -751,19 +768,16 @@ def test_resolve_test_effects_accepts_normalized_effect_name():
     assert _normalize_effect_name("pair_position[T.FPP]") == "pair_positionFPP"
 
 
-def test_resolve_term_test_effects_maps_grouped_duration_terms():
+def test_resolve_term_test_effects_maps_duration_terms():
     fixed_column_names = [
         "Intercept",
         "spp_class_1[T.DISC]",
         "z_log_spp_duration",
-        "spline_log_spp_duration_1",
-        "spline_log_spp_duration_2",
         "spp_duration_bin[T.dur_q2]",
     ]
     term_tests = [
         {"group_name": "class_effect", "contrast_type": "categorical", "terms": ["spp_class_1"]},
         {"group_name": "duration_log", "contrast_type": "continuous", "terms": ["z_log_spp_duration"]},
-        {"group_name": "duration_spline", "contrast_type": "grouped_continuous", "terms": ["spline_log_spp_duration"]},
         {"group_name": "duration_bin", "contrast_type": "categorical", "terms": ["spp_duration_bin"]},
     ]
 
@@ -773,13 +787,8 @@ def test_resolve_term_test_effects_maps_grouped_duration_terms():
     assert resolved[0]["terms"][0]["raw_effects"] == ["spp_class_1[T.DISC]"]
     assert resolved[1]["group_name"] == "duration_log"
     assert resolved[1]["terms"][0]["raw_effects"] == ["z_log_spp_duration"]
-    assert resolved[2]["group_name"] == "duration_spline"
-    assert resolved[2]["terms"][0]["raw_effects"] == [
-        "spline_log_spp_duration_1",
-        "spline_log_spp_duration_2",
-    ]
-    assert resolved[3]["group_name"] == "duration_bin"
-    assert resolved[3]["terms"][0]["raw_effects"] == ["spp_duration_bin[T.dur_q2]"]
+    assert resolved[2]["group_name"] == "duration_bin"
+    assert resolved[2]["terms"][0]["raw_effects"] == ["spp_duration_bin[T.dur_q2]"]
 
 
 def test_run_model_inference_runs_each_expanded_effect(tmp_path, monkeypatch):
@@ -842,7 +851,6 @@ def test_run_model_inference_writes_grouped_duration_summary(tmp_path, monkeypat
                     "term_tests": {
                         "class_effect": {"enabled": True, "terms": ["spp_class_1"]},
                         "duration_log": {"enabled": True, "terms": ["z_log_spp_duration"]},
-                        "duration_spline": {"enabled": True, "terms": ["spline_log_spp_duration"]},
                     },
                 }
             },
@@ -867,8 +875,6 @@ def test_run_model_inference_writes_grouped_duration_summary(tmp_path, monkeypat
             "Intercept",
             "spp_class_1[T.DISC]",
             "z_log_spp_duration",
-            "spline_log_spp_duration_1",
-            "spline_log_spp_duration_2",
         ]
 
     fit_result = SimpleNamespace(design_spec=DummyDesignSpec())
@@ -893,21 +899,18 @@ def test_run_model_inference_writes_grouped_duration_summary(tmp_path, monkeypat
         term_tests_override=[
             {"group_name": "class_effect", "contrast_type": "categorical", "terms": ["spp_class_1"]},
             {"group_name": "duration_log", "contrast_type": "continuous", "terms": ["z_log_spp_duration"]},
-            {"group_name": "duration_spline", "contrast_type": "grouped_continuous", "terms": ["spline_log_spp_duration"]},
         ],
     )
 
     assert {result["term_group"] for result in results} == {
         "class_effect",
         "duration_log",
-        "duration_spline",
     }
     summary_path = tmp_path / "lmeeeg" / "demo" / "inference_summary.json"
     payload = json.loads(summary_path.read_text(encoding="utf-8"))
     assert {group["term_group"] for group in payload["groups"]} == {
         "class_effect",
         "duration_log",
-        "duration_spline",
     }
 
 

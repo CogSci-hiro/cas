@@ -125,6 +125,33 @@ def _load_raw_eeg(path: str) -> "mne.io.BaseRaw":
     raise ValueError(f"Unsupported EEG input format: {input_path.suffix}")
 
 
+def _resolve_conversation_duration_s(summary_json_path: str) -> float:
+    payload = json.loads(Path(summary_json_path).read_text(encoding="utf-8"))
+    n_frames = int(payload.get("n_frames", 0))
+    frame_step_s = float(payload.get("frame_step_s", 0.0))
+    if n_frames > 0 and frame_step_s > 0.0:
+        return float(n_frames) * float(frame_step_s)
+    time_start_s = float(payload.get("time_start_s", 0.0))
+    time_end_s = float(payload.get("time_end_s", 0.0))
+    if time_end_s > time_start_s:
+        return time_end_s - time_start_s
+    raise ValueError(f"Could not resolve conversation duration from {summary_json_path}.")
+
+
+def _resolve_first_trigger_time_s(raw_path: str) -> float:
+    raw = _load_raw_eeg(raw_path)
+    import mne
+
+    anchor_kwargs: dict[str, object] = {"shortest_event": 1, "verbose": "ERROR"}
+    if "Status" in raw.ch_names:
+        anchor_kwargs["stim_channel"] = "Status"
+    events = mne.find_events(raw, **anchor_kwargs)
+    if events.size == 0:
+        raise ValueError(f"No conversation-start trigger found in {raw_path}.")
+    anchor_sample = int(events[0, 0])
+    return float((anchor_sample - raw.first_samp) / raw.info["sfreq"])
+
+
 def _save_raw_fif(raw: "mne.io.BaseRaw", output_path_str: str) -> Path:
     output_path = Path(output_path_str)
     if output_path.suffix.lower() != ".fif":
@@ -309,7 +336,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Grouped induced alpha/beta analysis commands.",
     )
     induced_subparsers = induced_parser.add_subparsers(dest="induced_command", required=True)
-    induced_default_config = "config/induced/alpha_beta_lmeeeg.yaml"
+    induced_default_config = "config/induced/spp_induced_sensor_lmeeeg.yaml"
     for name, help_text in (
         ("power", "Run the induced-power preparation workflow."),
         ("sensor-lmeeeg", "Run sensor-level induced alpha/beta lmeEEG."),
@@ -417,6 +444,22 @@ def _build_parser() -> argparse.ArgumentParser:
     trf_spp_onset_control_group_parser.add_argument("--kernel-png", required=True, help="Joint kernel PNG output path.")
     trf_spp_onset_control_group_parser.add_argument("--kernel-pdf", required=True, help="Joint kernel PDF output path.")
 
+    trf_model_group_parser = subparsers.add_parser(
+        "trf-model-group",
+        help="Aggregate subject-level two-model TRF outputs and export delta-score stats plus a target kernel plot.",
+    )
+    trf_model_group_parser.add_argument("--subject-jsons", nargs="+", required=True)
+    trf_model_group_parser.add_argument("--subject-npzs", nargs="+", required=True)
+    trf_model_group_parser.add_argument("--full-model", required=True)
+    trf_model_group_parser.add_argument("--null-model", required=True)
+    trf_model_group_parser.add_argument("--kernel-predictor", required=True)
+    trf_model_group_parser.add_argument("--config", required=False, default=None)
+    trf_model_group_parser.add_argument("--summary-json", required=True)
+    trf_model_group_parser.add_argument("--subject-csv", required=True)
+    trf_model_group_parser.add_argument("--fold-csv", required=True)
+    trf_model_group_parser.add_argument("--kernel-png", required=True)
+    trf_model_group_parser.add_argument("--kernel-pdf", required=True)
+
     trf_partner_info_fit_parser = subparsers.add_parser(
         "trf-partner-info-fit",
         help="Fit the subject-level partner-turn information-tracking TRF.",
@@ -479,6 +522,28 @@ def _build_parser() -> argparse.ArgumentParser:
         "--metadata-json",
         default=None,
         help="Optional JSON sidecar path with channel names and sampling rate.",
+    )
+    eeg_array_parser.add_argument(
+        "--anchor-raw",
+        default=None,
+        help="Optional raw EEG (.edf/.fif) path used to resolve the conversation-start trigger.",
+    )
+    eeg_array_parser.add_argument(
+        "--conversation-summary-json",
+        default=None,
+        help="Optional acoustic summary JSON used to crop EEG to the conversation window duration.",
+    )
+    eeg_array_parser.add_argument(
+        "--low-cut-hz",
+        type=float,
+        default=None,
+        help="Optional TRF-specific high-pass cutoff applied before export.",
+    )
+    eeg_array_parser.add_argument(
+        "--high-cut-hz",
+        type=float,
+        default=None,
+        help="Optional TRF-specific low-pass cutoff applied before export.",
     )
 
     envelope_parser = subparsers.add_parser(
@@ -862,6 +927,21 @@ def _run_acoustic_f0(args: argparse.Namespace) -> int:
 def _run_eeg_array(args: argparse.Namespace) -> int:
     raw = _load_raw_eeg(args.input)
     raw.pick("eeg")
+    if args.anchor_raw and args.conversation_summary_json:
+        anchor_time_s = _resolve_first_trigger_time_s(str(args.anchor_raw))
+        duration_s = _resolve_conversation_duration_s(str(args.conversation_summary_json))
+        crop_stop_s = min(
+            float(anchor_time_s + duration_s),
+            float(raw.times[-1]) + (1.0 / float(raw.info["sfreq"])),
+        )
+        raw.crop(tmin=float(anchor_time_s), tmax=float(crop_stop_s), include_tmax=False)
+    if args.low_cut_hz is not None or args.high_cut_hz is not None:
+        raw.filter(
+            l_freq=float(args.low_cut_hz) if args.low_cut_hz is not None else None,
+            h_freq=float(args.high_cut_hz) if args.high_cut_hz is not None else None,
+            picks="eeg",
+            verbose="ERROR",
+        )
     if args.target_sfreq_hz is not None:
         raw.resample(float(args.target_sfreq_hz))
 
@@ -881,6 +961,10 @@ def _run_eeg_array(args: argparse.Namespace) -> int:
             "n_samples": int(data.shape[0]),
             "n_channels": int(data.shape[1]),
             "channel_names": list(raw.ch_names),
+            "anchor_raw": str(args.anchor_raw or ""),
+            "conversation_summary_json": str(args.conversation_summary_json or ""),
+            "low_cut_hz": float(args.low_cut_hz) if args.low_cut_hz is not None else None,
+            "high_cut_hz": float(args.high_cut_hz) if args.high_cut_hz is not None else None,
         }
         metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
         print(f"Saved EEG metadata to {metadata_path}")
@@ -1043,12 +1127,62 @@ def _resolve_manifest_figure_subdir(*, out_dir: Path, output_path: Path, default
         return default_subdir
 
 
+def _infer_out_dir_from_figure_manifest_path(output_path: Path) -> Path | None:
+    for parent in output_path.parents:
+        if parent.name == "figures":
+            return parent.parent
+    return None
+
+
+def _summary_exists_for_out_dir(*, out_dir: Path, config: dict[str, object]) -> bool:
+    summary_path = _lmeeeg_analysis_root_for_config(out_dir, config=config) / "lmeeeg_analysis_summary.json"
+    return summary_path.exists()
+
+
+def _resolve_lmeeeg_summary_out_dir(
+    *,
+    config_root: Path,
+    config: dict[str, object],
+    output_path: Path | None,
+) -> Path:
+    default_out_dir = _resolve_out_dir(config_root)
+    if _summary_exists_for_out_dir(out_dir=default_out_dir, config=config):
+        return default_out_dir
+    if output_path is not None:
+        inferred_out_dir = _infer_out_dir_from_figure_manifest_path(output_path)
+        if inferred_out_dir is not None and _summary_exists_for_out_dir(out_dir=inferred_out_dir, config=config):
+            return inferred_out_dir
+    return default_out_dir
+
+
 def _load_lmeeeg_analysis_summary(*, out_dir: Path, config: dict[str, object]) -> dict[str, object]:
     analysis_root = _lmeeeg_analysis_root_for_config(out_dir, config=config)
     summary_path = analysis_root / "lmeeeg_analysis_summary.json"
     if not summary_path.exists():
         raise FileNotFoundError(f"Missing pooled lmeEEG analysis summary: {summary_path}")
     return json.loads(summary_path.read_text(encoding="utf-8"))
+
+
+def _load_feature_t_value_map(
+    *,
+    fit_summary: dict[str, object] | None,
+    normalized_effect: str,
+) -> np.ndarray | None:
+    if not isinstance(fit_summary, dict) or not normalized_effect:
+        return None
+    per_effect_outputs = fit_summary.get("per_effect_outputs")
+    if not isinstance(per_effect_outputs, dict):
+        return None
+    effect_outputs = per_effect_outputs.get(normalized_effect)
+    if not isinstance(effect_outputs, dict):
+        return None
+    t_value_path = effect_outputs.get("t_values")
+    if not isinstance(t_value_path, str) or not t_value_path:
+        return None
+    resolved_path = Path(t_value_path)
+    if not resolved_path.exists():
+        return None
+    return np.asarray(np.load(resolved_path), dtype=float)
 
 
 def _lmeeeg_model_key(model_name: str, band_name: str | None = None) -> str:
@@ -1214,7 +1348,6 @@ def _run_figures_lmeeeg(args: argparse.Namespace) -> int:
     from cas.stats.lmeeeg_pipeline import load_lmeeeg_config
 
     config_root = Path(args.config_root).resolve()
-    out_dir = _resolve_out_dir(config_root)
     lmeeeg_config_path = _resolve_lmeeeg_config_path(
         config_root=config_root,
         explicit_config_path=getattr(args, "lmeeeg_config", None),
@@ -1225,7 +1358,17 @@ def _run_figures_lmeeeg(args: argparse.Namespace) -> int:
     formats = tuple(figure_section.get("formats", viz_section.get("formats", ["png", "pdf"])))
     dpi = int(viz_section.get("dpi", 300))
     default_figure_dirname = _lmeeeg_figure_dirname(lmeeeg_config)
-    output_path = Path(args.output) if args.output else out_dir / "figures" / default_figure_dirname / "figure_manifest.json"
+    default_out_dir = _resolve_out_dir(config_root)
+    output_path = (
+        Path(args.output)
+        if args.output
+        else default_out_dir / "figures" / default_figure_dirname / "figure_manifest.json"
+    )
+    out_dir = _resolve_lmeeeg_summary_out_dir(
+        config_root=config_root,
+        config=lmeeeg_config,
+        output_path=output_path,
+    )
     figure_dirname = _resolve_manifest_figure_subdir(
         out_dir=out_dir,
         output_path=output_path,
@@ -1289,7 +1432,6 @@ def _run_figures_lmeeeg_inference(args: argparse.Namespace) -> int:
     from cas.stats.lmeeeg_pipeline import load_lmeeeg_config
 
     config_root = Path(args.config_root).resolve()
-    out_dir = _resolve_out_dir(config_root)
     lmeeeg_config_path = _resolve_lmeeeg_config_path(
         config_root=config_root,
         explicit_config_path=getattr(args, "lmeeeg_config", None),
@@ -1300,7 +1442,17 @@ def _run_figures_lmeeeg_inference(args: argparse.Namespace) -> int:
     formats = tuple(figure_section.get("formats", viz_section.get("formats", ["png", "pdf"])))
     dpi = int(viz_section.get("dpi", 300))
     default_output_dirname = _lmeeeg_inference_figure_dirname(lmeeeg_config)
-    output_path = Path(args.output) if args.output else out_dir / "figures" / default_output_dirname / "figure_manifest.json"
+    default_out_dir = _resolve_out_dir(config_root)
+    output_path = (
+        Path(args.output)
+        if args.output
+        else default_out_dir / "figures" / default_output_dirname / "figure_manifest.json"
+    )
+    out_dir = _resolve_lmeeeg_summary_out_dir(
+        config_root=config_root,
+        config=lmeeeg_config,
+        output_path=output_path,
+    )
     output_dirname = _resolve_manifest_figure_subdir(
         out_dir=out_dir,
         output_path=output_path,
@@ -1335,6 +1487,7 @@ def _run_figures_lmeeeg_inference(args: argparse.Namespace) -> int:
             if not isinstance(inference_summary, dict):
                 continue
             effect_name = str(inference_summary.get("effect") or "")
+            normalized_effect = str(inference_summary.get("normalized_effect") or "")
             observed_value = inference_summary.get("observed_statistic")
             corrected_p_value = inference_summary.get("corrected_p_values")
             if not effect_name or not isinstance(observed_value, str) or not isinstance(corrected_p_value, str):
@@ -1345,17 +1498,23 @@ def _run_figures_lmeeeg_inference(args: argparse.Namespace) -> int:
                 continue
 
             observed_map = np.asarray(np.load(observed_path), dtype=float)
+            feature_t_map = _load_feature_t_value_map(
+                fit_summary=fit_summary,
+                normalized_effect=normalized_effect,
+            )
             corrected_p_array = np.asarray(np.load(corrected_p_path), dtype=float)
             significance_mask = corrected_p_array < 0.05
-            significance_map = np.where(significance_mask, observed_map, 0.0)
+            plotted_map = feature_t_map if feature_t_map is not None else observed_map
+            plotted_label = "t value" if feature_t_map is not None else "observed statistic"
+            significance_map = np.where(significance_mask, plotted_map, 0.0)
 
             observed_stem = out_dir / "figures" / output_dirname / model_key / f"{_sanitize_token(effect_name)}_observed"
             observed_paths = plot_joint_model_weights(
-                observed_map,
+                plotted_map,
                 times=times,
                 channel_names=channel_names,
                 output_stem=observed_stem,
-                title=f"lmeEEG observed statistic | {model_label} | {effect_name}",
+                title=f"lmeEEG {plotted_label} | {model_label} | {effect_name}",
                 formats=formats,
                 dpi=dpi,
                 line_width=2.5,
@@ -1519,6 +1678,7 @@ def _default_trf_output_prefix(*, trf_config: dict, subject_id: str, config_root
 def _run_trf_config(args: argparse.Namespace) -> int:
     from cas.trf.nested_cv import loro_nested_cv
     from cas.trf.prepare import prepare_trf_runs
+    from cas.trf.control import build_named_predictor_runs, _stack_predictors_for_model
 
     project_root = Path(args.project_root).resolve()
     config_path = _resolve_path(args.config, project_root=project_root).resolve()
@@ -1534,6 +1694,93 @@ def _run_trf_config(args: argparse.Namespace) -> int:
     runs = list(args.runs) if args.runs is not None else list(range(1, n_runs + 1))
     if not runs:
         raise ValueError("No runs requested. Provide --runs or set trf.cv.n_runs > 0.")
+
+    predictor_definitions = dict(trf_section.get("predictor_definitions") or {})
+    models_cfg = dict(trf_section.get("models") or {})
+    if predictor_definitions or models_cfg:
+        if not predictor_definitions:
+            raise ValueError("TRF config with models must define trf.predictor_definitions.")
+        if not models_cfg:
+            raise ValueError("TRF config with predictor_definitions must define trf.models.")
+
+        eeg_runs, predictor_runs_by_name, channel_names = build_named_predictor_runs(
+            trf_config=trf_config,
+            subject_id=args.subject,
+            runs=runs,
+            project_root=project_root,
+            config_root=config_root,
+        )
+        target_sfreq_hz = float(timing_config["target_sfreq_hz"])
+        lag_samples = np.arange(
+            int(np.rint(float(timing_config["tmin_s"]) * target_sfreq_hz)),
+            int(np.rint(float(timing_config["tmax_s"]) * target_sfreq_hz)) + 1,
+            dtype=int,
+        )
+        times_s = lag_samples.astype(float) / target_sfreq_hz
+        model_results: dict[str, dict[str, object]] = {}
+        coefficient_payload: dict[str, object] = {
+            "times_s": np.asarray(times_s, dtype=float),
+            "channel_names": np.asarray(channel_names, dtype=object),
+        }
+        for model_name, model_definition in models_cfg.items():
+            predictor_names = [str(name) for name in model_definition.get("predictors", [])]
+            predictor_runs = _stack_predictors_for_model(predictor_names, predictor_runs_by_name)
+            X_runs, Y_runs = prepare_trf_runs(
+                eeg_runs=eeg_runs,
+                predictor_runs=predictor_runs,
+                eeg_sfreq=target_sfreq_hz,
+                predictor_sfreq=target_sfreq_hz,
+                target_sfreq=target_sfreq_hz,
+                tmin_s=float(timing_config["tmin_s"]),
+                tmax_s=float(timing_config["tmax_s"]),
+            )
+            fold_scores, fold_coefficients = loro_nested_cv(
+                X_runs=X_runs,
+                Y_runs=Y_runs,
+                alphas=[float(alpha) for alpha in model_config["alphas"]],
+                srate=target_sfreq_hz,
+                tmin_s=float(timing_config["tmin_s"]),
+                tmax_s=float(timing_config["tmax_s"]),
+                fit_intercept=bool(model_config.get("fit_intercept", False)),
+                scoring=str((trf_section.get("scoring") or {}).get("metric", "corr")),
+                standardize_X=bool(model_config.get("standardize_X", True)),
+                standardize_Y=bool(model_config.get("standardize_Y", False)),
+            )
+            model_results[str(model_name)] = {
+                "predictors": predictor_names,
+                "fold_scores": fold_scores,
+            }
+            coefficient_payload[f"{model_name}_predictors"] = np.asarray(predictor_names, dtype=object)
+            coefficient_payload[f"{model_name}_coefficients"] = np.stack(
+                [np.asarray(value, dtype=float) for value in fold_coefficients],
+                axis=0,
+            )
+
+        result = {
+            "analysis_id": trf_section.get("analysis_id"),
+            "subject": args.subject,
+            "runs": runs,
+            "models": model_results,
+        }
+        print(json.dumps(result, indent=2))
+
+        output_prefix = _default_trf_output_prefix(
+            trf_config=trf_config,
+            subject_id=args.subject,
+            config_root=config_root,
+        )
+        output_prefix.parent.mkdir(parents=True, exist_ok=True)
+
+        if bool(output_config.get("save_scores", True)):
+            score_path = output_prefix.with_suffix(".scores.json")
+            score_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+            print(f"Saved scores to {score_path}")
+
+        if bool(output_config.get("save_betas", True)):
+            coef_path = output_prefix.with_suffix(".coefs.npz")
+            np.savez(coef_path, **coefficient_payload)
+            print(f"Saved coefficients to {coef_path}")
+        return 0
 
     eeg_runs, predictor_runs, predictor_names = _build_config_driven_trf_inputs(
         trf_config=trf_config,
@@ -1665,6 +1912,107 @@ def _run_trf_spp_onset_control_group(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_trf_model_group(args: argparse.Namespace) -> int:
+    from cas.trf.control import _load_eeg_channel_names, _load_paths_config, summarize_model_delta_group
+    from cas.viz.lmeeeg import plot_joint_model_weights
+
+    def _channels_look_placeholder(names: list[str]) -> bool:
+        if not names:
+            return True
+        return all(name.startswith("ch_") for name in names)
+
+    fallback_times_s = None
+    fallback_channel_names = None
+    if args.config:
+        config_path = Path(args.config).resolve()
+        trf_config = _load_yaml(config_path)
+        timing_cfg = dict((trf_config.get("trf") or {}).get("timing") or {})
+        if timing_cfg:
+            target_sfreq_hz = float(timing_cfg["target_sfreq_hz"])
+            lag_samples = np.arange(
+                int(np.rint(float(timing_cfg["tmin_s"]) * target_sfreq_hz)),
+                int(np.rint(float(timing_cfg["tmax_s"]) * target_sfreq_hz)) + 1,
+                dtype=int,
+            )
+            fallback_times_s = lag_samples.astype(float) / target_sfreq_hz
+        try:
+            paths_config = _load_paths_config(config_path.parent)
+            subject_payload = json.loads(Path(args.subject_jsons[0]).read_text(encoding="utf-8"))
+            subject_id = str(subject_payload["subject"])
+            n_runs = int(dict((trf_config.get("trf") or {}).get("cv") or {}).get("n_runs") or 8)
+            for run in range(1, max(1, n_runs) + 1):
+                try:
+                    fallback_channel_names = _load_eeg_channel_names(
+                        subject_id=subject_id,
+                        run=run,
+                        paths_config=paths_config,
+                        config_root=config_path.parent,
+                    )
+                    break
+                except FileNotFoundError:
+                    continue
+        except Exception:
+            fallback_channel_names = None
+
+    summary = summarize_model_delta_group(
+        subject_summary_paths=list(args.subject_jsons),
+        subject_coefficient_paths=list(args.subject_npzs),
+        full_model_name=str(args.full_model),
+        null_model_name=str(args.null_model),
+        kernel_predictor=str(args.kernel_predictor),
+        score_test="ttest_1samp",
+        fallback_times_s=fallback_times_s,
+    )
+
+    subject_frame = summary["subject_table"]
+    fold_frame = summary["fold_table"]
+    kernel = np.asarray(summary["kernel"], dtype=float)
+    channel_names = [str(value) for value in summary["channel_names"]]
+    times_s = np.asarray(summary["times_s"], dtype=float)
+    if len(channel_names) != int(kernel.shape[0]):
+        if fallback_channel_names is not None and len(fallback_channel_names) == int(kernel.shape[0]):
+            channel_names = list(fallback_channel_names)
+        else:
+            channel_names = [f"ch_{index:03d}" for index in range(int(kernel.shape[0]))]
+    elif (
+        fallback_channel_names is not None
+        and _channels_look_placeholder(channel_names)
+        and len(fallback_channel_names) == int(kernel.shape[0])
+    ):
+        channel_names = list(fallback_channel_names)
+
+    subject_csv_path = Path(args.subject_csv)
+    subject_csv_path.parent.mkdir(parents=True, exist_ok=True)
+    subject_frame.to_csv(subject_csv_path, index=False)
+
+    fold_csv_path = Path(args.fold_csv)
+    fold_csv_path.parent.mkdir(parents=True, exist_ok=True)
+    fold_frame.to_csv(fold_csv_path, index=False)
+
+    kernel_written = plot_joint_model_weights(
+        kernel,
+        times=times_s,
+        channel_names=channel_names,
+        output_stem=Path(args.kernel_png).with_suffix(""),
+        title=f"TRF kernel | {args.kernel_predictor}",
+        formats=("png", "pdf"),
+        dpi=300,
+        line_width=2.5,
+    )
+
+    summary_payload = {
+        "stats": summary["stats"],
+        "subject_csv": str(subject_csv_path),
+        "fold_csv": str(fold_csv_path),
+        "kernel_files": [str(path) for path in kernel_written],
+    }
+    summary_json_path = Path(args.summary_json)
+    summary_json_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_json_path.write_text(json.dumps(summary_payload, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps(summary_payload, indent=2))
+    return 0
+
+
 def _run_trf_partner_info_fit(args: argparse.Namespace) -> int:
     from cas.trf.partner_info import fit_partner_info_subject, write_partner_info_subject_outputs
 
@@ -1737,6 +2085,8 @@ def main() -> int:
         return _run_trf_spp_onset_control_fit(args)
     if args.command == "trf-spp-onset-control-group":
         return _run_trf_spp_onset_control_group(args)
+    if args.command == "trf-model-group":
+        return _run_trf_model_group(args)
     if args.command == "trf-partner-info-fit":
         return _run_trf_partner_info_fit(args)
     if args.command == "trf-partner-info-group":

@@ -123,6 +123,46 @@ def _discover_audio_records() -> list[dict[str, str]]:
     return records
 
 
+def _raw_eeg_exists(subject_id: str, run: str) -> bool:
+    return any(
+        os.path.exists(candidate)
+        for candidate in (
+            f"{BIDS_DIR}/{subject_id}/eeg/{subject_id}_task-conversation_run-{run}_eeg.edf",
+            f"{BIDS_DIR}/{subject_id}/eeg/{subject_id}_task-conversation_run-{run}_eeg.fif",
+        )
+    )
+
+
+def _channels_tsv_exists(subject_id: str, run: str) -> bool:
+    return os.path.exists(
+        f"{BIDS_DIR}/{subject_id}/eeg/{subject_id}_task-conversation_run-{run}_channels.tsv"
+    )
+
+
+def _expected_ica_path(subject: str, task: str, run: str) -> str:
+    ica_filename_template = PREPROCESSING_CONFIG["preprocessing"]["ica_filename_template"]
+    return os.path.join(
+        ICA_DIR,
+        ica_filename_template.format(subject=subject, task=task, run=run),
+    )
+
+
+def _trf_run_has_preprocessable_eeg(subject_id: str, run: str) -> bool:
+    subject = subject_id.replace("sub-", "", 1)
+    if not _raw_eeg_exists(subject_id, run):
+        return False
+    if not _channels_tsv_exists(subject_id, run):
+        return False
+    if bool(PREPROCESSING_CONFIG["preprocessing"].get("apply_ica", False)):
+        return os.path.exists(_expected_ica_path(subject, "conversation", run))
+    return True
+
+
+def _subject_has_complete_trf_preprocessed_eeg(subject: str) -> bool:
+    subject_id = f"sub-{subject}"
+    return all(_trf_run_has_preprocessable_eeg(subject_id, run) for run in RUNS)
+
+
 AUDIO_RECORDS = _discover_audio_records()
 PARTNER_MAP = {
     f"sub-{record['subject']}": _canonical_partner_id(f"sub-{record['subject']}")
@@ -179,6 +219,7 @@ TRF_SUBJECTS = sorted(
         subject
         for subject in set(AUDIO_RECORD_SUBJECTS)
         if f"sub-{subject}" in PARTNER_MAP and SUBJECT_TO_RUNS.get(subject, set()) == set(RUNS)
+        and _subject_has_complete_trf_preprocessed_eeg(subject)
     ]
 )
 TRF_SCORE_OUTPUTS = expand(TRF_SCORE_PATTERN, subject=TRF_SUBJECTS)

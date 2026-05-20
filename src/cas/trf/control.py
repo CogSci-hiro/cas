@@ -9,9 +9,12 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from scipy.stats import wilcoxon
+from scipy.stats import ttest_1samp, wilcoxon
 
+from cas.annotations.autocorrect import normalize_tier_name
+from cas.annotations.io import load_textgrid
 from cas.trf.prepare import (
+    canonical_dyad_id,
     build_impulse_predictor,
     load_events_table,
     prepare_trf_runs,
@@ -85,13 +88,44 @@ def _load_paths_config(config_root: Path) -> dict[str, Any]:
     return _load_yaml(paths_path)
 
 
-def _load_eeg_channel_names(*, subject_id: str, run: int, paths_config: dict[str, Any]) -> list[str]:
+def _load_eeg_channel_names(
+    *,
+    subject_id: str,
+    run: int,
+    paths_config: dict[str, Any],
+    config_root: Path | None = None,
+) -> list[str]:
     import os
 
     os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
     os.environ.setdefault("MNE_DONTWRITE_HOME", "true")
     os.environ.setdefault("MPLCONFIGDIR", "/tmp/mpl")
     import mne
+    from cas.preprocessing.config import load_preprocessing_output_layout
+
+    if config_root is not None:
+        discovered_config_root = _discover_config_root(config_root)
+        preprocessing_config_path = discovered_config_root / "preprocessing.yaml"
+        paths_config_path = discovered_config_root / "paths.yaml"
+        if preprocessing_config_path.exists() and paths_config_path.exists():
+            try:
+                preprocessing_layout = load_preprocessing_output_layout(
+                    preprocessing_config_path=preprocessing_config_path,
+                    paths_config_path=paths_config_path,
+                )
+                preprocessed_path = (
+                    preprocessing_layout.final_dir
+                    / subject_id
+                    / "task-conversation"
+                    / f"run-{run}"
+                    / "preprocessed_eeg.fif"
+                )
+                if preprocessed_path.exists():
+                    raw = mne.io.read_raw_fif(preprocessed_path, preload=False, verbose="ERROR")
+                    raw.pick("eeg")
+                    return [str(name) for name in raw.ch_names]
+            except Exception:
+                pass
 
     bids_root = Path(paths_config["bids_root"])
     candidates = [
@@ -146,6 +180,309 @@ def _build_impulse_predictor_array(
         n_samples=int(eeg_run.shape[0]),
         sfreq_hz=float(target_sfreq_hz),
         event_times_s=selected_times,
+    )
+    return impulse[:, np.newaxis]
+
+
+def _build_weighted_impulse_series(
+    *,
+    n_samples: int,
+    sfreq_hz: float,
+    event_times_s: np.ndarray,
+    event_weights: np.ndarray,
+) -> np.ndarray:
+    predictor = np.zeros(int(n_samples), dtype=float)
+    if predictor.size == 0:
+        return predictor
+
+    finite_times = np.asarray(event_times_s, dtype=float)
+    finite_weights = np.asarray(event_weights, dtype=float)
+    keep_mask = np.isfinite(finite_times) & np.isfinite(finite_weights)
+    if not np.any(keep_mask):
+        return predictor
+
+    sample_indices = np.rint(finite_times[keep_mask] * float(sfreq_hz)).astype(int)
+    sample_weights = finite_weights[keep_mask]
+    valid_mask = (sample_indices >= 0) & (sample_indices < predictor.shape[0])
+    if not np.any(valid_mask):
+        return predictor
+
+    np.add.at(predictor, sample_indices[valid_mask], sample_weights[valid_mask])
+    return predictor
+
+
+def _resolve_label_weight(label: str, *, label_prefix_weights: dict[str, float]) -> float | None:
+    normalized = str(label).strip()
+    for prefix, weight in label_prefix_weights.items():
+        if normalized.startswith(str(prefix)):
+            return float(weight)
+    return None
+
+
+def _build_weighted_impulse_predictor_array(
+    *,
+    predictor_cfg: dict[str, Any],
+    subject_id: str,
+    run: int,
+    eeg_run: np.ndarray,
+    target_sfreq_hz: float,
+    events_table: pd.DataFrame,
+    dyad_table: pd.DataFrame | None,
+) -> np.ndarray:
+    speaker_column = predictor_cfg.get("speaker_column")
+    speaker_role = predictor_cfg.get("speaker_role")
+    time_column = str(predictor_cfg["time_column"])
+    label_column = str(predictor_cfg["label_column"])
+    label_prefix_weights = {
+        str(key): float(value)
+        for key, value in dict(predictor_cfg.get("label_prefix_weights") or {}).items()
+    }
+    if not label_prefix_weights:
+        raise ValueError("Weighted impulse predictors must define label_prefix_weights.")
+
+    run_events = select_subject_run_events(
+        events_table=events_table,
+        subject_id=subject_id,
+        run=run,
+        dyad_table=dyad_table,
+    )
+    if speaker_column:
+        speaker_value = resolve_speaker_value(subject_id, str(speaker_role))
+        run_events = run_events.loc[run_events[str(speaker_column)].astype(str) == speaker_value].copy()
+    if time_column not in run_events.columns:
+        raise ValueError(
+            f"Weighted impulse predictor time column '{time_column}' is missing from the events table."
+        )
+    if label_column not in run_events.columns:
+        raise ValueError(
+            f"Weighted impulse predictor label column '{label_column}' is missing from the events table."
+        )
+
+    weights = run_events[label_column].astype(str).map(
+        lambda value: _resolve_label_weight(value, label_prefix_weights=label_prefix_weights)
+    )
+    selected = run_events.loc[weights.notna()].copy()
+    if selected.empty:
+        return np.zeros((int(eeg_run.shape[0]), 1), dtype=float)
+    weighted_impulse = _build_weighted_impulse_series(
+        n_samples=int(eeg_run.shape[0]),
+        sfreq_hz=float(target_sfreq_hz),
+        event_times_s=pd.to_numeric(selected[time_column], errors="coerce").to_numpy(dtype=float),
+        event_weights=weights.loc[weights.notna()].to_numpy(dtype=float),
+    )
+    return weighted_impulse[:, np.newaxis]
+
+
+def _load_ipu_impulse_times(
+    *,
+    subject_id: str,
+    run: int,
+    speaker_role: str,
+    time_kind: str,
+    paths_config: dict[str, Any],
+) -> np.ndarray:
+    speaker_label = resolve_speaker_value(subject_id, speaker_role)
+    annotation_path = (
+        Path(str(paths_config["annotations_dir"]))
+        / f"{canonical_dyad_id(subject_id)}_run-{int(run)}_combined.TextGrid"
+    )
+    textgrid = load_textgrid(annotation_path)
+    target_tier_name = f"ipu-{speaker_label}"
+
+    times: list[float] = []
+    for tier in textgrid.tiers:
+        normalized_name = normalize_tier_name(tier.name).value
+        if normalized_name != target_tier_name:
+            continue
+        for interval in tier.intervals:
+            if not str(interval.text).strip():
+                continue
+            onset = float(interval.xmin)
+            offset = float(interval.xmax)
+            if not np.isfinite(onset) or not np.isfinite(offset) or offset <= onset:
+                continue
+            times.append(onset if time_kind == "onset" else offset)
+        break
+    return np.asarray(times, dtype=float)
+
+
+def _build_ipu_impulse_predictor_array(
+    *,
+    predictor_cfg: dict[str, Any],
+    subject_id: str,
+    run: int,
+    eeg_run: np.ndarray,
+    target_sfreq_hz: float,
+    paths_config: dict[str, Any],
+) -> np.ndarray:
+    speaker_role = str(predictor_cfg["speaker_role"])
+    time_kind = str(predictor_cfg.get("time_kind", "onset"))
+    if time_kind not in {"onset", "offset"}:
+        raise ValueError(f"Unsupported ipu_impulse time_kind '{time_kind}'.")
+    times = _load_ipu_impulse_times(
+        subject_id=subject_id,
+        run=run,
+        speaker_role=speaker_role,
+        time_kind=time_kind,
+        paths_config=paths_config,
+    )
+    impulse = build_impulse_predictor(
+        n_samples=int(eeg_run.shape[0]),
+        sfreq_hz=float(target_sfreq_hz),
+        event_times_s=times,
+    )
+    return impulse[:, np.newaxis]
+
+
+def _subject_number(subject_id: str) -> int:
+    return int(str(subject_id).replace("sub-", "", 1))
+
+
+def _annotation_subject_id(subject_id: str, speaker_role: str) -> str:
+    subject_number = _subject_number(subject_id)
+    if speaker_role == "self":
+        resolved_number = subject_number
+    elif speaker_role == "other":
+        resolved_number = subject_number + 1 if subject_number % 2 == 1 else subject_number - 1
+    else:
+        raise ValueError(f"Unsupported speaker role '{speaker_role}'.")
+    return f"sub-{resolved_number:03d}"
+
+
+def _resolve_annotation_csv_root(
+    *,
+    trf_section: dict[str, Any],
+    project_root: Path,
+    config_root: Path,
+) -> Path:
+    annotation_cfg = dict(trf_section.get("annotation_csv") or {})
+    root_value = str(annotation_cfg.get("root", "")).strip()
+    if not root_value:
+        raise ValueError("TRF annotation-csv predictors require trf.annotation_csv.root.")
+    return _resolve_path(root_value, project_root=project_root, config_root=config_root)
+
+
+def _load_annotation_ipu_times(
+    *,
+    annotation_csv_root: Path,
+    subject_id: str,
+    run: int,
+    speaker_role: str,
+    time_kind: str,
+) -> np.ndarray:
+    annotation_subject = _annotation_subject_id(subject_id, speaker_role)
+    csv_path = annotation_csv_root / "ipu_v1" / f"{annotation_subject}_run-{int(run)}_ipu.csv"
+    table = pd.read_csv(csv_path)
+    time_column = "start" if time_kind == "onset" else "end"
+    return pd.to_numeric(table[time_column], errors="coerce").to_numpy(dtype=float)
+
+
+def _load_annotation_token_times(
+    *,
+    annotation_csv_root: Path,
+    subject_id: str,
+    run: int,
+    speaker_role: str,
+) -> np.ndarray:
+    dyad_id = canonical_dyad_id(subject_id)
+    speaker_value = resolve_speaker_value(subject_id, speaker_role)
+    csv_path = annotation_csv_root / "tokens_v1" / f"{dyad_id}_tokens.csv"
+    table = pd.read_csv(csv_path)
+    selected = table.loc[
+        (pd.to_numeric(table["run"], errors="coerce") == int(run))
+        & (table["speaker"].astype(str) == speaker_value)
+        & (table["token_kind"].astype(str) == "lexical")
+    ].copy()
+    return pd.to_numeric(selected["start"], errors="coerce").to_numpy(dtype=float)
+
+
+def _load_annotation_syllable_times(
+    *,
+    annotation_csv_root: Path,
+    subject_id: str,
+    run: int,
+    speaker_role: str,
+) -> np.ndarray:
+    annotation_subject = _annotation_subject_id(subject_id, speaker_role)
+    csv_path = annotation_csv_root / "syllable_v1" / f"{annotation_subject}_run-{int(run)}_syllable.csv"
+    table = pd.read_csv(csv_path, header=None, names=["tier", "start", "end", "label"])
+    selected = table.loc[table["label"].notna() & (table["label"].astype(str).str.strip() != "")]
+    return pd.to_numeric(selected["start"], errors="coerce").to_numpy(dtype=float)
+
+
+def _load_annotation_phoneme_times(
+    *,
+    annotation_csv_root: Path,
+    subject_id: str,
+    run: int,
+    speaker_role: str,
+) -> np.ndarray:
+    annotation_subject = _annotation_subject_id(subject_id, speaker_role)
+    csv_path = annotation_csv_root / "palign_v1" / f"{annotation_subject}_run-{int(run)}_palign.csv"
+    table = pd.read_csv(csv_path, header=None, names=["tier", "start", "end", "label"])
+    selected = table.loc[
+        (table["tier"].astype(str) == "PhonAlign")
+        & table["label"].notna()
+        & (table["label"].astype(str).str.strip() != "")
+        & (~table["label"].astype(str).isin({"#", "noise"}))
+    ]
+    return pd.to_numeric(selected["start"], errors="coerce").to_numpy(dtype=float)
+
+
+def _build_annotation_csv_impulse_predictor_array(
+    *,
+    predictor_cfg: dict[str, Any],
+    trf_section: dict[str, Any],
+    subject_id: str,
+    run: int,
+    eeg_run: np.ndarray,
+    target_sfreq_hz: float,
+    project_root: Path,
+    config_root: Path,
+) -> np.ndarray:
+    annotation_csv_root = _resolve_annotation_csv_root(
+        trf_section=trf_section,
+        project_root=project_root,
+        config_root=config_root,
+    )
+    source_kind = str(predictor_cfg["source_kind"])
+    speaker_role = str(predictor_cfg["speaker_role"])
+    if source_kind == "ipu":
+        times = _load_annotation_ipu_times(
+            annotation_csv_root=annotation_csv_root,
+            subject_id=subject_id,
+            run=run,
+            speaker_role=speaker_role,
+            time_kind=str(predictor_cfg.get("time_kind", "onset")),
+        )
+    elif source_kind == "word":
+        times = _load_annotation_token_times(
+            annotation_csv_root=annotation_csv_root,
+            subject_id=subject_id,
+            run=run,
+            speaker_role=speaker_role,
+        )
+    elif source_kind == "syllable":
+        times = _load_annotation_syllable_times(
+            annotation_csv_root=annotation_csv_root,
+            subject_id=subject_id,
+            run=run,
+            speaker_role=speaker_role,
+        )
+    elif source_kind == "phoneme":
+        times = _load_annotation_phoneme_times(
+            annotation_csv_root=annotation_csv_root,
+            subject_id=subject_id,
+            run=run,
+            speaker_role=speaker_role,
+        )
+    else:
+        raise ValueError(f"Unsupported annotation_csv_impulse source_kind '{source_kind}'.")
+
+    impulse = build_impulse_predictor(
+        n_samples=int(eeg_run.shape[0]),
+        sfreq_hz=float(target_sfreq_hz),
+        event_times_s=times,
     )
     return impulse[:, np.newaxis]
 
@@ -210,6 +547,7 @@ def build_named_predictor_runs(
                 subject_id=subject_id,
                 run=int(run),
                 paths_config=paths_config,
+                config_root=config_root,
             )
 
         for predictor_name, predictor_cfg in predictor_definitions.items():
@@ -239,6 +577,36 @@ def build_named_predictor_runs(
                     target_sfreq_hz=target_sfreq_hz,
                     events_table=events_table,
                     dyad_table=None,
+                )
+            elif predictor_kind == "weighted_impulse":
+                predictor_array = _build_weighted_impulse_predictor_array(
+                    predictor_cfg=predictor_cfg,
+                    subject_id=subject_id,
+                    run=int(run),
+                    eeg_run=eeg_run,
+                    target_sfreq_hz=target_sfreq_hz,
+                    events_table=events_table,
+                    dyad_table=None,
+                )
+            elif predictor_kind == "ipu_impulse":
+                predictor_array = _build_ipu_impulse_predictor_array(
+                    predictor_cfg=predictor_cfg,
+                    subject_id=subject_id,
+                    run=int(run),
+                    eeg_run=eeg_run,
+                    target_sfreq_hz=target_sfreq_hz,
+                    paths_config=paths_config,
+                )
+            elif predictor_kind == "annotation_csv_impulse":
+                predictor_array = _build_annotation_csv_impulse_predictor_array(
+                    predictor_cfg=predictor_cfg,
+                    trf_section=trf_section,
+                    subject_id=subject_id,
+                    run=int(run),
+                    eeg_run=eeg_run,
+                    target_sfreq_hz=target_sfreq_hz,
+                    project_root=project_root,
+                    config_root=config_root,
                 )
             else:
                 raise ValueError(
@@ -564,5 +932,126 @@ def summarize_spp_onset_control_group(
             "pvalue": pvalue,
             "mean_delta_r": float(np.nanmean(deltas)) if deltas.size else np.nan,
             "median_delta_r": float(np.nanmedian(deltas)) if deltas.size else np.nan,
+        },
+    }
+
+
+def summarize_model_delta_group(
+    *,
+    subject_summary_paths: list[str | Path],
+    subject_coefficient_paths: list[str | Path],
+    full_model_name: str,
+    null_model_name: str,
+    kernel_predictor: str,
+    score_test: str = "ttest_1samp",
+    fallback_times_s: np.ndarray | None = None,
+) -> dict[str, Any]:
+    """Aggregate subject-level two-model TRF outputs into a group summary."""
+
+    if len(subject_summary_paths) != len(subject_coefficient_paths):
+        raise ValueError("Expected matched subject summary and coefficient file lists.")
+
+    subject_rows: list[dict[str, Any]] = []
+    fold_rows: list[dict[str, Any]] = []
+    kernel_arrays: list[np.ndarray] = []
+    channel_names: list[str] | None = None
+    times_s: np.ndarray | None = None
+
+    for summary_path, coefficient_path in zip(subject_summary_paths, subject_coefficient_paths):
+        payload = json.loads(Path(summary_path).read_text(encoding="utf-8"))
+        coefficients = np.load(Path(coefficient_path), allow_pickle=True)
+        subject_id = str(payload["subject"])
+
+        full_scores = payload["models"][full_model_name]["fold_scores"]
+        null_scores = payload["models"][null_model_name]["fold_scores"]
+        subject_fold_deltas: list[float] = []
+        for full_fold, null_fold in zip(full_scores, null_scores):
+            full_channel_scores = np.asarray(full_fold["channel_scores"], dtype=float)
+            null_channel_scores = np.asarray(null_fold["channel_scores"], dtype=float)
+            fold_delta = float(np.nanmean(full_channel_scores - null_channel_scores))
+            subject_fold_deltas.append(fold_delta)
+            fold_rows.append(
+                {
+                    "subject": subject_id,
+                    "test_run": int(full_fold["test_run"]),
+                    "full_model": str(full_model_name),
+                    "null_model": str(null_model_name),
+                    "full_mean_r": float(np.nanmean(full_channel_scores)),
+                    "null_mean_r": float(np.nanmean(null_channel_scores)),
+                    "delta_mean_r": fold_delta,
+                }
+            )
+
+        subject_rows.append(
+            {
+                "subject": subject_id,
+                "full_model": str(full_model_name),
+                "null_model": str(null_model_name),
+                "full_mean_r": float(np.nanmean([fold["mean_score"] for fold in full_scores])),
+                "null_mean_r": float(np.nanmean([fold["mean_score"] for fold in null_scores])),
+                "delta_mean_r": float(np.nanmean(np.asarray(subject_fold_deltas, dtype=float))),
+            }
+        )
+
+        full_predictors = [str(value) for value in coefficients[f"{full_model_name}_predictors"].tolist()]
+        full_coefficients = np.asarray(coefficients[f"{full_model_name}_coefficients"], dtype=float)
+        if "times_s" in coefficients.files:
+            loaded_times = np.asarray(coefficients["times_s"], dtype=float)
+        elif fallback_times_s is not None:
+            loaded_times = np.asarray(fallback_times_s, dtype=float)
+        else:
+            loaded_times = np.arange(full_coefficients.shape[1], dtype=float)
+        if "channel_names" in coefficients.files:
+            loaded_channel_names = [str(value) for value in coefficients["channel_names"].tolist()]
+        else:
+            loaded_channel_names = [f"ch_{index:03d}" for index in range(int(full_coefficients.shape[3]))]
+        predictor_index = full_predictors.index(kernel_predictor)
+        kernel = np.nanmean(full_coefficients[:, :, predictor_index, :], axis=0).T
+        kernel_arrays.append(np.asarray(kernel, dtype=float))
+
+        if channel_names is None:
+            channel_names = loaded_channel_names
+        if times_s is None:
+            times_s = loaded_times
+
+    subject_frame = pd.DataFrame(subject_rows).sort_values("subject").reset_index(drop=True)
+    fold_frame = pd.DataFrame(fold_rows).sort_values(["subject", "test_run"]).reset_index(drop=True)
+    deltas = subject_frame["delta_mean_r"].to_numpy(dtype=float)
+
+    if deltas.size == 0:
+        statistic = np.nan
+        pvalue = np.nan
+    elif np.allclose(deltas, 0.0):
+        statistic = 0.0
+        pvalue = 1.0
+    elif score_test == "ttest_1samp":
+        test = ttest_1samp(deltas, popmean=0.0, alternative="greater")
+        statistic = float(test.statistic)
+        pvalue = float(test.pvalue)
+    elif score_test == "wilcoxon":
+        test = wilcoxon(deltas, alternative="greater", zero_method="wilcox")
+        statistic = float(test.statistic)
+        pvalue = float(test.pvalue)
+    else:
+        raise ValueError(f"Unsupported score_test '{score_test}'.")
+
+    mean_kernel = np.nanmean(np.stack(kernel_arrays, axis=0), axis=0)
+    return {
+        "subject_table": subject_frame,
+        "fold_table": fold_frame,
+        "kernel": mean_kernel,
+        "channel_names": list(channel_names or []),
+        "times_s": np.asarray(times_s if times_s is not None else [], dtype=float),
+        "stats": {
+            "test": str(score_test),
+            "alternative": "greater",
+            "n_subjects": int(subject_frame.shape[0]),
+            "statistic": statistic,
+            "pvalue": pvalue,
+            "mean_delta_r": float(np.nanmean(deltas)) if deltas.size else np.nan,
+            "median_delta_r": float(np.nanmedian(deltas)) if deltas.size else np.nan,
+            "full_model": str(full_model_name),
+            "null_model": str(null_model_name),
+            "kernel_predictor": str(kernel_predictor),
         },
     }

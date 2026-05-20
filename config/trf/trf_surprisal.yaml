@@ -25,7 +25,7 @@ trf:
 
   # Central timing parameters for TRF design construction.
   timing:
-    target_sfreq_hz: 100
+    target_sfreq_hz: 32
     tmin_s: -0.2
     tmax_s: 0.6
 

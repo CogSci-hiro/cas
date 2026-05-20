@@ -375,15 +375,14 @@ def _write_tasklocked_epochs(*, input_eeg, input_raw, events_csv, output_epochs,
     epochs.save(output_epochs, overwrite=True)
 
 
-LMEEEG_CONFIG_PATH = f"{CONFIG_DIR}/induced/alpha_beta_lmeeeg.yaml"
+LMEEEG_CONFIG_PATH = f"{CONFIG_DIR}/induced/spp_induced_sensor_lmeeeg.yaml"
+EVOKED_LMEEEG_CONFIG_PATH = f"{CONFIG_DIR}/evoked/spp_sensor_lmeeeg.yaml"
 FPP_SPP_CYCLE_POSITION_LMEEEG_CONFIG_PATH = f"{CONFIG_DIR}/induced/alpha_beta_cycle_position.yaml"
 FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_CONFIG_PATH = (
     f"{CONFIG_DIR}/induced/alpha_beta_conf_disc.yaml"
 )
 INFO_RATE_INDUCED_LMEEEG_CONFIG_PATH = f"{CONFIG_DIR}/induced/info_rate_induced_lmeeg.yaml"
-LMEEEG_OUTPUT_DIR = f"{OUT_DIR}/lmeeeg"
-LMEEEG_SUMMARY_OUTPUT = f"{LMEEEG_OUTPUT_DIR}/lmeeeg_analysis_summary.json"
-LMEEEG_INDUCED_SUMMARY_OUTPUT = f"{LMEEEG_OUTPUT_DIR}/induced_lmeeeg_analysis_summary.json"
+LMEEEG_OUTPUT_ROOT = f"{OUT_DIR}/lmeeeg"
 
 
 def _load_lmeeeg_workflow_config(config_path: str = LMEEEG_CONFIG_PATH) -> dict[str, object]:
@@ -420,10 +419,11 @@ def _evoked_lmeeeg_model_names(config_path: str = LMEEEG_CONFIG_PATH) -> list[st
     return sorted(selected)
 
 
-def _lmeeeg_analysis_root_from_config(config_path: str) -> str:
+def _lmeeeg_analysis_root_from_config(config_path: str, output_root: str | None = None) -> str:
     config_payload = _load_lmeeeg_workflow_config(config_path)
     analysis_name = str(config_payload.get("analysis_name", "")).strip()
-    return f"{OUT_DIR}/lmeeeg/{analysis_name}" if analysis_name else f"{OUT_DIR}/lmeeeg"
+    root = output_root or LMEEEG_OUTPUT_ROOT
+    return f"{root}/{analysis_name}" if analysis_name else root
 
 
 def _resolve_erp_output_dir(path_value: str | None, default_subdir: str) -> str:
@@ -456,13 +456,21 @@ def _resolve_erp_input_path(path_value: str | None, default_relative: str) -> st
     return os.path.join(str(workflow_out_dir), path_text.lstrip("/"))
 
 
-LMEEEG_EVOKED_MODEL_NAMES = _evoked_lmeeeg_model_names()
+EVOKED_LMEEEG_OUTPUT_DIR = _lmeeeg_analysis_root_from_config(
+    EVOKED_LMEEEG_CONFIG_PATH,
+    output_root=_resolve_erp_output_dir(None, "lmeeeg"),
+)
+LMEEEG_SUMMARY_OUTPUT = f"{EVOKED_LMEEEG_OUTPUT_DIR}/lmeeeg_analysis_summary.json"
+INDUCED_LMEEEG_OUTPUT_DIR = _lmeeeg_analysis_root_from_config(LMEEEG_CONFIG_PATH)
+LMEEEG_INDUCED_SUMMARY_OUTPUT = f"{INDUCED_LMEEEG_OUTPUT_DIR}/lmeeeg_analysis_summary.json"
+
+LMEEEG_EVOKED_MODEL_NAMES = _evoked_lmeeeg_model_names(EVOKED_LMEEEG_CONFIG_PATH)
 LMEEEG_EVOKED_MODEL_SUMMARY_OUTPUTS = expand(
-    f"{LMEEEG_OUTPUT_DIR}/{{model}}/summary.json",
+    f"{EVOKED_LMEEEG_OUTPUT_DIR}/{{model}}/summary.json",
     model=LMEEEG_EVOKED_MODEL_NAMES,
 )
 LMEEEG_EVOKED_DURATION_QC_OUTPUTS = [
-    f"{LMEEEG_OUTPUT_DIR}/{model_name}/{artifact_name}"
+    f"{EVOKED_LMEEEG_OUTPUT_DIR}/{model_name}/{artifact_name}"
     for model_name in LMEEEG_EVOKED_MODEL_NAMES
     for artifact_name in (
         "duration_summary_by_class.csv",
@@ -636,7 +644,7 @@ rule induced_epochs_all:
 rule build_sensor_lmeeeg_evoked:
     input:
         epochs=EPOCH_OUTPUTS,
-        config=LMEEEG_CONFIG_PATH,
+        config=EVOKED_LMEEEG_CONFIG_PATH,
     output:
         summary=LMEEEG_SUMMARY_OUTPUT,
         model_summaries=LMEEEG_EVOKED_MODEL_SUMMARY_OUTPUTS,
@@ -647,7 +655,7 @@ rule build_sensor_lmeeeg_evoked:
 
         from cas.stats.lmeeeg_pipeline import run_pooled_lmeeeg_analysis
 
-        config_payload = _load_lmeeeg_workflow_config()
+        config_payload = _load_lmeeeg_workflow_config(input.config)
         evoked_models = {
             model_name: model_cfg
             for model_name, model_cfg in dict(config_payload.get("models") or {}).items()
@@ -655,7 +663,7 @@ rule build_sensor_lmeeeg_evoked:
         }
         if not evoked_models:
             raise ValueError(
-                "No evoked lmeEEG models are configured in config/induced/alpha_beta_lmeeeg.yaml."
+                "No evoked lmeEEG models are configured in config/evoked/spp_sensor_lmeeeg.yaml."
             )
 
         evoked_config_payload = {
@@ -706,7 +714,7 @@ rule build_induced_sensor_lmeeeg:
         }
         if not induced_models:
             raise ValueError(
-                "No induced lmeEEG models are configured in config/induced/alpha_beta_lmeeeg.yaml."
+                "No induced lmeEEG models are configured in config/induced/spp_induced_sensor_lmeeeg.yaml."
             )
 
         induced_config_payload = {
@@ -728,7 +736,7 @@ rule build_induced_sensor_lmeeeg:
             summary = run_pooled_lmeeeg_analysis(
                 epochs_paths=list(input.epochs),
                 config_path=temp_config_path,
-                output_dir=LMEEEG_OUTPUT_DIR,
+                output_dir=os.path.dirname(output.summary),
             )
         finally:
             if os.path.exists(temp_config_path):

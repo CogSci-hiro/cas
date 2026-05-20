@@ -141,6 +141,70 @@ def _find_joint_timeseries_axis(figure: plt.Figure, *, time_array: np.ndarray):
     return None
 
 
+def _plot_joint_model_weights_fallback(
+    *,
+    data: np.ndarray,
+    time_array: np.ndarray,
+    channel_names: list[str],
+    title: str,
+    line_width: float,
+    selected_joint_times: np.ndarray,
+    significance_array: np.ndarray | None,
+) -> plt.Figure:
+    figure, (trace_axis, heatmap_axis) = plt.subplots(
+        2,
+        1,
+        figsize=(11, 8),
+        gridspec_kw={"height_ratios": [1.2, 2.0]},
+        constrained_layout=True,
+    )
+
+    mean_trace = np.nanmean(data, axis=0)
+    trace_axis.plot(time_array, mean_trace, color="black", linewidth=float(line_width))
+    trace_axis.axhline(0.0, color="0.6", linewidth=1.0, linestyle="--")
+    for joint_time in np.asarray(selected_joint_times, dtype=float):
+        trace_axis.axvline(float(joint_time), color="0.8", linewidth=1.0, linestyle=":")
+    if significance_array is not None and np.any(significance_array):
+        significant_time_mask = np.any(significance_array, axis=0)
+        for start_time, end_time in _contiguous_true_spans(significant_time_mask, time_array):
+            trace_axis.axvspan(start_time, end_time, color="0.85", alpha=0.7, zorder=0)
+    trace_axis.set_title(title)
+    trace_axis.set_ylabel("Mean weight")
+    trace_axis.set_xlim(float(time_array[0]), float(time_array[-1]))
+
+    image = heatmap_axis.imshow(
+        data,
+        aspect="auto",
+        origin="lower",
+        interpolation="nearest",
+        extent=[float(time_array[0]), float(time_array[-1]), -0.5, len(channel_names) - 0.5],
+        cmap="RdBu_r",
+    )
+    for joint_time in np.asarray(selected_joint_times, dtype=float):
+        heatmap_axis.axvline(float(joint_time), color="white", linewidth=1.0, linestyle=":")
+    if significance_array is not None and np.any(significance_array):
+        significance_overlay = np.ma.masked_where(~significance_array.astype(bool), significance_array.astype(float))
+        heatmap_axis.imshow(
+            significance_overlay,
+            aspect="auto",
+            origin="lower",
+            interpolation="nearest",
+            extent=[float(time_array[0]), float(time_array[-1]), -0.5, len(channel_names) - 0.5],
+            cmap="Greys",
+            alpha=0.15,
+        )
+    if len(channel_names) <= 32:
+        heatmap_axis.set_yticks(np.arange(len(channel_names), dtype=float))
+        heatmap_axis.set_yticklabels(channel_names)
+    else:
+        heatmap_axis.set_ylabel("Channel")
+    heatmap_axis.set_xlabel("Time (s)")
+    heatmap_axis.set_title("Channel x time weights")
+    colorbar = figure.colorbar(image, ax=heatmap_axis, pad=0.01)
+    colorbar.set_label("Weight")
+    return figure
+
+
 def plot_joint_model_weights(
     array: np.ndarray,
     *,
@@ -201,20 +265,59 @@ def plot_joint_model_weights(
         figure = evoked.plot_joint(times=selected_joint_times, title=title, show=False, topomap_args=topomap_args)
     except ValueError as exc:
         if "overlapping positions" not in str(exc):
-            raise
-        overlapping_channels = _extract_overlapping_channels(str(exc))
-        keep_channels = [name for name in evoked.ch_names if name not in overlapping_channels]
-        if not keep_channels:
-            raise
-        keep_indices = [evoked.ch_names.index(name) for name in keep_channels]
-        reduced_topomap_args = dict(topomap_args)
-        if significance_array is not None:
-            reduced_topomap_args["mask"] = significance_array[np.asarray(keep_indices, dtype=int)]
-        figure = evoked.copy().pick(keep_channels).plot_joint(
-            times=selected_joint_times,
+            figure = _plot_joint_model_weights_fallback(
+                data=data,
+                time_array=time_array,
+                channel_names=channel_names,
+                title=title,
+                line_width=float(line_width),
+                selected_joint_times=selected_joint_times,
+                significance_array=significance_array,
+            )
+        else:
+            overlapping_channels = _extract_overlapping_channels(str(exc))
+            keep_channels = [name for name in evoked.ch_names if name not in overlapping_channels]
+            if not keep_channels:
+                figure = _plot_joint_model_weights_fallback(
+                    data=data,
+                    time_array=time_array,
+                    channel_names=channel_names,
+                    title=title,
+                    line_width=float(line_width),
+                    selected_joint_times=selected_joint_times,
+                    significance_array=significance_array,
+                )
+            else:
+                keep_indices = [evoked.ch_names.index(name) for name in keep_channels]
+                reduced_topomap_args = dict(topomap_args)
+                if significance_array is not None:
+                    reduced_topomap_args["mask"] = significance_array[np.asarray(keep_indices, dtype=int)]
+                try:
+                    figure = evoked.copy().pick(keep_channels).plot_joint(
+                        times=selected_joint_times,
+                        title=title,
+                        show=False,
+                        topomap_args=reduced_topomap_args,
+                    )
+                except (RuntimeError, ValueError):
+                    figure = _plot_joint_model_weights_fallback(
+                        data=data,
+                        time_array=time_array,
+                        channel_names=channel_names,
+                        title=title,
+                        line_width=float(line_width),
+                        selected_joint_times=selected_joint_times,
+                        significance_array=significance_array,
+                    )
+    except RuntimeError:
+        figure = _plot_joint_model_weights_fallback(
+            data=data,
+            time_array=time_array,
+            channel_names=channel_names,
             title=title,
-            show=False,
-            topomap_args=reduced_topomap_args,
+            line_width=float(line_width),
+            selected_joint_times=selected_joint_times,
+            significance_array=significance_array,
         )
 
     for axis in figure.axes:

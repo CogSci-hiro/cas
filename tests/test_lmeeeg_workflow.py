@@ -43,6 +43,23 @@ def test_induced_sensor_workflow_uses_generic_internal_rules() -> None:
     assert "rule build_induced_binned_info_rate:" in epochs_text
 
 
+def test_evoked_sensor_public_target_and_figures_are_wired() -> None:
+    figures_text = Path("workflow/rules/figures.smk").read_text(encoding="utf-8")
+    targets_text = Path("workflow/rules/targets.smk").read_text(encoding="utf-8")
+    epochs_text = Path("workflow/rules/epochs.smk").read_text(encoding="utf-8")
+
+    assert "rule build_sensor_lmeeeg_evoked:" in epochs_text
+    assert 'EVOKED_LMEEEG_CONFIG_PATH = f"{CONFIG_DIR}/evoked/spp_sensor_lmeeeg.yaml"' in epochs_text
+    assert 'LMEEEG_CONFIG_PATH = f"{CONFIG_DIR}/induced/spp_induced_sensor_lmeeeg.yaml"' in epochs_text
+    assert "EVOKED_LMEEEG_OUTPUT_DIR = _lmeeeg_analysis_root_from_config(" in epochs_text
+    assert "rule evoked_sensor_lmeeeg:" in targets_text
+    assert "rule evoked_sensor_qc_primary:" in figures_text
+    assert "rule evoked_sensor_figures_primary:" in figures_text
+    assert 'EVOKED_FIGURES_OUTPUT_DIR = _resolve_erp_output_dir(None, "figures")' in figures_text
+    assert 'qc/evoked/sensor_lmeeeg/figure_manifest.json' in figures_text
+    assert 'main/evoked/sensor_lmeeeg/figure_manifest.json' in figures_text
+
+
 def test_legacy_public_lmeeeg_target_names_are_removed() -> None:
     combined_text = "\n".join(
         [
@@ -112,23 +129,35 @@ def test_preprocess_workflow_tracks_preprocessing_config() -> None:
 
 
 def test_lmeeeg_config_contains_duration_controls_for_spp_evoked_model() -> None:
-    config_text = Path("config/induced/alpha_beta_lmeeeg.yaml").read_text(encoding="utf-8")
+    config_text = Path("config/evoked/spp_sensor_lmeeeg.yaml").read_text(encoding="utf-8")
 
+    assert 'analysis_name: "spp_evoked_sensor"' in config_text
+    assert "min_duration_s: 0.4" in config_text
     assert 'formula: "~ spp_class_1 + latency + run"' in config_text
     assert "duration_controls:" in config_text
     assert 'output_column: "z_log_spp_duration"' in config_text
-    assert 'output_prefix: "spline_log_spp_duration"' in config_text
     assert 'output_column: "spp_duration_bin"' in config_text
     assert "term_tests:" in config_text
-    assert "duration_spline:" in config_text
+    assert "duration_spline:" not in config_text
 
 
 def test_induced_epochs_config_covers_lmeeeg_requested_bands() -> None:
     epochs_text = Path("config/epochs/erp.yaml").read_text(encoding="utf-8")
-    lmeeeg_text = Path("config/induced/alpha_beta_lmeeeg.yaml").read_text(encoding="utf-8")
+    lmeeeg_text = Path("config/induced/spp_induced_sensor_lmeeeg.yaml").read_text(encoding="utf-8")
 
     assert 'bands: ["theta", "alpha", "beta"]' in epochs_text
+    assert 'analysis_name: "spp_induced_sensor_alpha_beta"' in lmeeeg_text
     assert 'bands: ["theta", "alpha", "beta"]' in lmeeeg_text
+
+
+def test_evoked_and_induced_sensor_lmeeeg_configs_are_separated() -> None:
+    evoked_text = Path("config/evoked/spp_sensor_lmeeeg.yaml").read_text(encoding="utf-8")
+    induced_text = Path("config/induced/spp_induced_sensor_lmeeeg.yaml").read_text(encoding="utf-8")
+
+    assert "evoked_model:" in evoked_text
+    assert "induced_model:" not in evoked_text
+    assert "induced_model:" in induced_text
+    assert "evoked_model:" not in induced_text
 
 
 def test_lmeeeg_workflow_tracks_band_level_induced_epoch_outputs() -> None:

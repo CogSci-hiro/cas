@@ -147,6 +147,7 @@ def select_epochs_from_config(
     selection = dict(config.get("selection") or {})
     event_type = selection.get("event_type")
     metadata_query = selection.get("metadata_query")
+    min_duration_s = selection.get("min_duration_s")
 
     if event_type is not None and "event_type" in metadata.columns:
         mask = metadata["event_type"].astype(str) == str(event_type)
@@ -158,12 +159,47 @@ def select_epochs_from_config(
         epochs = epochs[mask.to_numpy()]
         metadata = metadata.loc[mask].reset_index(drop=True)
 
+    if min_duration_s is not None:
+        minimum = float(min_duration_s)
+        if minimum < 0.0:
+            raise ValueError("selection.min_duration_s must be non-negative or null.")
+        spp_keep_mask = _resolve_spp_min_duration_mask(metadata, minimum)
+        epochs = epochs[spp_keep_mask.to_numpy()]
+        metadata = metadata.loc[spp_keep_mask].reset_index(drop=True)
+
     if len(epochs) == 0:
         raise ValueError(
             f"Epoch selection resulted in zero rows (event_type={event_type!r}, "
-            f"metadata_query={metadata_query!r})."
+            f"metadata_query={metadata_query!r}, min_duration_s={min_duration_s!r})."
         )
     return epochs, metadata
+
+
+def _resolve_spp_min_duration_mask(metadata: pd.DataFrame, minimum: float) -> pd.Series:
+    """Keep all non-SPP rows and only SPP rows meeting the minimum duration."""
+    spp_mask = _resolve_spp_row_mask(metadata)
+    if not spp_mask.any():
+        return pd.Series(True, index=metadata.index, dtype=bool)
+
+    duration = _resolve_spp_duration_series(metadata)
+    keep_mask = (~spp_mask) | (duration.notna() & (duration >= minimum))
+    return pd.Series(keep_mask, index=metadata.index, dtype=bool)
+
+
+def _resolve_spp_row_mask(metadata: pd.DataFrame) -> pd.Series:
+    family = _derive_anchor_family(metadata)
+    if family is not None:
+        return family.astype(str).str.upper() == "SPP"
+    if "class_3" in metadata.columns:
+        return metadata["class_3"].astype(str).str.upper().str.startswith("SPP")
+    return pd.Series(False, index=metadata.index, dtype=bool)
+
+
+def _resolve_spp_duration_series(metadata: pd.DataFrame) -> pd.Series:
+    for column in ("spp_duration", "duration_s", "duration"):
+        if column in metadata.columns:
+            return pd.to_numeric(metadata[column], errors="coerce")
+    return pd.Series(np.nan, index=metadata.index, dtype=float)
 
 
 def _augment_lmeeeg_metadata(metadata: pd.DataFrame) -> pd.DataFrame:
@@ -521,17 +557,14 @@ def _resolve_duration_support_mask(
     nonpositive_mask = ~positive_mask
     if nonpositive_mask.any():
         log_cfg = dict(controls_cfg.get("log_duration") or {})
-        spline_cfg = dict(controls_cfg.get("spline_duration") or {})
         bins_enabled = _duration_feature_enabled(dict(controls_cfg.get("duration_bins") or {}))
         common_support_enabled = _duration_feature_enabled(dict(controls_cfg.get("common_support") or {}))
-        spline_source = str(spline_cfg.get("source", "")).strip().lower()
         log_offset = float(log_cfg.get("offset_s", 0.0))
         can_keep_nonpositive = (
             _duration_feature_enabled(log_cfg)
             and log_offset > 0.0
             and not bins_enabled
             and not common_support_enabled
-            and spline_source in {"", "log_duration", "z_log_duration", str(log_cfg.get("output_column", "")).strip().lower()}
             and ((values + log_offset) > 0.0).all()
         )
         if can_keep_nonpositive:
@@ -611,7 +644,7 @@ def _apply_duration_controls(
     if duration_column not in metadata.columns:
         if any(
             _duration_feature_enabled(dict(controls_cfg.get(key) or {}))
-            for key in ("log_duration", "spline_duration", "duration_bins", "common_support")
+            for key in ("log_duration", "duration_bins", "common_support")
         ):
             raise ValueError(
                 f"Configured duration controls for model {model_name!r} require "
@@ -645,78 +678,6 @@ def _apply_duration_controls(
                 "output_columns": [output_column],
                 "offset_s": offset_s,
                 "standardize": bool(log_cfg.get("standardize", False)),
-            }
-        )
-
-    spline_cfg = dict(controls_cfg.get("spline_duration") or {})
-    if _duration_feature_enabled(spline_cfg):
-        output_prefix = str(spline_cfg.get("output_prefix", "spline_duration")).strip() or "spline_duration"
-        source_name = str(spline_cfg.get("source", duration_column)).strip() or duration_column
-        source_lookup = {
-            duration_column: pd.to_numeric(prepared[duration_column], errors="coerce"),
-            "raw_duration": pd.to_numeric(prepared[duration_column], errors="coerce"),
-        }
-        for generated_column in artifacts["generated_columns"]:
-            source_lookup[generated_column] = pd.to_numeric(prepared[generated_column], errors="coerce")
-        if source_name not in source_lookup:
-            raise ValueError(
-                f"Spline duration source {source_name!r} is unavailable for model {model_name!r}."
-            )
-        basis = dmatrix(
-            (
-                "bs(x, df="
-                f"{int(spline_cfg.get('df', 4))}, degree={int(spline_cfg.get('degree', 3))}, "
-                f"include_intercept={bool(spline_cfg.get('include_intercept', False))}) - 1"
-            ),
-            {"x": source_lookup[source_name]},
-            return_type="dataframe",
-        )
-        basis_values = np.asarray(basis, dtype=float)
-        if bool(spline_cfg.get("orthogonalize_to_source", True)):
-            nuisance_columns = [np.ones(len(prepared), dtype=float), np.asarray(source_lookup[source_name], dtype=float)]
-            for generated_column in artifacts["generated_columns"]:
-                nuisance_columns.append(
-                    pd.to_numeric(prepared[generated_column], errors="coerce").to_numpy(dtype=float)
-                )
-            basis_values = _residualize_columns(
-                basis_values,
-                nuisance=np.column_stack(nuisance_columns),
-            )
-            basis_rank = int(np.linalg.matrix_rank(basis_values))
-            if basis_rank <= 0:
-                raise ValueError(
-                    f"Spline duration basis for model {model_name!r} has no remaining variation after "
-                    f"orthogonalization to source {source_name!r}."
-                )
-            if basis_rank < basis_values.shape[1]:
-                _emit_status(
-                    f"Reduced spline basis for model {model_name} from {basis_values.shape[1]} "
-                    f"to {basis_rank} columns after orthogonalizing against {source_name}."
-                )
-            basis_values, _ = np.linalg.qr(basis_values, mode="reduced")
-            basis_values = basis_values[:, :basis_rank]
-        basis_columns: list[str] = []
-        for column_index in range(1, basis_values.shape[1] + 1):
-            target_name = f"{output_prefix}_{column_index}"
-            values = basis_values[:, column_index - 1]
-            prepared[target_name] = (
-                _zscore_series(values) if bool(spline_cfg.get("standardize", False)) else values
-            )
-            basis_columns.append(target_name)
-        artifacts["enabled_controls"].append("spline_duration")
-        artifacts["generated_columns"].extend(basis_columns)
-        artifacts["formula_terms"].extend(basis_columns)
-        artifacts["term_aliases"][output_prefix] = basis_columns
-        artifacts["transforms"].append(
-            {
-                "name": "spline_duration",
-                "source_column": source_name,
-                "output_columns": basis_columns,
-                "df": int(spline_cfg.get("df", 4)),
-                "degree": int(spline_cfg.get("degree", 3)),
-                "include_intercept": bool(spline_cfg.get("include_intercept", False)),
-                "orthogonalize_to_source": bool(spline_cfg.get("orthogonalize_to_source", True)),
-                "standardize": bool(spline_cfg.get("standardize", False)),
             }
         )
 

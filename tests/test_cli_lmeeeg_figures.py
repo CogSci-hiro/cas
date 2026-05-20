@@ -106,3 +106,44 @@ def test_load_significance_masks_keeps_induced_bands_separate(tmp_path: Path) ->
         masks["induced_model__alpha"]["spp_class_1[T.DISC]"],
         np.asarray([[False, False, True], [False, False, True]], dtype=bool),
     )
+
+
+def test_resolve_lmeeeg_summary_out_dir_falls_back_to_manifest_root(tmp_path: Path, monkeypatch) -> None:
+    config_root = tmp_path / "config"
+    config_root.mkdir()
+    default_out_dir = tmp_path / "cas-refactoring"
+    inferred_out_dir = tmp_path / "cas"
+    output_path = inferred_out_dir / "figures" / "main" / "evoked" / "sensor_lmeeeg" / "figure_manifest.json"
+    summary_dir = inferred_out_dir / "lmeeeg"
+    summary_dir.mkdir(parents=True)
+    (summary_dir / "lmeeeg_analysis_summary.json").write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr("cas.cli.main._resolve_out_dir", lambda _: default_out_dir)
+
+    resolved = cli_main._resolve_lmeeeg_summary_out_dir(
+        config_root=config_root,
+        config={},
+        output_path=output_path,
+    )
+
+    assert resolved == inferred_out_dir
+
+
+def test_load_feature_t_value_map_reads_per_effect_t_values(tmp_path: Path) -> None:
+    t_value_path = tmp_path / "latency_t_values.npy"
+    expected = np.asarray([[1.0, 2.0], [3.0, 4.0]], dtype=float)
+    np.save(t_value_path, expected)
+
+    loaded = cli_main._load_feature_t_value_map(
+        fit_summary={
+            "per_effect_outputs": {
+                "latency": {
+                    "t_values": str(t_value_path),
+                }
+            }
+        },
+        normalized_effect="latency",
+    )
+
+    assert loaded is not None
+    assert np.array_equal(loaded, expected)

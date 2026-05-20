@@ -1,3 +1,20 @@
+rule trf:
+    input:
+        rules.trf_all.input
+
+
+rule spp_trf:
+    input:
+        rules.spp_trf_all.input
+
+
+rule evoked_sensor_lmeeeg:
+    input:
+        LMEEEG_SUMMARY_OUTPUT,
+        EVOKED_SENSOR_QC_MANIFEST,
+        EVOKED_SENSOR_FIGURE_MANIFEST
+
+
 rule confirmatory_core:
     input:
         f"{OUT_DIR}/dataset/index.parquet",

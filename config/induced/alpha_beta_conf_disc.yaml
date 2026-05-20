@@ -42,6 +42,7 @@ lmeeeg:
 
   selection:
     metadata_query: "event_lock == 'onset' and class_3 != 'OTHER'"
+    min_duration_s: 0.4
 
   models:
     class_3:

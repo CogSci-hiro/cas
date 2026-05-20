@@ -26,6 +26,7 @@ def _legacy_config(config: BehaviorHazardConfig) -> BehaviourHazardConfig:
         surprisal_paths=(),
         out_dir=config.paths.hazard_root,
         bin_size_s=float(config.bin_size_ms) / 1000.0,
+        information_rate_window_s=float(config.information_rate_window_ms) / 1000.0,
         include_censored=True,
         overwrite=True,
         save_riskset=False,

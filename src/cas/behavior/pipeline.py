@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+import re
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -296,6 +297,51 @@ def _load_predictor_tables(paths: dict[str, Path], config_path: str | Path, *, v
     )
 
 
+def _formula_column_names(formula_text: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", formula_text)
+        if token not in {"event"}
+    }
+
+
+def _model_bundle_columns(config: BehaviorHazardConfig, *, selected_lag_ms: int) -> list[str]:
+    columns = {
+        "event",
+        "subject",
+        "dyad_id",
+        "anchor_type",
+        "information_rate",
+        "prop_expected_cum_info",
+        "only_overlap",
+        "overlap_filter_column",
+        "overlap_filter_definition",
+    }
+    for spec in _build_model_specs(config, selected_lag_ms=selected_lag_ms):
+        columns.update(_formula_column_names(str(spec["formula_fixed"])))
+        columns.update(_formula_column_names(str(spec["formula_full"])))
+    return sorted(columns)
+
+
+def _load_predictor_tables_for_model_bundle(
+    paths: dict[str, Path],
+    config_path: str | Path,
+    *,
+    selected_lag_ms: int,
+    verbose: bool = False,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    config = load_behavior_hazard_config(config_path)
+    predictor_paths = _predictor_paths(paths)
+    if not predictor_paths["fpp"].exists():
+        add_predictors(config_path, verbose=verbose)
+    columns = _model_bundle_columns(config, selected_lag_ms=selected_lag_ms)
+    return (
+        pd.read_parquet(predictor_paths["fpp"], columns=columns),
+        pd.read_parquet(predictor_paths["spp"], columns=columns),
+        pd.read_parquet(predictor_paths["pooled"], columns=columns),
+    )
+
+
 def _load_selected_lag_payload(paths: dict[str, Path], config_path: str | Path, *, verbose: bool = False) -> dict[str, object]:
     lag_path = paths["lag_selection"] / "selected_lag.json"
     if not lag_path.exists():
@@ -498,7 +544,12 @@ def fit_models(config_path: str | Path, *, verbose: bool = False) -> dict[str, P
     paths = ensure_behavior_directories(config)
     selected_payload = _load_selected_lag_payload(paths, config_path, verbose=verbose)
     selected_lag_ms = int(selected_payload["selected_lag_ms"])
-    fpp, spp, pooled = _load_predictor_tables(paths, config_path, verbose=verbose)
+    fpp, spp, pooled = _load_predictor_tables_for_model_bundle(
+        paths,
+        config_path,
+        selected_lag_ms=selected_lag_ms,
+        verbose=verbose,
+    )
     model_metrics_path = paths["logs"] / "r_model_metrics.csv"
     coefficient_path = paths["logs"] / "r_model_coefficients.csv"
     run_r_model_bundle(
@@ -538,7 +589,12 @@ def build_tables(config_path: str | Path, *, verbose: bool = False) -> dict[str,
     paths = ensure_behavior_directories(config)
     selected_payload = _load_selected_lag_payload(paths, config_path, verbose=verbose)
     selected_lag_ms = int(selected_payload["selected_lag_ms"])
-    fpp, spp, pooled = _load_predictor_tables(paths, config_path, verbose=verbose)
+    fpp, spp, pooled = _load_predictor_tables_for_model_bundle(
+        paths,
+        config_path,
+        selected_lag_ms=selected_lag_ms,
+        verbose=verbose,
+    )
     model_metrics_path = paths["logs"] / "r_model_metrics.csv"
     coefficient_path = paths["logs"] / "r_table_coefficients.csv"
     comparison_path = paths["logs"] / "r_table_comparisons.csv"
@@ -564,6 +620,7 @@ def build_tables(config_path: str | Path, *, verbose: bool = False) -> dict[str,
         three_way_path=paths["tables"] / "three_way_heatmap_predictions.csv",
         verbose=verbose,
     )
+    pooled = pd.read_parquet(_predictor_paths(paths)["pooled"])
     model_metrics = pd.read_csv(model_metrics_path)
     coefficients = pd.read_csv(coefficient_path)
     comparisons = pd.read_csv(comparison_path)

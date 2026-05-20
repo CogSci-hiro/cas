@@ -48,7 +48,7 @@ def resolve_out_dir(config_root: Path) -> Path:
 def resolve_induced_lmeeeg_config_path(*, config_root: Path, explicit_config_path: str | None) -> Path:
     if explicit_config_path:
         return Path(explicit_config_path).resolve()
-    return discover_config_root(config_root) / "induced" / "alpha_beta_lmeeeg.yaml"
+    return discover_config_root(config_root) / "induced" / "spp_induced_sensor_lmeeeg.yaml"
 
 
 def resolve_sensor_figure_manifest_path(

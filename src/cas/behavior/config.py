@@ -72,6 +72,16 @@ class BehaviorHazardConfig:
         return int(self.hazard.get("bin_size_ms", 50))
 
     @property
+    def information_rate_window_ms(self) -> int:
+        raw_value = self.hazard.get("information_rate_window_ms")
+        if raw_value is not None:
+            return int(raw_value)
+        raw_seconds = self.hazard.get("information_rate_window_s")
+        if raw_seconds is not None:
+            return int(round(float(raw_seconds) * 1000.0))
+        return 500
+
+    @property
     def candidate_lags_ms(self) -> list[int]:
         values = self.hazard.get("candidate_lags_ms") or self.behavior_root.get("candidate_lags_ms") or [0, 50, 100, 150, 200, 250, 300, 400, 500]
         return [
