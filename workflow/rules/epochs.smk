@@ -1,17 +1,39 @@
 EPOCHS_SETTINGS = EPOCHS_CONFIG["epochs"]
-EPOCHS_OUTPUT_ROOT = os.path.join(OUT_DIR, EPOCHS_SETTINGS["output"]["root"])
-EPOCHS_OUTPUT_PATTERN = (
-    f"{EPOCHS_OUTPUT_ROOT}/sub-{{subject}}/eeg/"
-    f"sub-{{subject}}_task-{{task}}_run-{{run}}_desc-tasklocked_epo.fif"
-)
+
+
+def _epoch_output_pattern(root_subdir: str) -> str:
+    return (
+        f"{os.path.join(OUT_DIR, root_subdir)}/sub-{{subject}}/eeg/"
+        f"sub-{{subject}}_task-{{task}}_run-{{run}}_desc-tasklocked_epo.fif"
+    )
+
+
+EPOCHS_OUTPUT_PATTERN = _epoch_output_pattern(str(EPOCHS_SETTINGS["output"]["root"]))
 INDUCED_SOURCE_EPOCHS_SETTINGS = dict(EPOCHS_CONFIG.get("induced_source_epochs") or {})
-INDUCED_SOURCE_EPOCHS_OUTPUT_ROOT = os.path.join(
-    OUT_DIR,
-    str((INDUCED_SOURCE_EPOCHS_SETTINGS.get("output") or {}).get("root", "induced_source_epochs")),
+INDUCED_SOURCE_EPOCHS_OUTPUT_PATTERN = _epoch_output_pattern(
+    str((INDUCED_SOURCE_EPOCHS_SETTINGS.get("output") or {}).get("root", "induced_source_epochs"))
 )
-INDUCED_SOURCE_EPOCHS_OUTPUT_PATTERN = (
-    f"{INDUCED_SOURCE_EPOCHS_OUTPUT_ROOT}/sub-{{subject}}/eeg/"
-    f"sub-{{subject}}_task-{{task}}_run-{{run}}_desc-tasklocked_epo.fif"
+INDUCED_CONF_DISC_FPP_LOCKED_SOURCE_EPOCHS_SETTINGS = dict(
+    EPOCHS_CONFIG.get("induced_source_epochs_conf_disc_fpp_locked") or {}
+)
+INDUCED_CONF_DISC_FPP_LOCKED_SOURCE_EPOCHS_OUTPUT_PATTERN = _epoch_output_pattern(
+    str(
+        (INDUCED_CONF_DISC_FPP_LOCKED_SOURCE_EPOCHS_SETTINGS.get("output") or {}).get(
+            "root",
+            "induced_source_epochs_conf_disc_fpp_locked",
+        )
+    )
+)
+INDUCED_CONF_DISC_SPP_LOCKED_SOURCE_EPOCHS_SETTINGS = dict(
+    EPOCHS_CONFIG.get("induced_source_epochs_conf_disc_spp_locked") or {}
+)
+INDUCED_CONF_DISC_SPP_LOCKED_SOURCE_EPOCHS_OUTPUT_PATTERN = _epoch_output_pattern(
+    str(
+        (INDUCED_CONF_DISC_SPP_LOCKED_SOURCE_EPOCHS_SETTINGS.get("output") or {}).get(
+            "root",
+            "induced_source_epochs_conf_disc_spp_locked",
+        )
+    )
 )
 
 
@@ -86,6 +108,20 @@ INDUCED_SOURCE_EPOCH_OUTPUTS = expand(
     task=[record["task"] for record in EPOCH_RECORDS],
     run=[record["run"] for record in EPOCH_RECORDS],
 )
+INDUCED_CONF_DISC_FPP_LOCKED_SOURCE_EPOCH_OUTPUTS = expand(
+    INDUCED_CONF_DISC_FPP_LOCKED_SOURCE_EPOCHS_OUTPUT_PATTERN,
+    zip,
+    subject=[record["subject"] for record in EPOCH_RECORDS],
+    task=[record["task"] for record in EPOCH_RECORDS],
+    run=[record["run"] for record in EPOCH_RECORDS],
+)
+INDUCED_CONF_DISC_SPP_LOCKED_SOURCE_EPOCH_OUTPUTS = expand(
+    INDUCED_CONF_DISC_SPP_LOCKED_SOURCE_EPOCHS_OUTPUT_PATTERN,
+    zip,
+    subject=[record["subject"] for record in EPOCH_RECORDS],
+    task=[record["task"] for record in EPOCH_RECORDS],
+    run=[record["run"] for record in EPOCH_RECORDS],
+)
 INDUCED_EPOCH_BANDS = [
     str(value)
     for value in dict(EPOCHS_CONFIG.get("induced_epochs") or {}).get("bands", ["theta"])
@@ -95,9 +131,17 @@ INDUCED_EPOCH_SUMMARY_OUTPUTS = expand(
     f"{OUT_DIR}/induced_epochs/sub-{{subject}}/summary.json",
     subject=INDUCED_EPOCH_SUBJECTS,
 )
+INDUCED_CONF_DISC_FPP_LOCKED_EPOCH_SUMMARY_OUTPUTS = expand(
+    f"{OUT_DIR}/induced_epochs_conf_disc_fpp_locked/sub-{{subject}}/summary.json",
+    subject=INDUCED_EPOCH_SUBJECTS,
+)
+INDUCED_CONF_DISC_SPP_LOCKED_EPOCH_SUMMARY_OUTPUTS = expand(
+    f"{OUT_DIR}/induced_epochs_conf_disc_spp_locked/sub-{{subject}}/summary.json",
+    subject=INDUCED_EPOCH_SUBJECTS,
+)
 
 
-def induced_epoch_source_inputs(wildcards):
+def _subject_epoch_inputs(wildcards, *, output_pattern: str):
     subject_records = [
         record
         for record in EPOCH_RECORDS
@@ -106,7 +150,7 @@ def induced_epoch_source_inputs(wildcards):
     if not subject_records:
         raise ValueError(f"No epoch records found for subject {wildcards.subject}.")
     return [
-        INDUCED_SOURCE_EPOCHS_OUTPUT_PATTERN.format(
+        output_pattern.format(
             subject=record["subject"],
             task=record["task"],
             run=record["run"],
@@ -115,15 +159,40 @@ def induced_epoch_source_inputs(wildcards):
     ]
 
 
-def _induced_epoch_summary_outputs() -> list[str]:
+def induced_epoch_source_inputs(wildcards):
+    return _subject_epoch_inputs(
+        wildcards,
+        output_pattern=INDUCED_SOURCE_EPOCHS_OUTPUT_PATTERN,
+    )
+
+
+def induced_conf_disc_fpp_locked_epoch_source_inputs(wildcards):
+    return _subject_epoch_inputs(
+        wildcards,
+        output_pattern=INDUCED_CONF_DISC_FPP_LOCKED_SOURCE_EPOCHS_OUTPUT_PATTERN,
+    )
+
+
+def induced_conf_disc_spp_locked_epoch_source_inputs(wildcards):
+    return _subject_epoch_inputs(
+        wildcards,
+        output_pattern=INDUCED_CONF_DISC_SPP_LOCKED_SOURCE_EPOCHS_OUTPUT_PATTERN,
+    )
+
+
+def _induced_epoch_summary_outputs(root_subdir: str = "induced_epochs") -> list[str]:
     subjects = sorted({record["subject"] for record in EPOCH_RECORDS})
     return [
-        f"{OUT_DIR}/induced_epochs/sub-{subject}/summary.json"
+        f"{OUT_DIR}/{root_subdir}/sub-{subject}/summary.json"
         for subject in subjects
     ]
 
 
-def _induced_epoch_band_summary_outputs(config_path: str | None = None) -> list[str]:
+def _induced_epoch_band_summary_outputs(
+    config_path: str | None = None,
+    *,
+    root_subdir: str = "induced_epochs",
+) -> list[str]:
     subjects = sorted({record["subject"] for record in EPOCH_RECORDS})
     resolved_config_path = config_path or LMEEEG_CONFIG_PATH
     requested_bands = [
@@ -134,15 +203,15 @@ def _induced_epoch_band_summary_outputs(config_path: str | None = None) -> list[
         )
     ]
     return [
-        f"{OUT_DIR}/induced_epochs/{band}/sub-{subject}/epoching_summary-time_s.json"
+        f"{OUT_DIR}/{root_subdir}/{band}/sub-{subject}/epoching_summary-time_s.json"
         for subject in subjects
         for band in requested_bands
     ]
 
 
 def _epoching_settings(section_name: str) -> dict[str, object]:
-    if section_name == "induced_source_epochs":
-        settings = dict(INDUCED_SOURCE_EPOCHS_SETTINGS)
+    if section_name != "epochs":
+        settings = dict(EPOCHS_CONFIG.get(section_name) or {})
         if "event_types" not in settings:
             settings["event_types"] = list(EPOCHS_SETTINGS.get("event_types", ()))
         if "reject_by_annotation" not in settings:
@@ -195,6 +264,11 @@ def _write_tasklocked_epochs(*, input_eeg, input_raw, events_csv, output_epochs,
 
     anchor_sample = int(anchor_events[0, 0])
     anchor_time_s = float((anchor_sample - raw_source.first_samp) / raw_source.info["sfreq"])
+    event_source_column_overrides = {
+        str(key): str(value)
+        for key, value in dict(settings.get("event_source_column_overrides") or {}).items()
+    }
+    time_locking_reference = settings.get("time_locking_reference")
 
     recording_id = _epochs_recording_id(subject)
     run_label = _normalize_run_label(run)
@@ -287,9 +361,20 @@ def _write_tasklocked_epochs(*, input_eeg, input_raw, events_csv, output_epochs,
         selected["event_family"] = event_family
         selected["event_lock"] = event_lock
         selected["event_speaker_label"] = speaker_value
-        selected["event_source_column"] = onset_column if event_lock == "onset" else offset_column
+        selected["event_native_onset_conversation_s"] = pd.to_numeric(selected[onset_column], errors="coerce")
+        selected["event_native_offset_conversation_s"] = pd.to_numeric(selected[offset_column], errors="coerce")
+        event_source_column = event_source_column_overrides.get(
+            event_type,
+            onset_column if event_lock == "onset" else offset_column,
+        )
+        selected["event_source_column"] = event_source_column
         selected["event_source_offset_column"] = offset_column
-        selected["event_onset_conversation_s"] = pd.to_numeric(selected[onset_column], errors="coerce")
+        selected["time_locking_reference"] = (
+            str(time_locking_reference)
+            if isinstance(time_locking_reference, str) and time_locking_reference.strip()
+            else event_source_column
+        )
+        selected["event_onset_conversation_s"] = pd.to_numeric(selected[event_source_column], errors="coerce")
         selected["event_offset_conversation_s"] = pd.to_numeric(selected[offset_column], errors="coerce")
         selected["conversation_anchor_sample"] = anchor_sample
         selected["conversation_anchor_time_s"] = anchor_time_s
@@ -378,8 +463,11 @@ def _write_tasklocked_epochs(*, input_eeg, input_raw, events_csv, output_epochs,
 LMEEEG_CONFIG_PATH = f"{CONFIG_DIR}/induced/spp_induced_sensor_lmeeeg.yaml"
 EVOKED_LMEEEG_CONFIG_PATH = f"{CONFIG_DIR}/evoked/spp_sensor_lmeeeg.yaml"
 FPP_SPP_CYCLE_POSITION_LMEEEG_CONFIG_PATH = f"{CONFIG_DIR}/induced/alpha_beta_cycle_position.yaml"
-FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_CONFIG_PATH = (
-    f"{CONFIG_DIR}/induced/alpha_beta_conf_disc.yaml"
+FPP_SPP_CONF_DISC_ALPHA_BETA_FPP_LOCKED_LMEEEG_CONFIG_PATH = (
+    f"{CONFIG_DIR}/induced/alpha_beta_conf_disc_fpp_locked.yaml"
+)
+FPP_SPP_CONF_DISC_ALPHA_BETA_SPP_LOCKED_LMEEEG_CONFIG_PATH = (
+    f"{CONFIG_DIR}/induced/alpha_beta_conf_disc_spp_locked.yaml"
 )
 INFO_RATE_INDUCED_LMEEEG_CONFIG_PATH = f"{CONFIG_DIR}/induced/info_rate_induced_lmeeg.yaml"
 LMEEEG_OUTPUT_ROOT = f"{OUT_DIR}/lmeeeg"
@@ -500,48 +588,93 @@ FPP_SPP_CYCLE_POSITION_LMEEEG_CONTRAST_OUTPUTS = expand(
     band=[str(band) for band in FPP_SPP_CYCLE_POSITION_LMEEEG_INDUCED_BANDS],
 )
 
-FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_OUTPUT_DIR = _lmeeeg_analysis_root_from_config(
-    FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_CONFIG_PATH
+def _conf_disc_lmeeeg_outputs(config_path: str, *, default_subdir: str) -> dict[str, object]:
+    config_payload = _load_lmeeeg_workflow_config(config_path)
+    output_dir = _lmeeeg_analysis_root_from_config(config_path)
+    input_cfg = dict(config_payload.get("input") or {})
+    induced_subdir = str(input_cfg.get("induced_epochs_subdir", default_subdir))
+    source_induced_subdir = str(input_cfg.get("source_induced_epochs_subdir", "induced_epochs"))
+    bands = config_payload.get("induced_epochs", {}).get("bands", ["alpha", "beta"])
+    models = sorted([str(name) for name in dict(config_payload.get("models") or {}).keys()])
+    return {
+        "config": config_payload,
+        "output_dir": output_dir,
+        "summary_output": f"{output_dir}/lmeeeg_analysis_summary.json",
+        "induced_subdir": induced_subdir,
+        "source_induced_subdir": source_induced_subdir,
+        "bands": [str(band) for band in bands],
+        "models": models,
+        "model_summary_outputs": expand(
+            f"{output_dir}/induced/{{band}}/{{model}}/summary.json",
+            band=[str(band) for band in bands],
+            model=models,
+        ),
+        "contrast_outputs": [
+            f"{output_dir}/induced/{band}/{model}/{effect}_beta.npy"
+            for band in [str(value) for value in bands]
+            for model in ("class_3", "class_3_plus_duration")
+            for effect in ("class_3SPP_CONF", "class_3SPP_DISC")
+        ],
+    }
+
+
+FPP_SPP_CONF_DISC_ALPHA_BETA_FPP_LOCKED_LMEEEG_OUTPUTS = _conf_disc_lmeeeg_outputs(
+    FPP_SPP_CONF_DISC_ALPHA_BETA_FPP_LOCKED_LMEEEG_CONFIG_PATH,
+    default_subdir="induced_epochs_fpp_locked_fpp_spp_conf_disc_alpha_beta_lmeeeg",
 )
-FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_SUMMARY_OUTPUT = (
-    f"{FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_OUTPUT_DIR}/lmeeeg_analysis_summary.json"
+FPP_SPP_CONF_DISC_ALPHA_BETA_FPP_LOCKED_LMEEEG_OUTPUT_DIR = (
+    FPP_SPP_CONF_DISC_ALPHA_BETA_FPP_LOCKED_LMEEEG_OUTPUTS["output_dir"]
 )
-_FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_CONFIG = _load_lmeeeg_workflow_config(
-    FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_CONFIG_PATH
+FPP_SPP_CONF_DISC_ALPHA_BETA_FPP_LOCKED_LMEEEG_SUMMARY_OUTPUT = (
+    FPP_SPP_CONF_DISC_ALPHA_BETA_FPP_LOCKED_LMEEEG_OUTPUTS["summary_output"]
 )
-FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_INPUT = dict(
-    _FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_CONFIG.get("input") or {}
+FPP_SPP_CONF_DISC_ALPHA_BETA_FPP_LOCKED_LMEEEG_INDUCED_SUBDIR = (
+    FPP_SPP_CONF_DISC_ALPHA_BETA_FPP_LOCKED_LMEEEG_OUTPUTS["induced_subdir"]
 )
-FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_INDUCED_SUBDIR = str(
-    FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_INPUT.get(
-        "induced_epochs_subdir",
-        "induced_epochs_fpp_spp_conf_disc_alpha_beta_lmeeeg",
-    )
+FPP_SPP_CONF_DISC_ALPHA_BETA_FPP_LOCKED_LMEEEG_SOURCE_INDUCED_SUBDIR = (
+    FPP_SPP_CONF_DISC_ALPHA_BETA_FPP_LOCKED_LMEEEG_OUTPUTS["source_induced_subdir"]
 )
-FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_INDUCED_BANDS = _FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_CONFIG.get(
-    "induced_epochs",
-    {},
-).get("bands", ["alpha", "beta"])
-FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_MODELS = sorted(
-    [str(name) for name in dict(_FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_CONFIG.get("models") or {}).keys()]
+FPP_SPP_CONF_DISC_ALPHA_BETA_FPP_LOCKED_LMEEEG_INDUCED_BANDS = (
+    FPP_SPP_CONF_DISC_ALPHA_BETA_FPP_LOCKED_LMEEEG_OUTPUTS["bands"]
 )
-FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_MODEL_SUMMARY_OUTPUTS = expand(
-    (
-        f"{FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_OUTPUT_DIR}/induced/{{band}}/"
-        "{model}/summary.json"
-    ),
-    band=[str(band) for band in FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_INDUCED_BANDS],
-    model=FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_MODELS,
+FPP_SPP_CONF_DISC_ALPHA_BETA_FPP_LOCKED_LMEEEG_MODELS = (
+    FPP_SPP_CONF_DISC_ALPHA_BETA_FPP_LOCKED_LMEEEG_OUTPUTS["models"]
 )
-FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_CONTRAST_OUTPUTS = [
-    (
-        f"{FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_OUTPUT_DIR}/induced/{band}/"
-        f"{model}/{effect}_beta.npy"
-    )
-    for band in [str(value) for value in FPP_SPP_CONF_DISC_ALPHA_BETA_LMEEEG_INDUCED_BANDS]
-    for model in ("class_3", "class_3_plus_duration")
-    for effect in ("class_3SPP_CONF", "class_3SPP_DISC")
-]
+FPP_SPP_CONF_DISC_ALPHA_BETA_FPP_LOCKED_LMEEEG_MODEL_SUMMARY_OUTPUTS = (
+    FPP_SPP_CONF_DISC_ALPHA_BETA_FPP_LOCKED_LMEEEG_OUTPUTS["model_summary_outputs"]
+)
+FPP_SPP_CONF_DISC_ALPHA_BETA_FPP_LOCKED_LMEEEG_CONTRAST_OUTPUTS = (
+    FPP_SPP_CONF_DISC_ALPHA_BETA_FPP_LOCKED_LMEEEG_OUTPUTS["contrast_outputs"]
+)
+
+FPP_SPP_CONF_DISC_ALPHA_BETA_SPP_LOCKED_LMEEEG_OUTPUTS = _conf_disc_lmeeeg_outputs(
+    FPP_SPP_CONF_DISC_ALPHA_BETA_SPP_LOCKED_LMEEEG_CONFIG_PATH,
+    default_subdir="induced_epochs_spp_locked_fpp_spp_conf_disc_alpha_beta_lmeeeg",
+)
+FPP_SPP_CONF_DISC_ALPHA_BETA_SPP_LOCKED_LMEEEG_OUTPUT_DIR = (
+    FPP_SPP_CONF_DISC_ALPHA_BETA_SPP_LOCKED_LMEEEG_OUTPUTS["output_dir"]
+)
+FPP_SPP_CONF_DISC_ALPHA_BETA_SPP_LOCKED_LMEEEG_SUMMARY_OUTPUT = (
+    FPP_SPP_CONF_DISC_ALPHA_BETA_SPP_LOCKED_LMEEEG_OUTPUTS["summary_output"]
+)
+FPP_SPP_CONF_DISC_ALPHA_BETA_SPP_LOCKED_LMEEEG_INDUCED_SUBDIR = (
+    FPP_SPP_CONF_DISC_ALPHA_BETA_SPP_LOCKED_LMEEEG_OUTPUTS["induced_subdir"]
+)
+FPP_SPP_CONF_DISC_ALPHA_BETA_SPP_LOCKED_LMEEEG_SOURCE_INDUCED_SUBDIR = (
+    FPP_SPP_CONF_DISC_ALPHA_BETA_SPP_LOCKED_LMEEEG_OUTPUTS["source_induced_subdir"]
+)
+FPP_SPP_CONF_DISC_ALPHA_BETA_SPP_LOCKED_LMEEEG_INDUCED_BANDS = (
+    FPP_SPP_CONF_DISC_ALPHA_BETA_SPP_LOCKED_LMEEEG_OUTPUTS["bands"]
+)
+FPP_SPP_CONF_DISC_ALPHA_BETA_SPP_LOCKED_LMEEEG_MODELS = (
+    FPP_SPP_CONF_DISC_ALPHA_BETA_SPP_LOCKED_LMEEEG_OUTPUTS["models"]
+)
+FPP_SPP_CONF_DISC_ALPHA_BETA_SPP_LOCKED_LMEEEG_MODEL_SUMMARY_OUTPUTS = (
+    FPP_SPP_CONF_DISC_ALPHA_BETA_SPP_LOCKED_LMEEEG_OUTPUTS["model_summary_outputs"]
+)
+FPP_SPP_CONF_DISC_ALPHA_BETA_SPP_LOCKED_LMEEEG_CONTRAST_OUTPUTS = (
+    FPP_SPP_CONF_DISC_ALPHA_BETA_SPP_LOCKED_LMEEEG_OUTPUTS["contrast_outputs"]
+)
 
 with open(INFO_RATE_INDUCED_LMEEEG_CONFIG_PATH, encoding="utf-8") as _info_rate_handle:
     _INFO_RATE_INDUCED_LMEEEG_CONFIG = yaml.safe_load(_info_rate_handle) or {}
@@ -610,6 +743,48 @@ rule make_induced_source_epochs:
         )
 
 
+rule make_induced_conf_disc_fpp_locked_source_epochs:
+    input:
+        eeg=PREPROCESSED_EEG_OUTPUT_PATTERN,
+        raw=preprocess_raw_input,
+        annotation=epoch_annotation_input,
+        events_csv=EVENTS_CSV_OUTPUT,
+    output:
+        epochs=INDUCED_CONF_DISC_FPP_LOCKED_SOURCE_EPOCHS_OUTPUT_PATTERN,
+    run:
+        _write_tasklocked_epochs(
+            input_eeg=input.eeg,
+            input_raw=input.raw,
+            events_csv=input.events_csv,
+            output_epochs=output.epochs,
+            subject=wildcards.subject,
+            task=wildcards.task,
+            run=wildcards.run,
+            settings=_epoching_settings("induced_source_epochs_conf_disc_fpp_locked"),
+        )
+
+
+rule make_induced_conf_disc_spp_locked_source_epochs:
+    input:
+        eeg=PREPROCESSED_EEG_OUTPUT_PATTERN,
+        raw=preprocess_raw_input,
+        annotation=epoch_annotation_input,
+        events_csv=EVENTS_CSV_OUTPUT,
+    output:
+        epochs=INDUCED_CONF_DISC_SPP_LOCKED_SOURCE_EPOCHS_OUTPUT_PATTERN,
+    run:
+        _write_tasklocked_epochs(
+            input_eeg=input.eeg,
+            input_raw=input.raw,
+            events_csv=input.events_csv,
+            output_epochs=output.epochs,
+            subject=wildcards.subject,
+            task=wildcards.task,
+            run=wildcards.run,
+            settings=_epoching_settings("induced_source_epochs_conf_disc_spp_locked"),
+        )
+
+
 rule epochs_all:
     input:
         EPOCH_OUTPUTS
@@ -633,6 +808,50 @@ rule make_induced_epochs_subject:
             source_epoch_paths=list(input.epochs),
             config_path=input.config,
             output_root=OUT_DIR,
+        )
+
+
+rule make_induced_conf_disc_fpp_locked_epochs_subject:
+    input:
+        epochs=induced_conf_disc_fpp_locked_epoch_source_inputs,
+        config=FPP_SPP_CONF_DISC_ALPHA_BETA_FPP_LOCKED_LMEEEG_CONFIG_PATH,
+    output:
+        summary=f"{OUT_DIR}/induced_epochs_conf_disc_fpp_locked/sub-{{subject}}/summary.json",
+        band_summaries=expand(
+            f"{OUT_DIR}/induced_epochs_conf_disc_fpp_locked/{{band}}/sub-{{{{subject}}}}/epoching_summary-time_s.json",
+            band=FPP_SPP_CONF_DISC_ALPHA_BETA_FPP_LOCKED_LMEEEG_INDUCED_BANDS,
+        ),
+    run:
+        from cas.eeg.induced.epochs import build_subject_induced_epochs
+
+        build_subject_induced_epochs(
+            subject=wildcards.subject,
+            source_epoch_paths=list(input.epochs),
+            config_path=input.config,
+            output_root=OUT_DIR,
+            root_subdir="induced_epochs_conf_disc_fpp_locked",
+        )
+
+
+rule make_induced_conf_disc_spp_locked_epochs_subject:
+    input:
+        epochs=induced_conf_disc_spp_locked_epoch_source_inputs,
+        config=FPP_SPP_CONF_DISC_ALPHA_BETA_SPP_LOCKED_LMEEEG_CONFIG_PATH,
+    output:
+        summary=f"{OUT_DIR}/induced_epochs_conf_disc_spp_locked/sub-{{subject}}/summary.json",
+        band_summaries=expand(
+            f"{OUT_DIR}/induced_epochs_conf_disc_spp_locked/{{band}}/sub-{{{{subject}}}}/epoching_summary-time_s.json",
+            band=FPP_SPP_CONF_DISC_ALPHA_BETA_SPP_LOCKED_LMEEEG_INDUCED_BANDS,
+        ),
+    run:
+        from cas.eeg.induced.epochs import build_subject_induced_epochs
+
+        build_subject_induced_epochs(
+            subject=wildcards.subject,
+            source_epoch_paths=list(input.epochs),
+            config_path=input.config,
+            output_root=OUT_DIR,
+            root_subdir="induced_epochs_conf_disc_spp_locked",
         )
 
 

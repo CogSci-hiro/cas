@@ -61,16 +61,26 @@ def resolve_sensor_figure_manifest_path(
         raise ValueError(f"Unsupported induced figure kind: {figure_kind}")
 
     config_name = config_path.name
+    conf_disc_fpp_names = {"alpha_beta_conf_disc_fpp_locked.yaml"}
+    conf_disc_spp_names = {"alpha_beta_conf_disc_spp_locked.yaml"}
     if figure_kind == "qc":
         base_dir = out_dir / "figures" / "qc" / "induced" / "sensor_lmeeeg"
         if config_name == "alpha_beta_conf_disc.yaml":
             return base_dir / "conf_disc" / "figure_manifest.json"
+        if config_name in conf_disc_fpp_names:
+            return base_dir / "conf_disc" / "fpp_locked" / "figure_manifest.json"
+        if config_name in conf_disc_spp_names:
+            return base_dir / "conf_disc" / "spp_locked" / "figure_manifest.json"
         if config_name == "alpha_beta_cycle_position.yaml":
             return base_dir / "cycle_position" / "figure_manifest.json"
         return base_dir / "figure_manifest.json"
 
     if config_name == "alpha_beta_conf_disc.yaml":
         return out_dir / "figures" / "supp" / "induced" / "sensor_lmeeeg" / "conf_disc" / "figure_manifest.json"
+    if config_name in conf_disc_fpp_names:
+        return out_dir / "figures" / "supp" / "induced" / "sensor_lmeeeg" / "conf_disc" / "fpp_locked" / "figure_manifest.json"
+    if config_name in conf_disc_spp_names:
+        return out_dir / "figures" / "supp" / "induced" / "sensor_lmeeeg" / "conf_disc" / "spp_locked" / "figure_manifest.json"
     if config_name == "alpha_beta_cycle_position.yaml":
         return out_dir / "figures" / "supp" / "induced" / "sensor_lmeeeg" / "cycle_position" / "figure_manifest.json"
     return out_dir / "figures" / "main" / "induced" / "sensor_lmeeeg" / "figure_manifest.json"

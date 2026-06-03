@@ -11,7 +11,7 @@ lmeeeg:
     # event_type: "other_spp_onset"
     # Optional second-stage pandas query over epoch metadata after epochs[event_type].
     # metadata_query: "latency > 0 and duration_s >= 0.1"
-    min_duration_s: 0.4
+    min_duration_s: null
 
   models:
     evoked_model:
@@ -19,16 +19,29 @@ lmeeeg:
       selection:
         event_type: "other_spp_onset"
       contrast_of_interest: "spp_class_1"
-      formula: "~ spp_class_1 + latency + run"
+      formula: "~ spp_class_1 + latency + run + z_fpp_anchor_alpha_power"
+      derived_predictors:
+        fpp_anchor_alpha_power:
+          enabled: true
+          kind: "band_power_window"
+          anchor_column: "fpp_onset"
+          conversation_anchor_column: "conversation_anchor_time_s"
+          roi: "anterior"
+          window_s: [-0.5, -0.0]
+          band_hz: [7.0, 13.0]
+          output_column: "z_fpp_anchor_alpha_power"
+          standardize: true
       eligibility:
         not_null:
           - "spp_class_1"
           - "latency"
           - "duration_s"
+          - "z_fpp_anchor_alpha_power"
         min_values:
           duration_s: 0.10
       test_predictors:
         - "spp_class_1"
+        - "z_fpp_anchor_alpha_power"
       standardize:
         - "latency"
       # Full SPP ERP/amplitude model: one class effect plus optional duration controls.
@@ -63,6 +76,11 @@ lmeeeg:
           contrast_type: "continuous"
           terms:
             - "z_log_spp_duration"
+        fpp_anchor_alpha_power:
+          enabled: true
+          contrast_type: "continuous"
+          terms:
+            - "z_fpp_anchor_alpha_power"
         duration_bin:
           enabled: false
           contrast_type: "categorical"

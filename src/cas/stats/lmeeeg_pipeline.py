@@ -236,6 +236,407 @@ def _augment_lmeeeg_metadata(metadata: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _resolve_derived_predictor_configs(
+    runtime_config: dict[str, Any],
+    *,
+    model_name: str,
+) -> dict[str, dict[str, Any]]:
+    lmeeeg_cfg = dict(runtime_config.get("lmeeeg") or {})
+    model_cfg = dict((lmeeeg_cfg.get("models") or {}).get(model_name) or {})
+    return {
+        str(name): dict(payload or {})
+        for name, payload in dict(model_cfg.get("derived_predictors") or {}).items()
+    }
+
+
+def _resolve_information_rate_lag_columns(predictor_cfg: dict[str, Any]) -> list[str]:
+    bin_width_ms = int(predictor_cfg.get("bin_width_ms", 50))
+    max_lag_ms = int(predictor_cfg.get("max_lag_ms", 0))
+    output_prefix = str(predictor_cfg.get("output_prefix", "z_information_rate_lag_")).strip()
+    if bin_width_ms <= 0:
+        raise ValueError("information_rate_lagged_windows.bin_width_ms must be positive.")
+    if max_lag_ms < 0:
+        raise ValueError("information_rate_lagged_windows.max_lag_ms must be non-negative.")
+    if max_lag_ms % bin_width_ms != 0:
+        raise ValueError("information_rate_lagged_windows.max_lag_ms must be divisible by bin_width_ms.")
+    return [f"{output_prefix}{lag_ms}" for lag_ms in range(0, max_lag_ms + 1, bin_width_ms)]
+
+
+def _resolve_generated_derived_formula_terms(
+    runtime_config: dict[str, Any],
+    *,
+    model_name: str,
+) -> list[str]:
+    terms: list[str] = []
+    for predictor_cfg in _resolve_derived_predictor_configs(runtime_config, model_name=model_name).values():
+        if not bool(predictor_cfg.get("enabled", False)):
+            continue
+        if not bool(predictor_cfg.get("include_in_formula", False)):
+            continue
+        predictor_kind = str(predictor_cfg.get("kind", "band_power_window")).strip().lower()
+        if predictor_kind == "band_power_window":
+            output_column = str(predictor_cfg.get("output_column", "")).strip()
+            if output_column:
+                terms.append(output_column)
+        elif predictor_kind == "information_rate_lagged_windows":
+            terms.extend(_resolve_information_rate_lag_columns(predictor_cfg))
+        else:
+            raise ValueError(f"Unsupported derived predictor kind {predictor_kind!r}.")
+    return terms
+
+
+def _discover_paths_config_path(start: Path) -> Path | None:
+    for candidate in (start, *start.parents):
+        paths_path = candidate / "paths.yaml"
+        if paths_path.exists():
+            return paths_path
+    return None
+
+
+def _resolve_surprisal_glob(
+    runtime_config: dict[str, Any],
+    *,
+    predictor_cfg: dict[str, Any],
+) -> str:
+    explicit = str(
+        predictor_cfg.get("surprisal_tsv")
+        or predictor_cfg.get("surprisal_glob")
+        or ""
+    ).strip()
+    if explicit:
+        return explicit
+
+    runtime_cfg = dict(runtime_config.get("runtime") or {})
+    config_path_text = str(runtime_cfg.get("config_path") or "").strip()
+    if config_path_text:
+        paths_config_path = _discover_paths_config_path(Path(config_path_text).resolve().parent)
+        if paths_config_path is not None:
+            paths_payload = yaml.safe_load(paths_config_path.read_text(encoding="utf-8")) or {}
+            lm_feature_dir = str(paths_payload.get("lm_feature_dir", "")).strip()
+            if lm_feature_dir:
+                return str(Path(lm_feature_dir) / "**" / "*desc-lmSurprisal_features.tsv")
+
+    raise ValueError(
+        "Unable to resolve surprisal TSV glob for information_rate_lagged_windows. "
+        "Set derived_predictors.<name>.surprisal_tsv (or surprisal_glob) explicitly."
+    )
+
+
+def _load_surprisal_table(
+    runtime_config: dict[str, Any],
+    *,
+    predictor_cfg: dict[str, Any],
+    cache: dict[Any, Any],
+) -> pd.DataFrame:
+    from cas.behavior._legacy_support import read_surprisal_tables, resolve_surprisal_paths
+
+    surprisal_glob = _resolve_surprisal_glob(runtime_config, predictor_cfg=predictor_cfg)
+    cache_key = ("surprisal_table", surprisal_glob)
+    if cache_key not in cache:
+        surprisal_paths = tuple(resolve_surprisal_paths(surprisal_glob))
+        table, _ = read_surprisal_tables(
+            surprisal_paths,
+            unmatched_surprisal_strategy=str(
+                predictor_cfg.get("unmatched_surprisal_strategy", "drop")
+            ).strip().lower(),
+        )
+        normalized = table.copy()
+        normalized["run"] = pd.to_numeric(normalized["run"], errors="coerce")
+        normalized["speaker"] = normalized["speaker"].astype(str)
+        normalized["onset"] = pd.to_numeric(normalized["onset"], errors="coerce")
+        normalized["duration"] = pd.to_numeric(normalized["duration"], errors="coerce")
+        if "offset" in normalized.columns:
+            normalized["offset"] = pd.to_numeric(normalized["offset"], errors="coerce")
+        else:
+            normalized["offset"] = normalized["onset"] + normalized["duration"]
+        availability_mode = str(predictor_cfg.get("availability_time", "offset")).strip().lower()
+        if availability_mode not in {"offset", "onset"}:
+            raise ValueError(
+                "information_rate_lagged_windows.availability_time must be 'offset' or 'onset'."
+            )
+        normalized["availability_time"] = normalized[availability_mode]
+        cache[cache_key] = normalized
+    return cache[cache_key]
+
+
+def _compute_information_rate_lagged_columns(
+    metadata: pd.DataFrame,
+    *,
+    predictor_cfg: dict[str, Any],
+    surprisal_table: pd.DataFrame,
+) -> pd.DataFrame:
+    anchor_column = str(predictor_cfg.get("anchor_column", "fpp_onset")).strip() or "fpp_onset"
+    speaker_column = str(predictor_cfg.get("speaker_column", "speaker_fpp")).strip() or "speaker_fpp"
+    dyad_column = str(predictor_cfg.get("dyad_column", "recording_id")).strip() or "recording_id"
+    run_column = str(predictor_cfg.get("run_column", "run")).strip() or "run"
+    required_columns = [anchor_column, speaker_column, dyad_column, run_column]
+    missing_columns = [column for column in required_columns if column not in metadata.columns]
+    if missing_columns:
+        raise ValueError(
+            "information_rate_lagged_windows requires metadata columns: "
+            + ", ".join(repr(column) for column in missing_columns)
+        )
+
+    out = pd.DataFrame(index=metadata.index)
+    anchor_times = pd.to_numeric(metadata[anchor_column], errors="coerce")
+    speakers = metadata[speaker_column].astype(str)
+    dyads = metadata[dyad_column].astype(str)
+    runs = pd.to_numeric(metadata[run_column], errors="coerce")
+    bin_width_ms = int(predictor_cfg.get("bin_width_ms", 50))
+    bin_width_s = float(bin_width_ms) / 1000.0
+    lag_columns = _resolve_information_rate_lag_columns(predictor_cfg)
+    lag_values_ms = list(range(0, int(predictor_cfg.get("max_lag_ms", 0)) + 1, bin_width_ms))
+
+    grouped_tokens: dict[tuple[str, str, int], pd.DataFrame] = {}
+    for (dyad_id, speaker, run_value), subset in surprisal_table.groupby(["dyad_id", "speaker", "run"], sort=False):
+        if not np.isfinite(float(run_value)):
+            continue
+        grouped_tokens[(str(dyad_id), str(speaker), int(run_value))] = subset.sort_values(
+            "availability_time",
+            kind="mergesort",
+        ).reset_index(drop=True)
+
+    for row_index in metadata.index:
+        anchor_time = anchor_times.loc[row_index]
+        run_value = runs.loc[row_index]
+        if pd.isna(anchor_time) or pd.isna(run_value):
+            continue
+        tokens = grouped_tokens.get((dyads.loc[row_index], speakers.loc[row_index], int(run_value)))
+        if tokens is None or tokens.empty:
+            for column in lag_columns:
+                out.loc[row_index, column] = 0.0
+            continue
+        availability = pd.to_numeric(tokens["availability_time"], errors="coerce")
+        surprisal = pd.to_numeric(tokens["surprisal"], errors="coerce")
+        for lag_ms, column in zip(lag_values_ms, lag_columns, strict=True):
+            window_end = float(anchor_time) - (float(lag_ms) / 1000.0)
+            window_start = window_end - bin_width_s
+            in_window = (availability >= window_start) & (availability < window_end)
+            window_sum = float(surprisal.loc[in_window].sum(min_count=1)) if in_window.any() else 0.0
+            out.loc[row_index, column] = window_sum / bin_width_s
+
+    for column in lag_columns:
+        if column not in out.columns:
+            out[column] = 0.0
+    return out.reindex(columns=lag_columns)
+
+
+def _resolve_preprocessed_raw_path(
+    runtime_config: dict[str, Any],
+    *,
+    epochs_path: str | Path,
+) -> Path:
+    row = _row_from_epochs_path(epochs_path)
+    out_dir = Path(runtime_config["paths"]["out_dir"])
+    return (
+        out_dir
+        / "preprocessing"
+        / "eeg"
+        / row["subject_id"]
+        / f"task-{row['task']}"
+        / f"run-{row['run']}"
+        / "preprocessed_eeg.fif"
+    )
+
+
+def _select_roi_channel_indices(working_raw, *, roi: str) -> np.ndarray:
+    resolved_roi = str(roi).strip().lower() or "all"
+    if resolved_roi == "all":
+        return np.arange(len(working_raw.ch_names), dtype=int)
+    if resolved_roi not in {"anterior", "posterior"}:
+        raise ValueError(f"Unsupported derived predictor roi {roi!r}; expected anterior, posterior, or all.")
+
+    positions = np.asarray(
+        [np.asarray(channel["loc"][:3], dtype=float) for channel in working_raw.info["chs"]],
+        dtype=float,
+    )
+    if positions.ndim != 2 or positions.shape[1] < 3:
+        raise ValueError("Unable to resolve EEG channel positions for ROI selection.")
+
+    y_positions = positions[:, 1]
+    finite_mask = np.isfinite(y_positions)
+    if not finite_mask.any():
+        raise ValueError("No finite EEG channel positions available for ROI selection.")
+
+    if resolved_roi == "anterior":
+        selected = np.flatnonzero(finite_mask & (y_positions >= 0.0))
+    else:
+        selected = np.flatnonzero(finite_mask & (y_positions < 0.0))
+
+    if selected.size == 0:
+        raise ValueError(f"No EEG channels matched roi={resolved_roi!r}.")
+    return selected.astype(int, copy=False)
+
+
+def _load_mean_band_power_trace(
+    raw_path: str | Path,
+    *,
+    band_hz: tuple[float, float],
+    roi: str = "all",
+) -> tuple[np.ndarray, np.ndarray]:
+    _configure_mne_runtime()
+    import mne
+    from scipy.signal import hilbert
+
+    low_hz, high_hz = (float(band_hz[0]), float(band_hz[1]))
+    raw = mne.io.read_raw_fif(str(raw_path), preload=True, verbose="ERROR")
+    working = raw.copy().pick("eeg")
+    if len(working.ch_names) == 0:
+        raise ValueError(f"No EEG channels available in {raw_path} for derived predictor extraction.")
+
+    roi_indices = _select_roi_channel_indices(working, roi=roi)
+    working.pick([working.ch_names[index] for index in roi_indices])
+
+    data = working.get_data()
+    sfreq = float(working.info["sfreq"])
+    filtered = mne.filter.filter_data(
+        data.copy(),
+        sfreq=sfreq,
+        l_freq=low_hz,
+        h_freq=high_hz,
+        verbose="ERROR",
+    )
+    analytic = hilbert(filtered, axis=-1)
+    power = np.square(np.abs(analytic))
+    trace = power.mean(axis=0).astype(np.float32, copy=False)
+    times = np.asarray(working.times, dtype=float)
+    return trace, times
+
+
+def _average_trace_within_event_windows(
+    trace: np.ndarray,
+    trace_times: np.ndarray,
+    metadata: pd.DataFrame,
+    *,
+    anchor_column: str,
+    conversation_anchor_column: str,
+    window_s: tuple[float, float],
+) -> pd.Series:
+    if anchor_column not in metadata.columns:
+        raise ValueError(f"Missing anchor column {anchor_column!r} for derived predictor extraction.")
+    if conversation_anchor_column not in metadata.columns:
+        raise ValueError(
+            f"Missing conversation anchor column {conversation_anchor_column!r} for derived predictor extraction."
+        )
+
+    trace = np.asarray(trace, dtype=float)
+    trace_times = np.asarray(trace_times, dtype=float)
+    if trace.ndim != 1 or trace_times.ndim != 1 or trace.shape[0] != trace_times.shape[0]:
+        raise ValueError("Expected one-dimensional trace and aligned trace times.")
+
+    window_start_s = float(window_s[0])
+    window_end_s = float(window_s[1])
+    if not np.isfinite(window_start_s) or not np.isfinite(window_end_s):
+        raise ValueError("Derived predictor window_s values must be finite.")
+    if window_end_s <= window_start_s:
+        raise ValueError("Derived predictor window_s end must be greater than start.")
+
+    anchor_times = pd.to_numeric(metadata[anchor_column], errors="coerce")
+    conversation_anchor_times = pd.to_numeric(metadata[conversation_anchor_column], errors="coerce")
+    values = pd.Series(np.nan, index=metadata.index, dtype=float)
+
+    for row_index in metadata.index:
+        anchor_time_s = anchor_times.loc[row_index]
+        conversation_anchor_time_s = conversation_anchor_times.loc[row_index]
+        if pd.isna(anchor_time_s) or pd.isna(conversation_anchor_time_s):
+            continue
+
+        absolute_start_s = float(conversation_anchor_time_s + anchor_time_s + window_start_s)
+        absolute_end_s = float(conversation_anchor_time_s + anchor_time_s + window_end_s)
+        start_idx = int(np.searchsorted(trace_times, absolute_start_s, side="left"))
+        end_idx = int(np.searchsorted(trace_times, absolute_end_s, side="right"))
+        if start_idx < 0 or end_idx > trace.shape[0] or end_idx <= start_idx:
+            continue
+        values.loc[row_index] = float(np.mean(trace[start_idx:end_idx]))
+
+    return values
+
+
+def _apply_derived_predictors(
+    metadata: pd.DataFrame,
+    runtime_config: dict[str, Any],
+    *,
+    model_name: str,
+    epochs_path: str | Path,
+    trace_cache: dict[Any, Any] | None = None,
+) -> pd.DataFrame:
+    predictor_cfgs = _resolve_derived_predictor_configs(runtime_config, model_name=model_name)
+    if not predictor_cfgs:
+        return metadata
+
+    prepared = metadata.copy()
+    cache = trace_cache if trace_cache is not None else {}
+
+    for predictor_name, predictor_cfg in predictor_cfgs.items():
+        if not bool(predictor_cfg.get("enabled", False)):
+            continue
+        predictor_kind = str(predictor_cfg.get("kind", "band_power_window")).strip().lower()
+        if predictor_kind == "band_power_window":
+            band_values = predictor_cfg.get("band_hz", [8.0, 12.0])
+            if not isinstance(band_values, (list, tuple)) or len(band_values) != 2:
+                raise ValueError(f"Derived predictor {predictor_name!r} must define 2-item band_hz.")
+            band_hz = (float(band_values[0]), float(band_values[1]))
+            roi = str(predictor_cfg.get("roi", "all")).strip().lower() or "all"
+            cache_key = (
+                str(_resolve_preprocessed_raw_path(runtime_config, epochs_path=epochs_path)),
+                band_hz[0],
+                band_hz[1],
+                roi,
+            )
+            if cache_key not in cache:
+                cache[cache_key] = _load_mean_band_power_trace(cache_key[0], band_hz=band_hz, roi=roi)
+            trace, trace_times = cache[cache_key]
+
+            window_values = predictor_cfg.get("window_s", (-0.8, -0.5))
+            if not isinstance(window_values, (list, tuple)) or len(window_values) != 2:
+                raise ValueError(f"Derived predictor {predictor_name!r} must define 2-item window_s.")
+            output_column = str(
+                predictor_cfg.get("output_column")
+                or predictor_name
+            ).strip()
+            anchor_column = str(predictor_cfg.get("anchor_column", "fpp_onset")).strip()
+            conversation_anchor_column = str(
+                predictor_cfg.get("conversation_anchor_column", "conversation_anchor_time_s")
+            ).strip()
+            values = _average_trace_within_event_windows(
+                trace,
+                trace_times,
+                prepared,
+                anchor_column=anchor_column,
+                conversation_anchor_column=conversation_anchor_column,
+                window_s=(float(window_values[0]), float(window_values[1])),
+            )
+            if str(predictor_cfg.get("transform", "")).strip().lower() == "log10":
+                positive = values.where(values > 0.0)
+                values = np.log10(positive)
+            prepared[output_column] = (
+                _zscore_series(values) if bool(predictor_cfg.get("standardize", False)) else values
+            )
+            continue
+
+        if predictor_kind == "information_rate_lagged_windows":
+            surprisal_table = _load_surprisal_table(
+                runtime_config,
+                predictor_cfg=predictor_cfg,
+                cache=cache,
+            )
+            lagged_values = _compute_information_rate_lagged_columns(
+                prepared,
+                predictor_cfg=predictor_cfg,
+                surprisal_table=surprisal_table,
+            )
+            for column in lagged_values.columns:
+                values = lagged_values[column]
+                prepared[column] = (
+                    _zscore_series(values) if bool(predictor_cfg.get("standardize", False)) else values
+                )
+            continue
+
+        raise ValueError(f"Unsupported derived predictor kind {predictor_kind!r} for {predictor_name!r}.")
+
+    return prepared
+
+
 def derive_fpp_spp_conf_disc_class(
     metadata: pd.DataFrame,
     *,
@@ -1060,7 +1461,23 @@ def _resolve_configured_test_predictors(
 ) -> list[str]:
     lmeeeg_cfg = dict(runtime_config.get("lmeeeg") or {})
     model_cfg = dict((lmeeeg_cfg.get("models") or {}).get(model_name) or {})
-    return [str(value) for value in model_cfg.get("test_predictors") or []]
+    configured = [str(value) for value in model_cfg.get("test_predictors") or []]
+    generated: list[str] = []
+    for predictor_cfg in _resolve_derived_predictor_configs(runtime_config, model_name=model_name).values():
+        if not bool(predictor_cfg.get("enabled", False)):
+            continue
+        if not bool(predictor_cfg.get("include_in_test_predictors", False)):
+            continue
+        predictor_kind = str(predictor_cfg.get("kind", "band_power_window")).strip().lower()
+        if predictor_kind == "band_power_window":
+            output_column = str(predictor_cfg.get("output_column", "")).strip()
+            if output_column:
+                generated.append(output_column)
+        elif predictor_kind == "information_rate_lagged_windows":
+            generated.extend(_resolve_information_rate_lag_columns(predictor_cfg))
+        else:
+            raise ValueError(f"Unsupported derived predictor kind {predictor_kind!r}.")
+    return list(dict.fromkeys(configured + generated))
 
 
 def _resolve_contrast_of_interest(
@@ -1604,6 +2021,7 @@ def _run_pooled_model(
         "class_3_counts_before_selection": {},
         "class_3_counts_after_selection": {},
     }
+    derived_predictor_cache: dict[tuple[str, float, float, str], tuple[np.ndarray, np.ndarray]] = {}
 
     for ep_path in epochs_paths:
         source_path, metadata_csv = _resolve_pooled_source_paths(
@@ -1667,6 +2085,14 @@ def _run_pooled_model(
                     continue
                 raise
             eeg = wrapper._arr
+
+        metadata = _apply_derived_predictors(
+            metadata,
+            runtime_config,
+            model_name=model_name,
+            epochs_path=ep_path,
+            trace_cache=derived_predictor_cache,
+        )
 
         selection_audit["n_rows_after_selection"] += int(len(metadata))
         if "class_3" in metadata.columns:
@@ -1824,6 +2250,10 @@ def _resolve_model_formula(
             formula_rhs,
             [str(value) for value in duration_artifacts.get("formula_terms") or []],
         )
+    formula_rhs = _merge_formula_terms(
+        formula_rhs,
+        _resolve_generated_derived_formula_terms(runtime_config, model_name=model_name),
+    )
     return f"y ~ {formula_rhs} + (1|{group_column})", formula_rhs, group_column
 
 

@@ -26,6 +26,8 @@ def build_subject_induced_epochs(
     source_epoch_paths: list[str | Path],
     config_path: str | Path,
     output_root: str | Path,
+    *,
+    root_subdir: str = "induced_epochs",
 ) -> None:
     source_paths = [Path(path) for path in source_epoch_paths]
     config = yaml.safe_load(Path(config_path).read_text(encoding="utf-8")) or {}
@@ -56,7 +58,7 @@ def build_subject_induced_epochs(
             config=config,
         )
 
-        band_dir = output_root_path / "induced_epochs" / band_name / f"sub-{subject}"
+        band_dir = output_root_path / root_subdir / band_name / f"sub-{subject}"
         epochs_output = band_dir / "epochs-time_s.fif"
         metadata_output = band_dir / "metadata-time_s.csv"
         events_array_output = band_dir / "events-time_s.npy"
@@ -97,7 +99,7 @@ def build_subject_induced_epochs(
         "subject_id": f"sub-{subject}",
         "bands": written_bands,
     }
-    output_path = output_root_path / "induced_epochs" / f"sub-{subject}" / "summary.json"
+    output_path = output_root_path / root_subdir / f"sub-{subject}" / "summary.json"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
         json.dumps(subject_summary, indent=2, sort_keys=True) + "\n",

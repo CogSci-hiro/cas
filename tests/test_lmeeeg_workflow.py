@@ -39,7 +39,8 @@ def test_induced_sensor_workflow_uses_generic_internal_rules() -> None:
 
     assert "rule build_induced_sensor_lmeeeg:" in epochs_text
     assert "rule build_induced_sensor_cycle_position:" in epochs_text
-    assert "rule build_induced_sensor_conf_disc:" in induced_text
+    assert "rule build_induced_sensor_conf_disc_fpp_locked:" in induced_text
+    assert "rule build_induced_sensor_conf_disc_spp_locked:" in induced_text
     assert "rule build_induced_binned_info_rate:" in epochs_text
 
 
@@ -97,7 +98,8 @@ def test_induced_sensor_figures_are_centralized() -> None:
 
     assert "figures/main/induced/sensor_lmeeeg/figure_manifest.json" in figures_text
     assert "figures/supp/induced/sensor_lmeeeg/cycle_position/figure_manifest.json" in figures_text
-    assert "figures/supp/induced/sensor_lmeeeg/conf_disc/figure_manifest.json" in figures_text
+    assert "figures/supp/induced/sensor_lmeeeg/conf_disc/fpp_locked/figure_manifest.json" in figures_text
+    assert "figures/supp/induced/sensor_lmeeeg/conf_disc/spp_locked/figure_manifest.json" in figures_text
     assert "figures/qc/induced/sensor_lmeeeg/figure_manifest.json" in figures_text
 
 
@@ -132,8 +134,13 @@ def test_lmeeeg_config_contains_duration_controls_for_spp_evoked_model() -> None
     config_text = Path("config/evoked/spp_sensor_lmeeeg.yaml").read_text(encoding="utf-8")
 
     assert 'analysis_name: "spp_evoked_sensor"' in config_text
-    assert "min_duration_s: 0.4" in config_text
-    assert 'formula: "~ spp_class_1 + latency + run"' in config_text
+    assert "min_duration_s:" in config_text
+    assert 'formula: "~ spp_class_1 + latency + run + z_fpp_anchor_alpha_power"' in config_text
+    assert "derived_predictors:" in config_text
+    assert 'roi: "anterior"' in config_text
+    assert "window_s:" in config_text
+    assert "band_hz:" in config_text
+    assert 'output_column: "z_fpp_anchor_alpha_power"' in config_text
     assert "duration_controls:" in config_text
     assert 'output_column: "z_log_spp_duration"' in config_text
     assert 'output_column: "spp_duration_bin"' in config_text
@@ -169,12 +176,25 @@ def test_lmeeeg_workflow_tracks_band_level_induced_epoch_outputs() -> None:
     assert "config=EPOCHS_CONFIG_PATH" in epochs_text
 
 
-def test_fpp_spp_conf_disc_config_contains_requested_models() -> None:
-    config_text = Path("config/induced/alpha_beta_conf_disc.yaml").read_text(encoding="utf-8")
+def test_fpp_and_spp_locked_conf_disc_configs_contain_requested_models() -> None:
+    fpp_text = Path("config/induced/alpha_beta_conf_disc_fpp_locked.yaml").read_text(encoding="utf-8")
+    spp_text = Path("config/induced/alpha_beta_conf_disc_spp_locked.yaml").read_text(encoding="utf-8")
 
-    assert 'analysis_name: "fpp_spp_conf_disc_alpha_beta"' in config_text
-    assert 'induced_epochs_subdir: "induced_epochs_fpp_spp_conf_disc_alpha_beta_lmeeeg"' in config_text
-    assert 'formula: "power ~ class_3 + (1 | subject)"' in config_text
-    assert 'formula: "power ~ class_3 + log_duration_within_class + (1 | subject)"' in config_text
-    assert 'formula: "power ~ log_duration + (1 | subject)"' in config_text
-    assert 'target_sfreq: 20' in config_text
+    assert 'analysis_name: "fpp_spp_conf_disc_alpha_beta_fpp_locked"' in fpp_text
+    assert 'source_induced_epochs_subdir: "induced_epochs_conf_disc_fpp_locked"' in fpp_text
+    assert 'induced_epochs_subdir: "induced_epochs_fpp_locked_fpp_spp_conf_disc_alpha_beta_lmeeeg"' in fpp_text
+    assert 'time_locking_reference == \'fpp_onset\'' in fpp_text
+    assert 'kind: "information_rate_lagged_windows"' in fpp_text
+    assert "bin_width_ms: 50" in fpp_text
+    assert "max_lag_ms: 500" in fpp_text
+
+    assert 'analysis_name: "fpp_spp_conf_disc_alpha_beta_spp_locked"' in spp_text
+    assert 'source_induced_epochs_subdir: "induced_epochs_conf_disc_spp_locked"' in spp_text
+    assert 'induced_epochs_subdir: "induced_epochs_spp_locked_fpp_spp_conf_disc_alpha_beta_lmeeeg"' in spp_text
+    assert 'time_locking_reference == \'spp_onset\'' in spp_text
+
+    for config_text in (fpp_text, spp_text):
+        assert 'formula: "power ~ class_3 + (1 | subject)"' in config_text
+        assert 'formula: "power ~ class_3 + log_duration_within_class + (1 | subject)"' in config_text
+        assert 'formula: "power ~ log_duration + (1 | subject)"' in config_text
+        assert 'target_sfreq: 20' in config_text

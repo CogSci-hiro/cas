@@ -54,8 +54,15 @@ def downsample_subject_induced_epochs(
     output_root_path = Path(output_root)
     target_sfreq = float(downsample_cfg.get("target_sfreq", 20.0))
     method = str(downsample_cfg.get("method", "mean_bin"))
+    input_cfg = dict(lmeeeg_config.get("input") or {})
+    source_root_subdir = str(
+        input_cfg.get(
+            "source_induced_epochs_subdir",
+            "induced_epochs",
+        )
+    )
     root_subdir = str(
-        (dict(lmeeeg_config.get("input") or {})).get(
+        input_cfg.get(
             "induced_epochs_subdir",
             "induced_epochs_fpp_spp_conf_disc_alpha_beta_lmeeeg",
         )
@@ -69,7 +76,7 @@ def downsample_subject_induced_epochs(
         str(value)
         for value in lmeeeg_config.get("induced_epochs", {}).get("bands", ["alpha", "beta"])
     ]:
-        source_dir = output_root_path / "induced_epochs" / band_name / f"sub-{subject}"
+        source_dir = output_root_path / source_root_subdir / band_name / f"sub-{subject}"
         source_epochs = mne.read_epochs(
             source_dir / "epochs-time_s.fif",
             preload=True,

@@ -11,11 +11,14 @@ import pandas as pd
 import pytest
 
 from cas.stats.lmeeeg_pipeline import (
+    _average_trace_within_event_windows,
     _apply_duration_controls,
+    _apply_derived_predictors,
     _configure_mne_runtime,
     _build_adjacency,
     _patch_mne_cluster_level,
     _prepare_model_inputs,
+    _select_roi_channel_indices,
     _augment_lmeeeg_metadata,
     derive_fpp_spp_conf_disc_class,
     _fit_one_model,
@@ -23,6 +26,7 @@ from cas.stats.lmeeeg_pipeline import (
     _normalize_effect_name,
     _run_permutation_inference,
     _resolve_model_formula,
+    _resolve_configured_test_predictors,
     _resolve_term_tests,
     _resolve_test_effects,
     _resolve_term_test_effects,
@@ -618,6 +622,162 @@ def test_apply_duration_controls_common_support_filters_nonoverlap():
     assert artifacts["common_support"]["counts_after"] == {"CONF": 2, "DISC": 1}
 
 
+def test_average_trace_within_event_windows_uses_fpp_anchor_times():
+    trace_times = np.arange(0.0, 3.0, 0.1, dtype=float)
+    trace = trace_times.copy()
+    metadata = pd.DataFrame(
+        {
+            "conversation_anchor_time_s": [0.0, 0.2],
+            "fpp_onset": [1.0, 1.0],
+        }
+    )
+
+    values = _average_trace_within_event_windows(
+        trace,
+        trace_times,
+        metadata,
+        anchor_column="fpp_onset",
+        conversation_anchor_column="conversation_anchor_time_s",
+        window_s=(-0.8, -0.5),
+    )
+
+    assert np.isclose(values.iloc[0], 0.35)
+    assert np.isclose(values.iloc[1], 0.5)
+
+
+def test_apply_derived_predictors_adds_standardized_alpha_covariate(monkeypatch):
+    runtime_config = {
+        "paths": {"out_dir": "/tmp/out"},
+        "lmeeeg": {
+            "models": {
+                "demo": {
+                    "derived_predictors": {
+                        "fpp_anchor_alpha_power": {
+                            "enabled": True,
+                            "kind": "band_power_window",
+                        "anchor_column": "fpp_onset",
+                        "conversation_anchor_column": "conversation_anchor_time_s",
+                        "roi": "posterior",
+                        "window_s": [-0.8, -0.5],
+                        "band_hz": [8.0, 12.0],
+                        "output_column": "z_fpp_anchor_alpha_power",
+                        "standardize": True,
+                        }
+                    }
+                }
+            }
+        },
+    }
+    metadata = pd.DataFrame(
+        {
+            "conversation_anchor_time_s": [0.0, 0.0],
+            "fpp_onset": [1.0, 2.0],
+        }
+    )
+
+    monkeypatch.setattr(
+        "cas.stats.lmeeeg_pipeline._resolve_preprocessed_raw_path",
+        lambda runtime_config, *, epochs_path: Path("/tmp/preprocessed_eeg.fif"),
+    )
+    monkeypatch.setattr(
+        "cas.stats.lmeeeg_pipeline._load_mean_band_power_trace",
+        lambda raw_path, *, band_hz, roi="all": (
+            np.arange(0.0, 4.0, 0.1, dtype=float),
+            np.arange(0.0, 4.0, 0.1, dtype=float),
+        ),
+    )
+
+    prepared = _apply_derived_predictors(
+        metadata,
+        runtime_config,
+        model_name="demo",
+        epochs_path="/tmp/sub-001_task-conversation_run-1_desc-tasklocked_epo.fif",
+    )
+
+    assert "z_fpp_anchor_alpha_power" in prepared.columns
+    assert np.isclose(prepared["z_fpp_anchor_alpha_power"].mean(), 0.0)
+    assert prepared["z_fpp_anchor_alpha_power"].notna().all()
+
+
+def test_apply_derived_predictors_adds_information_rate_lagged_windows(monkeypatch):
+    runtime_config = {
+        "paths": {"out_dir": "/tmp/out"},
+        "runtime": {"config_path": "/tmp/config/induced/demo.yaml"},
+        "lmeeeg": {
+            "models": {
+                "demo": {
+                    "derived_predictors": {
+                        "fpp_locked_information_rate": {
+                            "enabled": True,
+                            "kind": "information_rate_lagged_windows",
+                            "anchor_column": "fpp_onset",
+                            "speaker_column": "speaker_fpp",
+                            "dyad_column": "recording_id",
+                            "run_column": "run",
+                            "availability_time": "offset",
+                            "bin_width_ms": 50,
+                            "max_lag_ms": 100,
+                            "output_prefix": "information_rate_lag_",
+                            "standardize": False,
+                        }
+                    }
+                }
+            }
+        },
+    }
+    metadata = pd.DataFrame(
+        {
+            "recording_id": ["dyad-001", "dyad-001"],
+            "run": [1, 1],
+            "speaker_fpp": ["A", "A"],
+            "fpp_onset": [1.0, 1.1],
+        }
+    )
+    surprisal_table = pd.DataFrame(
+        {
+            "dyad_id": ["dyad-001"] * 6,
+            "run": [1] * 6,
+            "speaker": ["A"] * 6,
+            "availability_time": [0.88, 0.93, 0.98, 0.98, 1.03, 1.08],
+            "surprisal": [1.5, 1.0, 0.5, 0.5, 1.0, 1.5],
+        }
+    )
+
+    monkeypatch.setattr(
+        "cas.stats.lmeeeg_pipeline._load_surprisal_table",
+        lambda runtime_config, *, predictor_cfg, cache: surprisal_table,
+    )
+
+    prepared = _apply_derived_predictors(
+        metadata,
+        runtime_config,
+        model_name="demo",
+        epochs_path="/tmp/sub-001_task-conversation_run-1_desc-tasklocked_epo.fif",
+    )
+
+    assert prepared["information_rate_lag_0"].tolist() == [20.0, 30.0]
+    assert prepared["information_rate_lag_50"].tolist() == [20.0, 20.0]
+    assert prepared["information_rate_lag_100"].tolist() == [30.0, 20.0]
+
+
+def test_select_roi_channel_indices_splits_anterior_and_posterior():
+    working_raw = SimpleNamespace(
+        ch_names=["Fz", "Cz", "Pz", "Oz"],
+        info={
+            "chs": [
+                {"loc": np.array([0.0, 0.3, 0.0])},
+                {"loc": np.array([0.0, 0.0, 0.0])},
+                {"loc": np.array([0.0, -0.2, 0.0])},
+                {"loc": np.array([0.0, -0.4, 0.0])},
+            ]
+        },
+    )
+
+    assert _select_roi_channel_indices(working_raw, roi="all").tolist() == [0, 1, 2, 3]
+    assert _select_roi_channel_indices(working_raw, roi="anterior").tolist() == [0, 1]
+    assert _select_roi_channel_indices(working_raw, roi="posterior").tolist() == [2, 3]
+
+
 def test_resolve_model_formula_keeps_old_style_when_duration_controls_are_absent():
     runtime_config = {
         "lmeeeg": {
@@ -629,6 +789,66 @@ def test_resolve_model_formula_keeps_old_style_when_duration_controls_are_absent
 
     assert formula == "y ~ spp_class_1 + latency + duration_s + run + (1|subject_id)"
     assert formula_rhs == "spp_class_1 + latency + duration_s + run"
+
+
+def test_resolve_model_formula_auto_adds_information_rate_lag_terms():
+    runtime_config = {
+        "lmeeeg": {
+            "models": {
+                "demo": {
+                    "formula": "~ class_3",
+                    "derived_predictors": {
+                        "fpp_locked_information_rate": {
+                            "enabled": True,
+                            "kind": "information_rate_lagged_windows",
+                            "bin_width_ms": 50,
+                            "max_lag_ms": 100,
+                            "output_prefix": "z_information_rate_lag_",
+                            "include_in_formula": True,
+                            "include_in_test_predictors": True,
+                        }
+                    },
+                }
+            }
+        }
+    }
+
+    formula, formula_rhs, _ = _resolve_model_formula(runtime_config, model_name="demo")
+
+    assert formula == (
+        "y ~ class_3 + z_information_rate_lag_0 + z_information_rate_lag_50 + "
+        "z_information_rate_lag_100 + (1|subject_id)"
+    )
+    assert formula_rhs == "class_3 + z_information_rate_lag_0 + z_information_rate_lag_50 + z_information_rate_lag_100"
+
+
+def test_resolve_configured_test_predictors_auto_adds_information_rate_lag_terms():
+    runtime_config = {
+        "lmeeeg": {
+            "models": {
+                "demo": {
+                    "test_predictors": ["class_3"],
+                    "derived_predictors": {
+                        "fpp_locked_information_rate": {
+                            "enabled": True,
+                            "kind": "information_rate_lagged_windows",
+                            "bin_width_ms": 50,
+                            "max_lag_ms": 100,
+                            "output_prefix": "z_information_rate_lag_",
+                            "include_in_test_predictors": True,
+                        }
+                    },
+                }
+            }
+        }
+    }
+
+    assert _resolve_configured_test_predictors(runtime_config, model_name="demo") == [
+        "class_3",
+        "z_information_rate_lag_0",
+        "z_information_rate_lag_50",
+        "z_information_rate_lag_100",
+    ]
 
 
 def test_resolve_model_formula_adds_log_only_duration_term():

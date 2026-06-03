@@ -28,5 +28,43 @@ induced_source_epochs:
       - -1.0
       - 0.3
 
+induced_source_epochs_conf_disc_fpp_locked:
+  output:
+    root: "induced_source_epochs_conf_disc_fpp_locked"
+  timing:
+    tmin_s: -1.0
+    tmax_s: 0.3
+    baseline_s:
+      - -1.0
+      - 0.3
+  event_types:
+    - "self_fpp_onset"
+    - "other_fpp_onset"
+    - "self_spp_onset"
+    - "other_spp_onset"
+  event_source_column_overrides:
+    self_spp_onset: "fpp_onset"
+    other_spp_onset: "fpp_onset"
+  time_locking_reference: "fpp_onset"
+
+induced_source_epochs_conf_disc_spp_locked:
+  output:
+    root: "induced_source_epochs_conf_disc_spp_locked"
+  timing:
+    tmin_s: -1.0
+    tmax_s: 0.3
+    baseline_s:
+      - -1.0
+      - 0.3
+  event_types:
+    - "self_fpp_onset"
+    - "other_fpp_onset"
+    - "self_spp_onset"
+    - "other_spp_onset"
+  event_source_column_overrides:
+    self_fpp_onset: "spp_onset"
+    other_fpp_onset: "spp_onset"
+  time_locking_reference: "spp_onset"
+
 induced_epochs:
   bands: ["theta", "alpha", "beta"]
